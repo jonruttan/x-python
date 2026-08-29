@@ -46,8 +46,9 @@
 ; before it has begun.
 
 (import python/tokens)
+(import python/indent)
 
-(provide python/base python-version python-run python-tokenize %python-repl-print)
+(provide python/base python-version python-run python-tokenize python-lex %python-repl-print)
 
 (def python-version "0.0.1")
 

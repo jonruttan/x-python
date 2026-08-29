@@ -49,6 +49,8 @@
   mk-tok-name mk-tok-number mk-tok-string mk-tok-op mk-tok-newline)
 
 ; (Base make-tok) is the isolated, type-free base -- 2024's make-token-base.
+(import x/reader/indent)
+
 (def %py-base (Base make-tok))
 
 ; The platform owns the tokenizer intrinsics (lib/x/reader/intrinsics.x); these
@@ -70,7 +72,8 @@
 (def mk-tok-number  (fn (_ s) (list (lit tok-number) s)))
 (def mk-tok-string  (fn (_ s) (list (lit tok-string) s)))
 (def mk-tok-op      (fn (_ s) (list (lit tok-op) s)))
-(def mk-tok-newline (fn (_)   (list (lit tok-newline))))
+; A newline carries the column of the line it opens.
+(def mk-tok-newline (fn (_ col) (list (lit tok-newline) col)))
 
 ; --- Character classes -------------------------------------------------------
 ; Nested if, never `or`: operatives expand per evaluation and these run per
@@ -123,13 +126,36 @@
           (%seq (%score-set score (- 0 1) buffer) %py-comment-body)
           ())))))
 
-; --- PY-NL: the newline, kept ------------------------------------------------
+; --- PY-NL: the newline AND the indentation that follows it ------------------
+;
+; ONE TOKEN, NOT TWO, and that is Logo's arrangement rather than an invention:
+; LOGO-INDENT matches "\n + spaces/tabs + word" for the same reason.  A column
+; can only be measured while reading characters, and by the time a flat token
+; stream exists the leading whitespace is gone.  So the newline carries it.
+;
+; The column is measured by x/reader/indent (x-lang#520) rather than counted
+; here, which is what makes the tab question one answer across Logo, x-sweet and
+; this bundle instead of three.  Tab stop 8: SRFI-110's answer and CPython's.
+(def %py-indent-scan (prim-ref (lit indent) (lit scan)))
+
+(def %py-nl-ws ())
+(set! %py-nl-ws
+  (fn (_ buffer score chr)
+    (if (if (= chr #\space) #t (= chr #\tab))
+      %py-nl-ws
+      (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
+
 (Base make-type %py-base "PY-NL"
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
-        (if (= chr #\newline) (%score-set score 1 buffer) ())))
-    (pair (lit read) (fn (_ . args) (mk-tok-newline)))))
+        (if (= chr #\newline) %py-nl-ws ())))
+    (pair (lit read)
+      (fn (_ . args)
+        ; Index 1 skips the newline itself; scan hands back the column and the
+        ; end index from one walk, and the column is the half wanted here.
+        (mk-tok-newline
+          (first (%py-indent-scan (%buffer-token (first args)) 1 8)))))))
 
 ; --- PY-NAME: identifiers and keywords ---------------------------------------
 ; Keywords are NOT distinguished here.  `if` is a name to the tokenizer and a
