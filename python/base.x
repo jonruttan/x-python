@@ -45,7 +45,9 @@
 ; scoreboard that starts above zero for that reason is lying about the port
 ; before it has begun.
 
-(provide python/base python-version python-run %python-repl-print)
+(import python/tokens)
+
+(provide python/base python-version python-run python-tokenize %python-repl-print)
 
 (def python-version "0.0.1")
 
