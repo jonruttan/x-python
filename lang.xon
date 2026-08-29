@@ -41,9 +41,10 @@
 ; that is checkable, and it is compared for EQUALITY, never parsed -- the
 ; platform's own rule for release strings.
 ;
-; v0.6.0 is what carries bundle acquisition, `-l` loading and --share-dir, and
-; it is what x-krn and x-ash are green against.  This bundle has no claim to
-; anything older.
-(requires-release "v0.6.0")
+; v0.6.0 is what carries bundle acquisition, `-l` loading and --share-dir;
+; v0.7.0 is what this bundle and its siblings are green against, and the row
+; tracks that rather than the floor.  This bundle has no claim to anything
+; older.
+(requires-release "v0.7.0")
 
 (entry "run.x")
