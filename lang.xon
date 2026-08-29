@@ -1,0 +1,49 @@
+; lang.xon -- what this bundle IS.
+;
+; xon: read with the ordinary reader and never evaluated, like every other
+; manifest in the x-lang world (pin.xon, engine.pin.xon).  A form a reader
+; does not know is a loud error, never a skip -- a manifest that silently
+; ignores half of itself cannot be extended without wondering which readers
+; obeyed which half.
+;
+; FORMAT (one form per line):
+;   (lang "NAME")               the -l name
+;   (dialect NAME)              he | xe | rn -- a REQUIREMENT, not a taste
+;   (requires-release "TAG")    the x-lang this bundle was built against
+;   (entry "FILE")              loaded AFTER the dialect, not instead of it
+
+(lang "python")
+
+; XENON, and this one is derived rather than preferred -- it is derived from
+; Python's own data model, not from convenience:
+;
+;   * Python 3 has ONE integer type and it is arbitrary-precision.  `2 ** 200`
+;     is not an error and not a float; helium's built-in ints cannot answer it.
+;     That is x/num/bigint.x, and it is not optional the way a tower usually is.
+;   * `1 / 2` is `0.5`.  True division always produces a float, so float is
+;     reachable from the first arithmetic expression a beginner types.
+;   * `dict` is syntax.  x/type/dict.x is the container, and it loads by
+;     default in both tower dialects and neither light one.
+;
+; The cost is real and worth naming: xenon's boot runs eight runtime `cc`
+; compilations for the numeric analysers, so `x -l python` starts slower than
+; `x -l krn` does.  Declaring `he` would buy that back by making `2 ** 200`
+; wrong, which is not a trade.
+;
+; NOT radon.  ash needs rn for fork/exec/dup2; a Python whose stdlib is
+; `print` and `len` reaches nothing raw.  When `os` and `socket` arrive this
+; row gets revisited -- and the revisit should be a decision, which is why it
+; is written down here rather than pre-empted.
+(dialect xe)
+
+; PAIRING, NOT PINNING.  A digest freezes bytes; it says nothing about whether
+; those bytes still run against a platform that moved.  This row is the part
+; that is checkable, and it is compared for EQUALITY, never parsed -- the
+; platform's own rule for release strings.
+;
+; v0.6.0 is what carries bundle acquisition, `-l` loading and --share-dir, and
+; it is what x-krn and x-ash are green against.  This bundle has no claim to
+; anything older.
+(requires-release "v0.6.0")
+
+(entry "run.x")

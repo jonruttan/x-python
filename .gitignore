@@ -1,0 +1,11 @@
+# The corpus is FETCHED, not vendored: tools/conformance/upstream.pin.xon names
+# a commit and a digest, and `make fetch` is what turns that into files.  Six
+# hundred MIT-licensed .py files do not belong in an MIT-0 bundle, and a copy
+# would rot silently where a pin cannot.
+deps/
+
+# GENERATED, and both for the same reason: they are facts of this machine, not
+# of this bundle.  harness.gen.x embeds two absolute paths; tests/conformance/
+# embeds the output of whichever CPython happened to be the oracle.
+tests/lib/
+tests/conformance/

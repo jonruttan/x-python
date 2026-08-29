@@ -1,0 +1,54 @@
+; upstream.pin.xon -- the conformance corpus this bundle scores against.
+;
+; xon: read textually, never evaluated, like every other manifest here.
+;
+; WHY MICROPYTHON AND NOT CPYTHON.  Python has no test262.  Its de-facto
+; conformance suite is CPython's Lib/test, and that suite is unusable to a
+; young implementation: it is unittest-based, so `unittest`, `io` and a slab of
+; stdlib must all work before the first assertion runs; it is dense with
+; @cpython_only and impl_detail internals; and it is PSF-licensed rather than
+; MIT.
+;
+; MicroPython's tests/ was written by people implementing a SUBSET, which is
+; this bundle's position exactly.  Measured against v1.29.0 rather than assumed:
+;
+;   basics/   576 .py    562 of them run under CPython 3.14 unmodified
+;   float/     69 .py     69
+;   import/    30 .py     30
+;   unicode/   25 .py     21
+;                        ---
+;                        682 programs with a CPython oracle
+;
+; The files are tiny, import nothing and assert by printing -- one program, one
+; stdout blob -- which is the same shape a .spec.md case is.  Only 65 of the 576
+; carry a .exp file; the rest are DIFFERENTIAL, meaning upstream generates the
+; expectation by running CPython, which is what gen-specs.sh does too.
+;
+; CPYTHON IS THE ORACLE, NOT MICROPYTHON.  Where CPython refuses a file (14 in
+; basics/ -- builtin_help, memoryerror, the *_micropython ones) upstream's .exp
+; records MicroPython's own deviation, and this bundle has no business chasing
+; that.  Those are excluded and counted, never silently adopted.
+;
+; NOTHING IS VENDORED.  The corpus is fetched and verified into deps/, and
+; tests/conformance/ is generated from it, and neither is committed.  That
+; keeps 682 MIT-licensed files out of an MIT-0 bundle and keeps the score
+; reproducible by pin rather than by copy -- the same trade pin.xon and
+; engine.pin.xon already make.
+
+(corpus "micropython")
+(release "v1.29.0")
+(commit "0fd6c573ea815774668bbb16b8e197c8822368b2")
+(licence "MIT")
+
+; The digest is of the codeload tarball for the commit above.  GitHub has
+; changed tarball compression before, so a mismatch here is not automatically
+; tampering -- fetch.sh says so, and refuses either way rather than scoring
+; against bytes nobody pinned.
+(tarball "sha256:77331374753ac6e524b9f7aa606fbcfd1cc2c6ae9fb567c971a2e31cb5de6225"
+         "https://codeload.github.com/micropython/micropython/tar.gz/0fd6c573ea815774668bbb16b8e197c8822368b2")
+
+(source "https://github.com/micropython/micropython.git")
+
+; Which suites are generated.  extmod/ and micropython/ are deliberately absent:
+; they test modules and a `micropython` builtin that this bundle does not claim.
+(suites "basics" "float" "import" "unicode")
