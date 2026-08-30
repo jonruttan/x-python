@@ -432,6 +432,8 @@
       ; if / while / def are decided by the leading NAME.  They are keywords to
       ; the parser and plain names to the tokenizer, which is where that
       ; distinction belongs.
+      (if (%py-name-is? t "class")
+        (%py-class-stmt (rest toks))
       (if (%py-name-is? t "try")
         (%py-try (rest toks))
       (if (%py-name-is? t "raise")
@@ -498,7 +500,7 @@
                             (pair
                               (%py-store (first tgt)
                                 (list aug (first tgt) (first r)))
-                              (rest r)))))))))))))))))))
+                              (rest r))))))))))))))))))))
 
 ; `else:` after an if.  `elif` is `else: if ...`, which is what Python's own
 ; grammar says it is, so it needs no separate shape.
@@ -649,13 +651,91 @@
                       (rest (rest r)))))
             (pair (list (lit %py-raise) (%py-val n) "") (rest toks))))))))
 
+; --- class -------------------------------------------------------------------
+;
+; A class body is a run of `def`s.  Each one is parsed by %py-def, which emits
+; (def SYM FN); the FN is lifted out and paired with the method's NAME STRING,
+; because Python looks methods up by name at call time and the symbol is only
+; how x would have bound it.
+;
+; Only defs and `pass` are accepted.  A class attribute -- `count = 0` in the
+; body -- is real Python and is NOT supported: it belongs to the class rather
+; than the instance, and nothing here has a place to put it yet.  Saying so is
+; better than binding it somewhere surprising.
+
+(def %py-class-methods-of ())
+(set! %py-class-methods-of
+  (fn (self toks acc)
+    (let ((t (%py-skip-nl toks)))
+      (if (null? t)
+        (pair (List reverse acc) t)
+        (if (eq? (%py-tag (first t)) (lit tok-dedent))
+          (pair (List reverse acc) (rest t))
+          (if (%py-name-is? (first t) "pass")
+            (self (rest t) acc)
+            (if (not (%py-name-is? (first t) "def"))
+              (Err raise (lit syntax) "a class body takes defs and pass only" ())
+              (let ((nm (if (null? (rest t)) () (first (rest t)))))
+                (if (not (eq? (%py-tag nm) (lit tok-name)))
+                  (Err raise (lit syntax) "expected a method name after def" ())
+                  (let ((r (%py-def (rest t))))
+                    (self (rest r)
+                      (pair
+                        (list (lit pair) (%py-val nm)
+                          (first (rest (rest (first r)))))
+                        acc))))))))))))
+
+(def %py-class-block
+  (fn (_ toks)
+    (if (not (%py-op-is? (if (null? toks) () (first toks)) ":"))
+      (Err raise (lit syntax) "expected : after a class header" ())
+      (let ((t (%py-skip-nl (rest toks))))
+        (if (not (eq? (%py-tag (if (null? t) () (first t))) (lit tok-indent)))
+          (Err raise (lit syntax) "expected an indented class body" ())
+          (%py-class-methods-of (rest t) ()))))))
+
+(def %py-class-stmt
+  (fn (_ toks)
+    ; positioned just after the `class` keyword
+    (let ((n (if (null? toks) () (first toks))))
+      (if (not (eq? (%py-tag n) (lit tok-name)))
+        (Err raise (lit syntax) "expected a class name after class" ())
+        (let ((after (rest toks)))
+          (if (%py-op-is? (if (null? after) () (first after)) "(")
+            ; single inheritance: `class Dog(Animal):`
+            (let ((b (if (null? (rest after)) () (first (rest after)))))
+              (if (not (eq? (%py-tag b) (lit tok-name)))
+                (Err raise (lit syntax) "expected a base class name" ())
+                (if (not (%py-op-is?
+                           (if (null? (rest (rest after))) ()
+                             (first (rest (rest after)))) ")"))
+                  (Err raise (lit syntax) "expected ) after a base class" ())
+                  (let ((r (%py-class-block (rest (rest (rest after))))))
+                    (pair
+                      (list (lit set!) (%py-name->sym (%py-val n))
+                        (list (lit %py-mkclass) (%py-val n)
+                          (%py-name->sym (%py-val b))
+                          (pair (lit list) (first r))))
+                      (rest r))))))
+            (let ((r (%py-class-block after)))
+              (pair
+                (list (lit set!) (%py-name->sym (%py-val n))
+                  (list (lit %py-mkclass) (%py-val n) ()
+                    (pair (lit list) (first r))))
+                (rest r)))))))))
+
 (def %py-store
   (fn (_ target value)
     (if (pair? target)
       (if (eq? (first target) (lit %py-index))
         (list (lit %py-setindex) (first (rest target))
               (first (rest (rest target))) value)
-        (Err raise (lit syntax) "cannot assign to this target" ()))
+      ; `self.x = 1` is how a Python object gets its fields at all, so an
+      ; attribute is an assignable target exactly as a subscript is.
+      (if (eq? (first target) (lit %py-getattr))
+        (list (lit %py-setattr) (first (rest target))
+              (first (rest (rest target))) value)
+        (Err raise (lit syntax) "cannot assign to this target" ())))
       (list (lit set!) target value))))
 
 (def %py-else
@@ -842,6 +922,12 @@
         (if (%py-for-target? toks)
           (self (rest (rest toks))
             (pair (%py-name->sym (%py-val (first (rest toks)))) acc))
+        (if (%py-name-is? t "class")
+          ; `class Foo:` binds Foo, and this scan is what hoists it.
+          (let ((n (if (null? (rest toks)) () (first (rest toks)))))
+            (self (rest (rest toks))
+              (if (eq? (%py-tag n) (lit tok-name))
+                (pair (%py-name->sym (%py-val n)) acc) acc)))
         (if (%py-as-target? toks)
           ; `except ValueError as e` binds e as surely as an assignment does,
           ; and this is the scan that emits the hoisted defs -- the other one
@@ -854,7 +940,7 @@
                 (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
             (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
-            (self (rest toks) acc)))))))))
+            (self (rest toks) acc))))))))))
 
 ; The name after `as` in an except clause.
 (def %py-as-target?

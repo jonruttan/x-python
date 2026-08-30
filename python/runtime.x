@@ -35,6 +35,7 @@
   %py-mklist %py-index %py-len %py-list? %py-write %py-getattr %py-setindex
   %py-range %py-iter-elems %py-callcc
   %py-raise %py-exc-match
+  %py-mkclass %py-setattr
   %py-mkdict %py-dict? %py-dget %py-dset)
 
 ; --- Arithmetic --------------------------------------------------------------
@@ -331,8 +332,10 @@
         (%py-dict-attr obj name)
       (if (str? obj)
         (%py-str-attr obj name)
+      (if (%py-obj-is obj)
+        (%py-obj-attr obj name)
         (Err raise (lit attribute)
-          (Str8 append (Str8 append "object has no attribute '" name) "'")()))))))
+          (Str8 append (Str8 append "object has no attribute '" name) "'")())))))))
 
 ; STRING METHODS MAP ONTO Str8, WHICH ALREADY HAS THEM -- upcase, downcase,
 ; trim, split, join, replace, starts?, ends?, index-of. The work here is the
@@ -505,3 +508,81 @@
       #t
       (let ((k (%py-exc-kind name)))
         (if (null? k) #f (eq? (Err kind-of e) k))))))
+
+; --- Classes -----------------------------------------------------------------
+;
+; Method lookup walks the base chain, which is the ONE piece of Python's object
+; model that cannot be faked by a flat alist: `class Dog(Animal)` means a Dog
+; finds Animal's methods, and `super`-less overriding means the derived class is
+; searched first.  Attributes do not walk -- they live on the instance.
+
+(def %py-alist-find
+  (fn (self k rows)
+    (if (null? rows)
+      ()
+      (if (Str8 =? k (first (first rows)))
+        (first rows)
+        (self k (rest rows))))))
+
+; Derived first, then the base, then the base's base.
+(def %py-method-find
+  (fn (self cls name)
+    (if (null? cls)
+      ()
+      (let ((e (%py-alist-find name (%py-class-methods cls))))
+        (if (null? e)
+          (self (%py-class-base cls) name)
+          (rest e))))))
+
+; A BOUND METHOD IS JUST A CLOSURE OVER THE OBJECT.  A method compiles to
+; (fn (_ py-self ...) ...) -- the leading _ absorbs x's self-binding -- so
+; calling it with the object as the first argument is all "bound" means.
+(def %py-bind-method
+  (fn (_ m obj) (fn (_ . args) (apply m (pair obj args)))))
+
+(def %py-obj-attr
+  (fn (_ obj name)
+    (let ((e (%py-alist-find name (%py-obj-attrs obj))))
+      (if (not (null? e))
+        (rest e)
+        (let ((m (%py-method-find (%py-obj-class obj) name)))
+          (if (null? m)
+            (Err raise (lit attribute)
+              (Str8 append
+                (Str8 append
+                  (Str8 append "'" (%py-class-name (%py-obj-class obj)))
+                  "' object has no attribute '")
+                (Str8 append name "'"))
+              ())
+            (%py-bind-method m obj)))))))
+
+; Setting an attribute REPLACES the entry or appends one, and hangs the result
+; back on the instance's cell so every reference sees it -- the same identity
+; argument the containers needed.
+(def %py-attr-put
+  (fn (self rows k v)
+    (if (null? rows)
+      (list (pair k v))
+      (if (Str8 =? k (first (first rows)))
+        (pair (pair k v) (rest rows))
+        (pair (first rows) (self (rest rows) k v))))))
+
+(def %py-setattr
+  (fn (_ obj name v)
+    (if (not (%py-obj-is obj))
+      (Err raise (lit attribute) "object does not support attribute assignment" ())
+      (%py-obj-set-attrs! obj (%py-attr-put (%py-obj-attrs obj) name v)))))
+
+(def %py-mkclass
+  (fn (_ name base methods) (%py-class-new name base methods)))
+
+; Construction: make the instance, then run __init__ if the class chain has one.
+; Its return value is discarded -- Python returns the INSTANCE from a call to a
+; class, whatever __init__ answers.
+(set! %py-instantiate
+  (fn (_ cls args)
+    (let ((o (%py-obj-new cls)))
+      (let ((init (%py-method-find cls "__init__")))
+        (if (null? init)
+          o
+          (%seq (apply init (pair o args)) o))))))
