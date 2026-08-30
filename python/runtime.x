@@ -34,6 +34,7 @@
   %py-print %py-display
   %py-mklist %py-index %py-len %py-list? %py-write %py-getattr %py-setindex
   %py-range %py-iter-elems %py-callcc
+  %py-raise %py-exc-match
   %py-mkdict %py-dict? %py-dget %py-dset)
 
 ; --- Arithmetic --------------------------------------------------------------
@@ -76,10 +77,26 @@
 ; TRUE DIVISION ALWAYS PRODUCES A FLOAT.  `1 / 2` is 0.5 in Python 3 and an
 ; exact 1/2 in x, and that difference is the reason this bundle declares xenon
 ; -- float is reachable from the first arithmetic a beginner types.
-(def %py-div (fn (_ a b) (/ (* a 1.0) b)))
+; DIVISION BY ZERO RAISES.  It answered `inf` for `1 / 0`, `0` for `1 // 0`
+; and None for `1 % 0` -- three more silent wrong answers, and the three
+; Python spells ZeroDivisionError.  The messages are Python's own, which
+; differ between true and floor division.
+(def %py-div
+  (fn (_ a b)
+    (if (= b 0)
+      (%py-raise "ZeroDivisionError" "division by zero")
+      (/ (* a 1.0) b))))
 
-(def %py-floordiv (fn (_ a b) (Num quotient a b)))
-(def %py-mod (fn (_ a b) (Num modulo a b)))
+(def %py-floordiv
+  (fn (_ a b)
+    (if (= b 0)
+      (%py-raise "ZeroDivisionError" "integer division or modulo by zero")
+      (Num quotient a b))))
+(def %py-mod
+  (fn (_ a b)
+    (if (= b 0)
+      (%py-raise "ZeroDivisionError" "integer modulo by zero")
+      (Num modulo a b))))
 ; NEVER HAND Num expt A NEGATIVE EXPONENT.  Its parameter is documented
 ; "Non-negative integer exponent" and nothing enforces it: with exp < 0 the
 ; recursion never reaches 0 and SQUARES THE BASE on every even step, so it
@@ -391,7 +408,12 @@
               (write v)
               (if (%py-dict? v)
                 (write v)
-                (display v)))))))))
+                ; str(e) in Python is the MESSAGE, not the repr -- `print(e)`
+                ; inside an except block shows "division by zero", not
+                ; "#<err:zero-division division by zero>".
+                (if (Err err? v)
+                  (display (v msg))
+                  (display v))))))))))
 
 ; Close the loop: python/types.x forward-declares %py-repr and its PY-LIST write
 ; handler calls it per element, so that a string inside a list shows its quotes.
@@ -426,3 +448,60 @@
             (%seq (%py-display (first vs))
               (self (rest vs) #f))))))
     (%seq (%go args #t) (newline))))
+
+; --- Exceptions --------------------------------------------------------------
+;
+; PYTHON'S EXCEPTION TYPES ARE x's ERROR KINDS.  Err already carries a kind
+; symbol, a message and a data alist, and every raise in this runtime already
+; picked a kind: `(lit index)` for a bad subscript, `(lit key)` for a missing
+; dict key, `(lit type)` for a bad operand.  Those kinds were chosen before
+; there was any way to catch them, and they turn out to be exactly the
+; discrimination `except` needs -- so the table below is a NAMING, not a
+; mechanism, and every error this runtime already raised became catchable the
+; moment `try` could parse.
+;
+; `Exception` matches ANY kind.  It is Python's base class for everything a
+; program is expected to catch, and there is no class hierarchy here to derive
+; that from -- so it is stated, not computed.  When classes arrive, this is the
+; table that has to grow a parent link.
+
+(def %py-exc-kinds
+  (list
+    (pair "TypeError"         (lit type))
+    (pair "ValueError"        (lit value))
+    (pair "IndexError"        (lit index))
+    (pair "KeyError"          (lit key))
+    (pair "NameError"         (lit name))
+    (pair "AttributeError"    (lit attribute))
+    (pair "ZeroDivisionError" (lit zero-division))
+    (pair "SyntaxError"       (lit syntax))
+    (pair "RuntimeError"      (lit state))))
+
+(def %py-exc-lookup
+  (fn (self name rows)
+    (if (null? rows)
+      ()
+      (if (Str8 =? name (first (first rows)))
+        (rest (first rows))
+        (self name (rest rows))))))
+
+(def %py-exc-kind (fn (_ name) (%py-exc-lookup name %py-exc-kinds)))
+
+; An unknown exception name is a NameError, as it is in Python -- `raise Foo`
+; where Foo was never defined does not raise Foo.
+(def %py-raise
+  (fn (_ name msg)
+    (let ((k (%py-exc-kind name)))
+      (if (null? k)
+        (Err raise (lit name)
+          (Str8 append (Str8 append "name '" name) "' is not defined") ())
+        (Err raise k msg ())))))
+
+; Err kind-of is TOTAL -- a legacy bare string or a C error atom answers 'user
+; -- so this never has to ask whether the caught thing is an Err first.
+(def %py-exc-match
+  (fn (_ e name)
+    (if (Str8 =? name "Exception")
+      #t
+      (let ((k (%py-exc-kind name)))
+        (if (null? k) #f (eq? (Err kind-of e) k))))))
