@@ -216,13 +216,22 @@
         (if (%py-op-is? (if (null? more) () (first more)) "(")
           (let ((r (%py-args (rest more) ())))
             (self (pair acc (first r)) (rest r)))
+          ; Attribute access binds like a call, and yields a VALUE -- the
+          ; bound method -- so `f = x.append` works and a following `(` simply
+          ; applies it.
+          (if (%py-op-is? (if (null? more) () (first more)) ".")
+            (let ((n (if (null? (rest more)) () (first (rest more)))))
+              (if (not (eq? (%py-tag n) (lit tok-name)))
+                (Err raise (lit syntax) "expected a name after ." ())
+                (self (list (lit %py-getattr) acc (%py-val n))
+                      (rest (rest more)))))
           ; Subscript binds like a call: left-associative, same level.
           (if (%py-op-is? (if (null? more) () (first more)) "[")
             (let ((r (%py-comparison (rest more))))
               (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) "]")
                 (self (list (lit %py-index) acc (first r)) (rest (rest r)))
                 (Err raise (lit syntax) "expected ] after a subscript" ())))
-            (pair acc more)))))
+            (pair acc more))))))
     (%go (first %a) (rest %a))))
 
 ; Arguments up to the closing paren.  A trailing comma is legal Python and costs

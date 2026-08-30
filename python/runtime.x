@@ -30,7 +30,7 @@
   %py-add %py-sub %py-mul %py-div %py-floordiv %py-mod %py-pow %py-neg
   %py-eq %py-ne %py-lt %py-gt %py-le %py-ge
   %py-print %py-display
-  %py-mklist %py-index %py-len %py-list? %py-write)
+  %py-mklist %py-index %py-len %py-list? %py-write %py-getattr)
 
 ; --- Arithmetic --------------------------------------------------------------
 ; `+` dispatches on the operands, and the string case is not an extra: Python
@@ -110,6 +110,45 @@
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "list index out of range" ())
             (List ref k (rest v))))))))
+
+; --- Attributes and methods --------------------------------------------------
+;
+; `x.append` is a VALUE, not just a call form.  Python binds the receiver at
+; attribute-access time -- `f = x.append; f(4)` appends to x -- so getattr
+; returns a closure over the object rather than the parser emitting a
+; three-argument call. That costs one closure per access and buys the bound
+; method for free.
+;
+; MUTATION IS IN PLACE, and the tag pair is what makes it possible. A list is
+; (py-list . elements); %set-rest! replaces the elements on THAT pair, so every
+; reference to the list sees the change. Rebuilding and returning a new list
+; would make `x.append(5)` silently do nothing to x, which is the bug this
+; representation was chosen to avoid.
+(def %py-append-elem
+  (fn (self lst v)
+    (if (null? lst) (list v) (pair (first lst) (self (rest lst) v)))))
+
+(def %py-getattr
+  (fn (_ obj name)
+    (if (%py-list? obj)
+      (if (Str8 =? name "append")
+        (fn (_ v) (%seq (%set-rest! obj (%py-append-elem (rest obj) v)) ()))
+        (if (Str8 =? name "pop")
+          (fn (_ . a)
+            (let ((n (List length (rest obj))))
+              (if (= n 0)
+                (Err raise (lit index) "pop from empty list" ())
+                (let ((v (List ref (- n 1) (rest obj))))
+                  (%seq (%set-rest! obj (%py-drop-last (rest obj))) v)))))
+          (Err raise (lit attribute)
+            (Str8 append (Str8 append "'list' object has no attribute '" name) "'")
+            ())))
+      (Err raise (lit attribute)
+        (Str8 append (Str8 append "object has no attribute '" name) "'") ()))))
+
+(def %py-drop-last
+  (fn (self lst)
+    (if (null? (rest lst)) () (pair (first lst) (self (rest lst))))))
 
 ; --- print -------------------------------------------------------------------
 ; Python's `print` is not `display`: arguments are separated by a single space,
