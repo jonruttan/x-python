@@ -46,7 +46,10 @@
 (provide python/types
   %py-list %py-list-new %py-list-is %py-list-elems %py-list-set!
   %py-dict %py-dict-new %py-dict-is %py-dict-entries %py-dict-set! %py-dict-get
-  %py-repr %py-equal %py-repeat)
+  %py-repr %py-equal %py-repeat
+  %py-class %py-class-new %py-class-is %py-class-name %py-class-base
+  %py-class-methods %py-instantiate
+  %py-obj %py-obj-new %py-obj-is %py-obj-class %py-obj-attrs %py-obj-set-attrs!)
 
 ; Fetch the type prims from the catalog (ns `type` is de-registered, R5).
 (def %make-type (prim-ref (lit type) (lit make)))
@@ -296,3 +299,65 @@
       (let ((as (rest (first a))) (bs (rest (first b))))
         (if (= (List length as) (List length bs)) (%py-entries-eq as bs) #f))
       #f)))
+
+; --- PY-CLASS and PY-OBJ -----------------------------------------------------
+;
+; A CLASS IS CALLABLE, AND THAT IS THE WHOLE TRICK.  Python spells construction
+; `Foo()`, which is a call, and x dispatches a call on a value through its
+; type's `call` handler.  So a class needs no special form in the parser and no
+; check at every call site: `Foo()` is the ordinary call path, arriving at the
+; handler below.
+;
+; The class itself is NOT an x class (x/type/class.x).  That layer is for types
+; written in x, resolved when the file loads; Python's classes are values built
+; at run time from a parsed body, and their method lookup has to follow Python's
+; rules rather than x's.  This is the same reasoning that put Python's lists on
+; the type system rather than the class system -- one level lower is the level
+; that fits.
+
+(def %py-class ())
+(def %py-obj ())
+
+; Set by runtime.x: constructing an instance means running __init__, and what
+; that means -- bind the object, pass the arguments, ignore the result -- is
+; Python's rule, so it lives with the other Python rules.
+(def %py-instantiate ())
+
+; A class is (name base methods) and never mutates, so it needs no cell.
+(def %py-class-new
+  (fn (_ name base methods) (%make-instance %py-class (list name base methods))))
+(def %py-class-is (fn (_ v) (%type? v %py-class)))
+(def %py-class-name (fn (_ c) (first (first c))))
+(def %py-class-base (fn (_ c) (first (rest (first c)))))
+(def %py-class-methods (fn (_ c) (first (rest (rest (first c))))))
+
+; An instance is a cell: first is its class, rest is its attribute alist.  The
+; attributes change -- `self.x = 1` is how Python objects get their fields at
+; all -- so the alist hangs off a cell that every reference shares.
+(def %py-obj-new (fn (_ cls) (%make-instance %py-obj (pair cls ()))))
+(def %py-obj-is (fn (_ v) (%type? v %py-obj)))
+(def %py-obj-class (fn (_ o) (first (first o))))
+(def %py-obj-attrs (fn (_ o) (rest (first o))))
+(def %py-obj-set-attrs! (fn (_ o a) (%seq (%set-rest! (first o) a) ())))
+
+(set! %py-class
+  (%make-type
+    "PY-CLASS"
+    (list
+      (pair (lit write)
+        (fn (_ self) (display "<class '__main__." (first (first self)) "'>")))
+      (pair (lit call)
+        (fn (_ self . args) (%py-instantiate self args))))))
+
+(set! %py-obj
+  (%make-type
+    "PY-OBJ"
+    (list
+      ; DIVERGENCE, STATED: Python prints `<__main__.Foo object at 0x7f...>`.
+      ; The address is the object's identity and is different on every run, so
+      ; reproducing it would make every spec that prints an object unassertable.
+      ; The name is kept and the address is dropped.
+      (pair (lit write)
+        (fn (_ self)
+          (display "<__main__." (%py-class-name (first (first self)))
+                   " object>"))))))
