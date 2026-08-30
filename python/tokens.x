@@ -199,11 +199,33 @@
         %py-number-frac
         (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
 
+; A SIGNED LITERAL IS CLAIMED HERE, AND THAT IS NOT WHAT PYTHON MEANS BY IT.
+;
+; The sexp integer type accepts a leading + or -, so on `a+2` it matches `+2`
+; -- two characters -- and outscores PY-OP matching `+` as one.  The winning
+; type's reader is the engine's, so the operator vanishes and a bare integer
+; lands in the stream.  A single-character operator type cannot win that race.
+;
+; So this type matches the sign too, ties on length, and takes it.  The sign is
+; then split back off in python/parse.x when the token appears in OPERATOR
+; position -- which is where Python decides it: `a-3` is three tokens and `-3`
+; alone is one, and only the grammar knows which it is looking at.  Doing it
+; here would need the tokenizer to know whether an operand is pending, which is
+; precisely the knowledge a tokenizer does not have.
+;
+; A sign NOT followed by a digit rejects, so `a + b` still reaches PY-OP.
+(def %py-number-signed ())
+(set! %py-number-signed
+  (fn (_ buffer score chr)
+    (if (%py-digit? chr) %py-number-body ())))
+
 (Base make-type %py-base "PY-NUMBER"
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
-        (if (%py-digit? chr) %py-number-body ())))
+        (if (%py-digit? chr)
+          %py-number-body
+          (if (if (= chr 43) #t (= chr 45)) %py-number-signed ()))))
     (pair (lit read)
       (fn (_ . args) (mk-tok-number (%buffer-token (first args)))))))
 
@@ -284,9 +306,20 @@
 ; `=` is assignment.  A single-character-only operator type reads `a//b` as two
 ; divisions, which is not a syntax error -- it is silently different arithmetic.
 ;
-; So: a start state that accepts one character, and a second state that extends
-; it when the pair is a real operator.  Three-character operators (`//=`, `**=`,
-; `...`) are not here yet and are the obvious next edit.
+; THE SHAPE IS ash's SH-OP, INCLUDING THE `(+ chr 0)`.  Two earlier attempts
+; died here and both are worth recording:
+;
+;   Closing over `chr` DIRECTLY inside analyse killed the interpreter -- it
+;   worked for `1 + 2` and crashed on `print(-3 + 5)`.  ash writes
+;   `(%sh-op-double (+ chr 0))`, and the arithmetic is not decoration: it forces
+;   a fresh immediate rather than capturing the callback's own value.
+;
+;   Building the pair matchers with `Analyser make-str-state` at registration
+;   time crashed at LOAD, before a character was read.
+;
+; So: a top-level state builder, called once per operator token, capturing a
+; copy.  One closure per token is what ash does and what the platform tolerates;
+; one per character is not.
 (def %py-op-start?
   (fn (_ c)
     (if (= c 43) #t (if (= c 45) #t (if (= c 42) #t (if (= c 47) #t
@@ -296,7 +329,7 @@
             (if (= c 44) #t (if (= c 58) #t (if (= c 46) #t
               (= c 59)))))))))))))))))))))
 
-; Which pairs extend: `==` `!=` `<=` `>=` `//` `**`
+; Which pairs extend: == != <= >= // **
 (def %py-op-pair?
   (fn (_ a b)
     (if (= b 61)
@@ -304,22 +337,39 @@
       (if (if (= a 47) (= b 47) #f) #t
         (if (= a 42) (= b 42) #f)))))
 
-(def %py-op-second ())
-(set! %py-op-second ())
+; ONLY THE SIX CHARACTERS THAT CAN BEGIN A TWO-CHARACTER OPERATOR look ahead.
+; Everything else accepts on the spot.
+;
+; This is the fix for `1+2` reading as (('tok-number "1") 2) -- the `+` lost and
+; the `2` unwrapped. PY-NUMBER ends `1` by giving `+` back with %buffer-unread;
+; PY-OP then took `+`, entered a lookahead state, saw `2`, and unread AGAIN.
+; Two rewinds around one character is one too many, and the token in between
+; disappeared. `-3` at the start of input worked precisely because nothing had
+; unread before it, which is what made this look like a sign-handling bug for
+; three rounds of investigation.
+;
+; ash's SH-OP has the same split -- `(` and `)` accept immediately, the rest
+; look ahead -- and this is why.
+(def %py-op-pairable?
+  (fn (_ c)
+    (if (= c 61) #t (if (= c 33) #t (if (= c 60) #t (if (= c 62) #t
+      (if (= c 47) #t (= c 42))))))))
+
+(def %py-op-second
+  (fn (_ c1)
+    (fn (_ buffer score chr)
+      (if (%py-op-pair? c1 chr)
+        (%score-set score 1 buffer)
+        (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
 
 (Base make-type %py-base "PY-OP"
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
         (if (%py-op-start? chr)
-          ; Remember the first character by closing over it -- ONE closure per
-          ; operator token, not per character.
-          (%seq
-            (%score-set score 1 buffer)
-            (fn (_ buffer score chr2)
-              (if (%py-op-pair? chr chr2)
-                (%score-set score 1 buffer)
-                (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
+          (if (%py-op-pairable? chr)
+            (%seq (%score-set score 1 buffer) (%py-op-second (+ chr 0)))
+            (%score-set score 1 buffer))
           ())))
     (pair (lit read)
       (fn (_ . args) (mk-tok-op (%buffer-token (first args)))))))
