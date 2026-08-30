@@ -31,7 +31,7 @@
   %py-eq %py-ne %py-lt %py-gt %py-le %py-ge
   %py-print %py-display
   %py-mklist %py-index %py-len %py-list? %py-write %py-getattr %py-setindex
-  %py-range %py-iter-elems)
+  %py-range %py-iter-elems %py-callcc)
 
 ; --- Arithmetic --------------------------------------------------------------
 ; `+` dispatches on the operands, and the string case is not an extra: Python
@@ -138,6 +138,10 @@
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "list assignment index out of range" ())
             (%seq (%set-rest! obj (%py-set-nth (rest obj) k v)) ())))))))
+
+; The escape continuation a `return` invokes.  Fetched rather than assumed
+; global, the way every other prim in this bundle is reached.
+(def %py-callcc (prim-ref (lit ctrl) (lit call/cc)))
 
 ; --- Iteration ---------------------------------------------------------------
 ;

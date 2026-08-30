@@ -418,12 +418,23 @@
           (if (%py-name-is? t "def")
             (%py-def (rest toks))
             (if (%py-name-is? t "return")
-              ; RETURN IS THE BODY'S VALUE, and only correct in tail position:
-              ; x returns a body's last expression, so a `return` anywhere else
-              ; computes and discards.  Early return wants an escape
-              ; continuation and is not here yet.
-              (let ((r (%py-comparison (rest toks))))
-                (pair (first r) (rest r)))
+              ; RETURN INVOKES AN ESCAPE CONTINUATION.  It used to compile to
+              ; its expression, and x returns a body's LAST value -- so a return
+              ; anywhere but the tail computed and discarded. `if x < 0: return
+              ; 0` fell through and answered the wrong number with no error.
+              ;
+              ; %py-return is bound by the enclosing def (see %py-def). A return
+              ; outside a function leaves it unbound, which is an error where
+              ; Python raises SyntaxError -- different words, same refusal.
+              ;
+              ; A bare `return` yields None.
+              (let ((nxt (if (null? (rest toks)) () (first (rest toks)))))
+                (if (if (null? nxt) #t
+                      (if (eq? (%py-tag nxt) (lit tok-newline)) #t
+                        (eq? (%py-tag nxt) (lit tok-dedent))))
+                  (pair (list (lit %py-return) ()) (rest toks))
+                  (let ((r (%py-comparison (rest toks))))
+                    (pair (list (lit %py-return) (first r)) (rest r)))))
               (if (%py-name-is? t "pass")
                 (pair () (rest toks))
                 ; ASSIGNMENT IS DECIDED BY WHAT FOLLOWS A TARGET, not by the
@@ -552,11 +563,20 @@
                   ; `let` binds in the frame unconditionally, which is what a
                   ; function-local is.  A body with no locals gets no wrapper.
                   (pair
+                    ; The body runs inside call/cc so `return` has somewhere to
+                    ; jump to, and ends in () so a function that falls off the
+                    ; end answers None -- Python's rule. Without that trailing
+                    ; nil the body's last expression would leak out as the
+                    ; return value.
                     (list (lit def) (%py-name->sym (%py-val name))
                       (list (lit fn) (pair (lit _) (first p))
-                        (if (null? locals)
-                          (first b)
-                          (list (lit let) (%py-lets locals ()) (first b)))))
+                        (list (lit %py-callcc)
+                          (list (lit fn) (list (lit _) (lit %py-return))
+                            (list (lit %seq)
+                              (if (null? locals)
+                                (first b)
+                                (list (lit let) (%py-lets locals ()) (first b)))
+                              ())))))
                     (rest b)))))))))))
 
 (def %py-lets
