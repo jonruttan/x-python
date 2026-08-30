@@ -46,10 +46,32 @@
       (if (str? b)
         (Str8 append a b)
         (Err raise (lit type) "can only concatenate str to str" ()))
-      (+ a b))))
+      (if (str? b)
+        ; `1 + "a"` is a TypeError in Python, not a coercion.  Without this it
+        ; reached x's `+` with a string operand and answered a number.
+        (Err raise (lit type) "unsupported operand type(s) for +" ())
+        ; Lists concatenate through PY-LIST's own `+` op, which the engine
+        ; dispatches from here.
+        (+ a b)))))
 
 (def %py-sub (fn (_ a b) (- a b)))
-(def %py-mul (fn (_ a b) (* a b)))
+; STRING REPETITION IS HANDLED HERE, NOT ON THE TYPE.  A type's ops fire when
+; either operand carries the type, so pushing `*` onto x's str type would change
+; what `*` means for every string in the process, the platform's included.  The
+; containers can have ops because they are types this bundle invented; str is
+; not, so its Python rules stay behind a `str?` test.
+(def %py-str-repeat
+  (fn (self s n) (if (<= n 0) "" (Str8 append s (self s (- n 1))))))
+
+(def %py-mul
+  (fn (_ a b)
+    (if (str? a)
+      (if (str? b)
+        (Err raise (lit type) "can't multiply sequence by non-int" ())
+        (%py-str-repeat a b))
+      (if (str? b)
+        (%py-str-repeat b a)
+        (* a b)))))
 
 ; TRUE DIVISION ALWAYS PRODUCES A FLOAT.  `1 / 2` is 0.5 in Python 3 and an
 ; exact 1/2 in x, and that difference is the reason this bundle declares xenon
@@ -378,6 +400,10 @@
 
 ; and the PY-DICT `call` handler reaches Python's equality the same way.
 (set! %py-dict-get %py-dget)
+
+; and the container equality ops compare their elements with Python's rule,
+; which is what makes nested containers come out right.
+(set! %py-equal %py-eq)
 
 
 ; display and write differ in exactly ONE way: a string prints BARE at top level

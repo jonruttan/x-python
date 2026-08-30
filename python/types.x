@@ -46,10 +46,12 @@
 (provide python/types
   %py-list %py-list-new %py-list-is %py-list-elems %py-list-set!
   %py-dict %py-dict-new %py-dict-is %py-dict-entries %py-dict-set! %py-dict-get
-  %py-repr)
+  %py-repr %py-equal %py-repeat)
 
 ; Fetch the type prims from the catalog (ns `type` is de-registered, R5).
 (def %make-type (prim-ref (lit type) (lit make)))
+(def %type-by-atom (prim-ref (lit type) (lit by-atom)))
+(def %type-push-op (prim-ref (lit type) (lit push-op)))
 (def %make-instance (prim-ref (lit type) (lit make-instance)))
 (def %type? (prim-ref (lit type) (lit ?)))
 
@@ -182,3 +184,120 @@
               (let ((k (first (first es))))
                 (set! es (rest es))
                 k))))))))
+
+; --- Operators ---------------------------------------------------------------
+;
+; PUSHED ONTO PYTHON'S OWN TYPES, NEVER ONTO x's.  A type's ops are consulted
+; when EITHER operand carries that type, so pushing `*` onto x's str type to
+; make `'ab' * 2` work would change what `*` means for every string in the
+; process -- the platform's own included.  Python's string operators therefore
+; stay in runtime.x behind a `str?` test.  Only PY-LIST and PY-DICT get ops,
+; because they are types this bundle invented and nothing else can hold one.
+;
+; WHAT WAS THERE BEFORE was not "unimplemented", it was WRONG: `[1] + [2]`
+; printed 64690751520 and `[1] * 3` printed 96291346800 -- the instance pointer
+; read as an integer -- while `[1, 2] == [1, 2]` was False because the compare
+; was identity.  A silent wrong number is the failure mode this bundle keeps
+; finding, and it is the reason each of these has a spec.
+
+; Set to %py-eq by runtime.x: Python's equality is Python's rule, and the
+; elementwise compares below have to use it so that nested containers, and
+; `1 == 1.0`, come out right.
+(def %py-equal ())
+
+(def %py-list-type (%type-by-atom %py-list))
+(def %py-dict-type (%type-by-atom %py-dict))
+
+(def %py-concat
+  (fn (self a b) (if (null? a) b (pair (first a) (self (rest a) b)))))
+
+; n <= 0 gives the empty list, as in Python.
+(def %py-repeat
+  (fn (self l n) (if (<= n 0) () (%py-concat l (self l (- n 1))))))
+
+(def %py-seq-eq
+  (fn (self a b)
+    (if (null? a)
+      (null? b)
+      (if (null? b)
+        #f
+        (if (%py-equal (first a) (first b)) (self (rest a) (rest b)) #f)))))
+
+; Lexicographic, as Python compares sequences: the first differing element
+; decides, and a proper prefix is the smaller.
+(def %py-seq-lt
+  (fn (self a b)
+    (if (null? a)
+      (not (null? b))
+      (if (null? b)
+        #f
+        (if (%py-equal (first a) (first b))
+          (self (rest a) (rest b))
+          (< (first a) (first b)))))))
+
+; Multiplying a sequence by a non-number is a TypeError in Python, and the
+; guard has to name the cases rather than test for "number": the tower's ints,
+; bigints and floats are all different types.
+(def %py-not-a-count
+  (fn (_ n)
+    (if (str? n) #t (if (%py-list-is n) #t (%py-dict-is n)))))
+
+(%type-push-op %py-list-type (lit +)
+  (fn (_ a b)
+    (if (if (%py-list-is a) (%py-list-is b) #f)
+      (%py-list-new (%py-concat (rest (first a)) (rest (first b))))
+      (Err raise (lit type) "can only concatenate list to list" ()))))
+
+(%type-push-op %py-list-type (lit *)
+  (fn (_ a b)
+    (let ((l (if (%py-list-is a) a b))
+          (n (if (%py-list-is a) b a)))
+      (if (%py-not-a-count n)
+        (Err raise (lit type) "can't multiply sequence by non-int" ())
+        (%py-list-new (%py-repeat (rest (first l)) n))))))
+
+; A list is equal only to a list -- never an error, because Python answers False
+; for `[1] == 1` rather than raising.
+(%type-push-op %py-list-type (lit =)
+  (fn (_ a b)
+    (if (if (%py-list-is a) (%py-list-is b) #f)
+      (%py-seq-eq (rest (first a)) (rest (first b)))
+      #f)))
+
+(%type-push-op %py-list-type (lit <)
+  (fn (_ a b)
+    (if (if (%py-list-is a) (%py-list-is b) #f)
+      (%py-seq-lt (rest (first a)) (rest (first b)))
+      (Err raise (lit type) "unorderable types" ()))))
+
+(%type-push-op %py-list-type (lit >)
+  (fn (_ a b)
+    (if (if (%py-list-is a) (%py-list-is b) #f)
+      (%py-seq-lt (rest (first b)) (rest (first a)))
+      (Err raise (lit type) "unorderable types" ()))))
+
+; DICT EQUALITY IGNORES ORDER, even though the printed form does not.  Two
+; dicts with the same keys and values are equal in Python whatever order they
+; were built in, so this walks a's entries and looks each key up in b rather
+; than comparing the entry lists pairwise.
+(def %py-dfind-in
+  (fn (self k es)
+    (if (null? es)
+      ()
+      (if (%py-equal k (first (first es))) (first es) (self k (rest es))))))
+
+(def %py-entries-eq
+  (fn (self as bs)
+    (if (null? as)
+      #t
+      (let ((e (%py-dfind-in (first (first as)) bs)))
+        (if (null? e)
+          #f
+          (if (%py-equal (rest (first as)) (rest e)) (self (rest as) bs) #f))))))
+
+(%type-push-op %py-dict-type (lit =)
+  (fn (_ a b)
+    (if (if (%py-dict-is a) (%py-dict-is b) #f)
+      (let ((as (rest (first a))) (bs (rest (first b))))
+        (if (= (List length as) (List length bs)) (%py-entries-eq as bs) #f))
+      #f)))
