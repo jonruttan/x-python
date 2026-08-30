@@ -216,7 +216,13 @@
         (if (%py-op-is? (if (null? more) () (first more)) "(")
           (let ((r (%py-args (rest more) ())))
             (self (pair acc (first r)) (rest r)))
-          (pair acc more))))
+          ; Subscript binds like a call: left-associative, same level.
+          (if (%py-op-is? (if (null? more) () (first more)) "[")
+            (let ((r (%py-comparison (rest more))))
+              (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) "]")
+                (self (list (lit %py-index) acc (first r)) (rest (rest r)))
+                (Err raise (lit syntax) "expected ] after a subscript" ())))
+            (pair acc more)))))
     (%go (first %a) (rest %a))))
 
 ; Arguments up to the closing paren.  A trailing comma is legal Python and costs
@@ -246,12 +252,28 @@
             (pair (%py-val t) (rest toks))
             (if (eq? (%py-tag t) (lit tok-name))
               (pair (%py-name->sym (%py-val t)) (rest toks))
+              (if (%py-op-is? t "[")
+                (let ((r (%py-elems (rest toks) ())))
+                  (pair (pair (lit %py-mklist) (first r)) (rest r)))
               (if (%py-op-is? t "(")
                 (let ((r (%py-comparison (rest toks))))
                   (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ")")
                     (pair (first r) (rest (rest r)))
                     (Err raise (lit syntax) "expected )" ())))
-                (Err raise (lit syntax) "unexpected token in expression" t)))))))))
+                (Err raise (lit syntax) "unexpected token in expression" t))))))))))
+
+; Elements of a list literal, up to the closing bracket.  A trailing comma is
+; legal Python and costs one branch.
+(def %py-elems
+  (fn (self toks acc)
+    (if (%py-op-is? (if (null? toks) () (first toks)) "]")
+      (pair (List reverse acc) (rest toks))
+      (let ((r (%py-comparison toks)))
+        (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ",")
+          (self (rest (rest r)) (pair (first r) acc))
+          (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) "]")
+            (pair (List reverse (pair (first r) acc)) (rest (rest r)))
+            (Err raise (lit syntax) "expected , or ] in list literal" ())))))))
 
 ; A Python name becomes an x symbol, EXCEPT the builtins that have a runtime
 ; function -- `print` is the only one so far.  A name table rather than a
@@ -260,7 +282,8 @@
   (list (list "print" (lit %py-print))
         (list "True"  #t)
         (list "False" #f)
-        (list "None"  ())))
+        (list "None"  ())
+        (list "len"   (lit %py-len))))
 
 ; PYTHON'S NAMESPACE IS NOT x's, AND KEEPING THEM APART IS NOT TIDINESS.
 ;
@@ -442,7 +465,7 @@
               ; is the function's.  Parameters are already bound and are not
               ; re-declared; shadowing them with a nil would break every call.
               (let ((span (%py-take
-                            (- (%py-len (rest p)) (%py-len (rest b)))
+                            (- (%py-count (rest p)) (%py-count (rest b)))
                             (rest p))))
                 (let ((locals (%py-minus
                                 (%py-dedupe () (%py-assign-targets span ()) ())
@@ -573,7 +596,11 @@
 ; Hand-rolled rather than reaching for List: `member?` is not a static there,
 ; and a wrong method name fails at RUN time in a form this file generates,
 ; which is a long way from where it would be read.
-(def %py-len (fn (self l) (if (null? l) 0 (+ 1 (self (rest l))))))
+; %py-count, NOT %py-len: python/runtime.x defines %py-len as Python's `len`,
+; and two definitions of one name in the same module namespace means the last
+; loaded wins.  It cost `len([])` returning 1 and `len('hello')` returning 119 --
+; wrong numbers, no error.
+(def %py-count (fn (self l) (if (null? l) 0 (+ 1 (self (rest l))))))
 (def %py-take
   (fn (self n l)
     (if (= n 0) () (if (null? l) () (pair (first l) (self (- n 1) (rest l)))))))
