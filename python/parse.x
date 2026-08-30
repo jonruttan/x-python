@@ -267,6 +267,9 @@
             (pair (%py-val t) (rest toks))
             (if (eq? (%py-tag t) (lit tok-name))
               (pair (%py-name->sym (%py-val t)) (rest toks))
+              (if (%py-op-is? t "{")
+                (let ((r (%py-entries (rest toks) ())))
+                  (pair (pair (lit %py-mkdict) (first r)) (rest r)))
               (if (%py-op-is? t "[")
                 (let ((r (%py-elems (rest toks) ())))
                   (pair (pair (lit %py-mklist) (first r)) (rest r)))
@@ -275,7 +278,28 @@
                   (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ")")
                     (pair (first r) (rest (rest r)))
                     (Err raise (lit syntax) "expected )" ())))
-                (Err raise (lit syntax) "unexpected token in expression" t))))))))))
+                (Err raise (lit syntax) "unexpected token in expression" t)))))))))))
+
+; Entries of a dict literal: KEY : VALUE, up to the closing brace. Each entry
+; becomes (pair KEY VALUE) so the runtime holds an association list in insertion
+; order -- which is the printed order, and therefore part of the answer.
+;
+; `{}` is an empty DICT, not an empty set. Python spells the empty set as set(),
+; which is not implemented, so there is no ambiguity to resolve here.
+(def %py-entries
+  (fn (self toks acc)
+    (if (%py-op-is? (if (null? toks) () (first toks)) "}")
+      (pair (List reverse acc) (rest toks))
+      (let ((k (%py-comparison toks)))
+        (if (not (%py-op-is? (if (null? (rest k)) () (first (rest k))) ":"))
+          (Err raise (lit syntax) "expected : after a dict key" ())
+          (let ((v (%py-comparison (rest (rest k)))))
+            (let ((e (list (lit pair) (first k) (first v))))
+              (if (%py-op-is? (if (null? (rest v)) () (first (rest v))) ",")
+                (self (rest (rest v)) (pair e acc))
+                (if (%py-op-is? (if (null? (rest v)) () (first (rest v))) "}")
+                  (pair (List reverse (pair e acc)) (rest (rest v)))
+                  (Err raise (lit syntax) "expected , or } in dict literal" ()))))))))))
 
 ; Elements of a list literal, up to the closing bracket.  A trailing comma is
 ; legal Python and costs one branch.

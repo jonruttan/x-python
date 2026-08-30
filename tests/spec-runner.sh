@@ -65,4 +65,24 @@ SPEC_PATH="${SPEC_PATH:-$BUNDLE/tests/specs}"
 	exit 1
 }
 
+# ONE PROCESS PER SPEC FILE, and this is a resource fix rather than a
+# preference.
+#
+# With no arguments the shared runner BUCKETS files by their @lib and runs each
+# bucket in one interpreter. Every spec here shares one harness, so the whole
+# suite became a single process -- and a batch has no auto-GC, so it accumulates
+# every case's parse-time garbage until it exits. At 207 cases that was fine; at
+# 232 it crossed the alloc-limit! ceiling and 24 cases reported "no result".
+#
+# Measured, not guessed: the same 207 cases fail when the ceiling is LOWERED to
+# 40M, and all 232 pass when the files are passed as arguments -- which the
+# shared runner spawns individually.
+#
+# So the files are named explicitly. Each gets its own process and its own
+# ceiling, and the suite can grow without a resource limit masquerading as a
+# regression. The cost is one library boot per file.
+if [ "$#" -eq 0 ]; then
+	set -- "$SPEC_PATH"/*.spec.md
+fi
+
 . "$X_ROOT/tests/spec-runner.sh"

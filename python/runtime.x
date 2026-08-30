@@ -31,7 +31,8 @@
   %py-eq %py-ne %py-lt %py-gt %py-le %py-ge
   %py-print %py-display
   %py-mklist %py-index %py-len %py-list? %py-write %py-getattr %py-setindex
-  %py-range %py-iter-elems %py-callcc)
+  %py-range %py-iter-elems %py-callcc
+  %py-mkdict %py-dict? %py-dget %py-dset)
 
 ; --- Arithmetic --------------------------------------------------------------
 ; `+` dispatches on the operands, and the string case is not an extra: Python
@@ -92,11 +93,13 @@
 
 (def %py-len
   (fn (_ v)
+    (if (%py-dict? v)
+      (List length (rest v))
     (if (%py-list? v)
       (List length (rest v))
       (if (str? v)
         (Str8 length v)
-        (Err raise (lit type) "object of this type has no len()" ())))))
+        (Err raise (lit type) "object of this type has no len()" ()))))))
 
 ; NEGATIVE INDICES COUNT FROM THE END, which is Python and not x.  -1 is the
 ; last element, and an index past either end raises IndexError rather than
@@ -112,13 +115,15 @@
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "string index out of range" ())
             (Str8 sub k 1 v))))
+    (if (%py-dict? v)
+      (%py-dget v i)
     (if (not (%py-list? v))
       (Err raise (lit type) "object is not subscriptable" ())
       (let ((n (List length (rest v))))
         (let ((k (if (< i 0) (+ n i) i)))
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "list index out of range" ())
-            (List ref k (rest v)))))))))
+            (List ref k (rest v))))))))))
 
 ; Store into a list at an index.  Rebuilds the element list and hangs it back on
 ; the SAME tag pair, so every reference sees the store -- the identity argument
@@ -131,13 +136,15 @@
 
 (def %py-setindex
   (fn (_ obj i v)
+    (if (%py-dict? obj)
+      (%py-dset obj i v)
     (if (not (%py-list? obj))
       (Err raise (lit type) "object does not support item assignment" ())
       (let ((n (List length (rest obj))))
         (let ((k (if (< i 0) (+ n i) i)))
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "list assignment index out of range" ())
-            (%seq (%set-rest! obj (%py-set-nth (rest obj) k v)) ())))))))
+            (%seq (%set-rest! obj (%py-set-nth (rest obj) k v)) ()))))))))
 
 ; The escape continuation a `return` invokes.  Fetched rather than assumed
 ; global, the way every other prim in this bundle is reached.
@@ -154,11 +161,14 @@
 
 (def %py-iter-elems
   (fn (_ v)
+    ; Iterating a dict yields its KEYS, as in Python.
+    (if (%py-dict? v)
+      (%py-dkeys (rest v))
     (if (%py-list? v)
       (rest v)
       (if (str? v)
         (%py-str-chars v 0 (Str8 length v))
-        (Err raise (lit type) "object is not iterable" ())))))
+        (Err raise (lit type) "object is not iterable" ()))))))
 
 ; range(stop) / range(start, stop) / range(start, stop, step)
 ;
@@ -188,6 +198,68 @@
         (if (= step 0)
           (Err raise (lit value) "range() arg 3 must not be zero" ())
           (pair %py-list-tag (%py-range-build start stop step ())))))))
+
+; --- Dicts -------------------------------------------------------------------
+;
+; ENTRIES IN INSERTION ORDER, not a hash table. x/type/dict.x is a content-hashed
+; mutable table and would be faster, but Python 3.7+ preserves insertion order
+; and the conformance suite compares PRINTED output -- so the order is part of
+; the answer, not an implementation detail. An association list keeps it for
+; free; lookup is O(n), which is the right trade at this size.
+;
+; A dict is (py-dict . entries), each entry a (key . value) pair. Updating a
+; value mutates THAT pair with %set-rest!, so no rebuild and every reference
+; sees it -- the same identity argument that made list append work.
+(def %py-dict-tag (lit py-dict))
+
+(def %py-dict?
+  (fn (_ v) (if (pair? v) (eq? (first v) %py-dict-tag) #f)))
+
+(def %py-mkdict (fn (_ . entries) (pair %py-dict-tag entries)))
+
+(def %py-dfind
+  (fn (self k entries)
+    (if (null? entries)
+      ()
+      (if (%py-eq k (first (first entries)))
+        (first entries)
+        (self k (rest entries))))))
+
+(def %py-dget
+  (fn (_ d k)
+    (let ((e (%py-dfind k (rest d))))
+      (if (null? e)
+        (Err raise (lit key) "key not found" ())
+        (rest e)))))
+
+(def %py-dappend
+  (fn (self entries e)
+    (if (null? entries) (list e) (pair (first entries) (self (rest entries) e)))))
+
+(def %py-dset
+  (fn (_ d k v)
+    (let ((e (%py-dfind k (rest d))))
+      (if (null? e)
+        ; A new key goes on the END: insertion order is the printed order.
+        (%seq (%set-rest! d (%py-dappend (rest d) (pair k v))) ())
+        (%seq (%set-rest! e v) ())))))
+
+(def %py-dkeys (fn (self entries) (if (null? entries) () (pair (first (first entries)) (self (rest entries))))))
+(def %py-dvals (fn (self entries) (if (null? entries) () (pair (rest (first entries)) (self (rest entries))))))
+
+(def %py-dict-attr
+  (fn (_ d name)
+    (if (Str8 =? name "keys")   (fn (_) (pair %py-list-tag (%py-dkeys (rest d))))
+    (if (Str8 =? name "values") (fn (_) (pair %py-list-tag (%py-dvals (rest d))))
+    (if (Str8 =? name "get")
+      ; get returns a default instead of raising -- that is the whole reason it
+      ; exists next to subscripting.
+      (fn (_ k . dflt)
+        (let ((e (%py-dfind k (rest d))))
+          (if (null? e) (if (null? dflt) () (first dflt)) (rest e))))
+    (Err raise (lit attribute)
+      (Str8 append (Str8 append "'dict' object has no attribute '" name) "'")
+      ()))))))
 
 ; --- Attributes and methods --------------------------------------------------
 ;
@@ -221,10 +293,12 @@
           (Err raise (lit attribute)
             (Str8 append (Str8 append "'list' object has no attribute '" name) "'")
             ())))
+      (if (%py-dict? obj)
+        (%py-dict-attr obj name)
       (if (str? obj)
         (%py-str-attr obj name)
         (Err raise (lit attribute)
-          (Str8 append (Str8 append "object has no attribute '" name) "'") ())))))
+          (Str8 append (Str8 append "object has no attribute '" name) "'")()))))))
 
 ; STRING METHODS MAP ONTO Str8, WHICH ALREADY HAS THEM -- upcase, downcase,
 ; trim, split, join, replace, starts?, ends?, index-of. The work here is the
@@ -298,7 +372,20 @@
             (display "None")
             (if (%py-list? v)
               (%seq (display "[") (%seq (%py-write-elems (rest v)) (display "]")))
-              (display v))))))))
+              (if (%py-dict? v)
+                (%seq (display "{") (%seq (%py-write-entries (rest v)) (display "}")))
+                (display v)))))))))
+
+(def %py-write-entries
+  (fn (self entries)
+    (if (null? entries)
+      ()
+      (%seq (%py-write (first (first entries)))
+        (%seq (display ": ")
+          (%seq (%py-write (rest (first entries)))
+            (if (null? (rest entries))
+              ()
+              (%seq (display ", ") (self (rest entries))))))))))
 
 (def %py-write-elems
   (fn (self elems)
@@ -309,22 +396,14 @@
           ()
           (%seq (display ", ") (self (rest elems))))))))
 
+; display and write differ in exactly ONE way: a string prints BARE at top level
+; and quoted inside a container. Everything else -- True/False/None, lists,
+; dicts, numbers -- is identical, so this defers rather than restating the
+; cases. Restating them is how dicts came to print as raw pairs: the dict branch
+; was added to write and not to its copy here.
 (def %py-display
   (fn (_ v)
-    (if (eq? v #t)
-      (display "True")
-      (if (eq? v #f)
-        (display "False")
-        ; Python prints None; x displays nil as nothing at all, so a program
-        ; that prints a function's result would print a blank line where CPython
-        ; prints None -- a difference the conformance suite compares on.
-        (if (null? v)
-          (display "None")
-          ; A list at top level prints with its brackets, and its ELEMENTS print
-          ; as reprs -- print(['a']) is ['a'], not [a].
-          (if (%py-list? v)
-            (%py-write v)
-            (display v)))))))
+    (if (str? v) (display v) (%py-write v))))
 
 (def %py-print
   (fn (_ . args)
