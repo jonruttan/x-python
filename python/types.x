@@ -44,7 +44,9 @@
 ; holds the same cell, so every reference sees the store.
 
 (provide python/types
-  %py-list %py-list-new %py-list-is %py-list-elems %py-list-set! %py-repr)
+  %py-list %py-list-new %py-list-is %py-list-elems %py-list-set!
+  %py-dict %py-dict-new %py-dict-is %py-dict-entries %py-dict-set! %py-dict-get
+  %py-repr)
 
 ; Fetch the type prims from the catalog (ns `type` is de-registered, R5).
 (def %make-type (prim-ref (lit type) (lit make)))
@@ -119,3 +121,64 @@
               (let ((v (first l)))
                 (set! l (rest l))
                 v))))))))
+
+; --- PY-DICT -----------------------------------------------------------------
+;
+; ENTRIES IN INSERTION ORDER, not a hash table.  x/type/dict.x is a
+; content-hashed mutable table and would be faster, but Python 3.7+ preserves
+; insertion order and the conformance suite compares PRINTED output -- so the
+; order is part of the answer, not an implementation detail.  An association
+; list keeps it for free; lookup is O(n), which is the right trade at this size.
+;
+; Each entry is a (key . value) pair, and updating a value mutates THAT pair --
+; so the entry list itself only changes when a key is added, and the cell is
+; what makes that visible to every reference.
+
+(def %py-dict ())
+
+; Subscripting a dict needs Python's equality -- `1 == 1.0` is true there and
+; two different x values here -- and that lives in runtime.x with the rest of
+; the operators.  So the `call` handler reaches it through a hook, the same way
+; the write handlers reach repr.
+(def %py-dict-get ())
+
+(def %py-dict-entries (fn (_ v) (rest (first v))))
+(def %py-dict-set! (fn (_ v new) (%seq (%set-rest! (first v) new) ())))
+(def %py-dict-new (fn (_ entries) (%make-instance %py-dict (pair () entries))))
+(def %py-dict-is (fn (_ v) (%type? v %py-dict)))
+
+(set! %py-dict
+  (%make-type
+    "PY-DICT"
+    (list
+      (pair
+        (lit write)
+        (fn (_ self)
+          (display "{")
+          (def go
+            (fn (recur es sep)
+              (if (not (null? es))
+                (do
+                  (if sep (display ", "))
+                  (%py-repr (first (first es)))
+                  (display ": ")
+                  (%py-repr (rest (first es)))
+                  (recur (rest es) #t)))))
+          (go (rest (first self)) #f)
+          (display "}")))
+      (pair (lit length) (fn (_ self) (List length (rest (first self)))))
+      (pair
+        (lit call)
+        (fn (_ self . args) (%py-dict-get self (first args))))
+      ; Iterating a dict yields its KEYS, as in Python.  Same nil-termination
+      ; caveat as PY-LIST: a None key would end the walk early, so `for` still
+      ; takes the key list directly.
+      (pair
+        (lit iter)
+        (fn (_ self)
+          (def es (rest (first self)))
+          (fn (_)
+            (if (null? es) ()
+              (let ((k (first (first es))))
+                (set! es (rest es))
+                k))))))))

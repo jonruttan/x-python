@@ -93,7 +93,7 @@
 (def %py-len
   (fn (_ v)
     (if (%py-dict? v)
-      (List length (rest v))
+      (List length (%py-dict-entries v))
     (if (%py-list? v)
       (List length (%py-list-elems v))
       (if (str? v)
@@ -114,8 +114,9 @@
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "string index out of range" ())
             (Str8 sub k 1 v))))
+    ; Subscripting a dict is a call too -- see the list branch below.
     (if (%py-dict? v)
-      (%py-dget v i)
+      (v i)
     (if (not (%py-list? v))
       (Err raise (lit type) "object is not subscriptable" ())
       ; SUBSCRIPTING A LIST IS A CALL.  x dispatches `(v i)` through the type's
@@ -161,7 +162,7 @@
   (fn (_ v)
     ; Iterating a dict yields its KEYS, as in Python.
     (if (%py-dict? v)
-      (%py-dkeys (rest v))
+      (%py-dkeys (%py-dict-entries v))
     (if (%py-list? v)
       (%py-list-elems v)
       (if (str? v)
@@ -205,15 +206,11 @@
 ; the answer, not an implementation detail. An association list keeps it for
 ; free; lookup is O(n), which is the right trade at this size.
 ;
-; A dict is (py-dict . entries), each entry a (key . value) pair. Updating a
-; value mutates THAT pair with %set-rest!, so no rebuild and every reference
-; sees it -- the same identity argument that made list append work.
-(def %py-dict-tag (lit py-dict))
+; The representation is python/types.x's PY-DICT; what is here is what the
+; parser calls and what Python's rules say.
+(def %py-dict? (fn (_ v) (%py-dict-is v)))
 
-(def %py-dict?
-  (fn (_ v) (if (pair? v) (eq? (first v) %py-dict-tag) #f)))
-
-(def %py-mkdict (fn (_ . entries) (pair %py-dict-tag entries)))
+(def %py-mkdict (fn (_ . entries) (%py-dict-new entries)))
 
 (def %py-dfind
   (fn (self k entries)
@@ -225,7 +222,7 @@
 
 (def %py-dget
   (fn (_ d k)
-    (let ((e (%py-dfind k (rest d))))
+    (let ((e (%py-dfind k (%py-dict-entries d))))
       (if (null? e)
         (Err raise (lit key) "key not found" ())
         (rest e)))))
@@ -236,10 +233,10 @@
 
 (def %py-dset
   (fn (_ d k v)
-    (let ((e (%py-dfind k (rest d))))
+    (let ((e (%py-dfind k (%py-dict-entries d))))
       (if (null? e)
         ; A new key goes on the END: insertion order is the printed order.
-        (%seq (%set-rest! d (%py-dappend (rest d) (pair k v))) ())
+        (%py-dict-set! d (%py-dappend (%py-dict-entries d) (pair k v)))
         (%seq (%set-rest! e v) ())))))
 
 (def %py-dkeys (fn (self entries) (if (null? entries) () (pair (first (first entries)) (self (rest entries))))))
@@ -247,13 +244,13 @@
 
 (def %py-dict-attr
   (fn (_ d name)
-    (if (Str8 =? name "keys")   (fn (_) (%py-list-new (%py-dkeys (rest d))))
-    (if (Str8 =? name "values") (fn (_) (%py-list-new (%py-dvals (rest d))))
+    (if (Str8 =? name "keys")   (fn (_) (%py-list-new (%py-dkeys (%py-dict-entries d))))
+    (if (Str8 =? name "values") (fn (_) (%py-list-new (%py-dvals (%py-dict-entries d))))
     (if (Str8 =? name "get")
       ; get returns a default instead of raising -- that is the whole reason it
       ; exists next to subscripting.
       (fn (_ k . dflt)
-        (let ((e (%py-dfind k (rest d))))
+        (let ((e (%py-dfind k (%py-dict-entries d))))
           (if (null? e) (if (null? dflt) () (first dflt)) (rest e))))
     (Err raise (lit attribute)
       (Str8 append (Str8 append "'dict' object has no attribute '" name) "'")
@@ -371,7 +368,7 @@
               ; The type's `write` handler renders it, calling back here per element.
               (write v)
               (if (%py-dict? v)
-                (%seq (display "{") (%seq (%py-write-entries (rest v)) (display "}")))
+                (write v)
                 (display v)))))))))
 
 ; Close the loop: python/types.x forward-declares %py-repr and its PY-LIST write
@@ -379,16 +376,8 @@
 ; The hook is set HERE because repr is Python's rule, not the container's.
 (set! %py-repr %py-write)
 
-(def %py-write-entries
-  (fn (self entries)
-    (if (null? entries)
-      ()
-      (%seq (%py-write (first (first entries)))
-        (%seq (display ": ")
-          (%seq (%py-write (rest (first entries)))
-            (if (null? (rest entries))
-              ()
-              (%seq (display ", ") (self (rest entries))))))))))
+; and the PY-DICT `call` handler reaches Python's equality the same way.
+(set! %py-dict-get %py-dget)
 
 
 ; display and write differ in exactly ONE way: a string prints BARE at top level
