@@ -1,10 +1,11 @@
 # Python values want x's type system, not tagged pairs
 
-**Status:** the design below was **tried and does not work**. The mechanism is
-real — types, handlers and instances behave as described — but the shape it
-implies, running Python inside a child base, founders on the numeric tower. See
-"Why running in a base does not work" at the end. Left in place because the
-constraint it documents is still true and still decides any future attempt.
+**Status:** **done for lists**, in `python/types.x`. The first attempt at it
+failed and this note recorded that failure as a property of the design; that was
+wrong, and the correction is at the end under "The wrong turn, and what it cost".
+The short version: a lang does not need a base of its own. `make-type` registers
+onto the base it is CALLED in, so Python's types go onto the running base — the
+one that already carries the numeric tower.
 
 ## What is there now
 
@@ -115,44 +116,65 @@ one form with the parser's own %py-seq-of, so it is one eval per PROGRAM, about
 a millisecond. Recorded because the measurement was worth having and the fold is
 the right shape regardless.
 
-## Why running in a base does not work
+## The wrong turn, and what it cost
 
-**A child base has no numeric tower.** Measured:
+The first attempt gave Python a base of its own: `(Base make)`, ~34 names bound
+into it, the folded program evaluated with `Base eval`. It reached **190 of 232**
+specs and stopped dead. Every one of the 42 failures was an expression involving
+a float or a bignum. Measured:
 
     (* 2 1.5)                    child base: 105759989792   ambient: 3.0
     (* 99999999999 99999999999)  child base: 1864711849423024129  (wrapped)
 
-`(Base make)` registers the C built-in types — prim, operative, procedure,
-symbol, list, int, str, char, whitespace, comment. Float, bigint and rational
-are LIBRARY types, loaded into the ambient base by the xenon dialect's
-tower-compiled block. A child base gets none of them, and a float object there
-is read as the integer its pointer happens to be.
+That much is true and worth keeping. `(Base make)` registers the C built-in
+types — prim, operative, procedure, symbol, list, int, str, char, whitespace,
+comment. Float, bigint and rational are LIBRARY types, and a child base gets
+none of them; a float object there is read as the integer its pointer happens to
+be.
 
-Python cannot run without them. Arbitrary-precision `int` and `1 / 2 == 0.5` are
-the reason this bundle declares xenon rather than helium.
+**The wrong part was the conclusion.** This note went on to say the design was
+unreachable, and asked for an engine capability to unblock it:
 
-The attempt got to **190 of 232** specs before this surfaced: every failure was
-an expression involving a float or a bignum. The core forms, the bind list and
-the one-eval-per-program fold all worked. It was the arithmetic underneath them
-that was gone.
+> A way to register a type on the base that is ALREADY RUNNING — something like
+> `(prim-ref 'base 'current)` returning the running base.
 
-Loading the tower into a child base would mean booting a dialect inside it,
-which is a much larger thing than this note describes and may not be reachable
-from lang code at all.
+That capability already existed, under a name I had not looked at. There are
+**two** type-registering prims, not one:
 
-## What would actually unblock it
+| prim | catalog | arity | registers onto |
+|---|---|---|---|
+| `base-make-type` | `base` / `make-type` | target, name, handlers | the base you name |
+| `make-type` | `type` / `make` | name, handlers | **the base it is called in** |
 
-A way to register a type on the base that is ALREADY RUNNING — something like
-`(prim-ref 'base 'current)` returning the running base, so
+I had found the first, used it for the isolated tokenizer base where naming a
+target is exactly what you want, and assumed it was the only door. The claim
+that "the `base` namespace exposes `make-type`, `make-tok`, `make`, `eval` and
+`bind`, and none of them yields the current base" was true and beside the point:
+the answer was not in the `base` namespace at all.
 
-    (Base make-type (Base current) "PY-LIST" (list (pair 'write ...)))
+The cost was one wrong conclusion written down as a finding — the expensive kind
+of mistake, because a note that says "does not work" stops the next attempt
+before it starts. It survived about a day.
 
-becomes possible. Then instances resolve where the program already runs, the
-tower is the ambient one, and none of the base-hopping above is needed.
+**The models were in the library the whole time.** `x/num/rational.x` and
+`x/type/vector.x` are value types registered on the running base with exactly
+this prim. This file follows them down to the handler arity, and the tower they
+depend on is the same one Python now keeps.
 
-That is an engine capability, not something a lang can work around: the `base`
-namespace exposes `make-type`, `make-tok`, `make`, `eval` and `bind`, and none
-of them yields the current base.
+## Two things that bite, both learned the hard way
+
+**Handler arity is `(fn (_ self) ...)`.** The first parameter is the TYPE, the
+second the instance. Writing `(fn (self) ...)` binds the type to `self`, and
+`(first <a type>)` is a read of a non-pair — x-engine-c#16, a segfault rather
+than an error.
+
+**The %-globals share one flat namespace across the bundle's modules.** Naming
+the element accessor `%py-elems` collided with `parse.x`'s list-literal element
+parser of the same name, and 47 specs failed with a *syntax* error from a change
+that touched only the runtime. It is the second collision of this kind here; the
+first was `%py-len`, defined once as a parser helper and once as Python's
+`len`, which made `len('hello')` answer 119. Grep the bundle for a name before
+defining it.
 
 ## Why not sooner
 

@@ -26,6 +26,8 @@
 ; Python rule can be stated. Today most of them are thin; that is the point --
 ; they are named seams, not indirection for its own sake.
 
+(import python/types)
+
 (provide python/runtime
   %py-add %py-sub %py-mul %py-div %py-floordiv %py-mod %py-pow %py-neg
   %py-eq %py-ne %py-lt %py-gt %py-le %py-ge
@@ -84,19 +86,16 @@
 ; values, and a bare x list would make both of them nil -- so `print([])` would
 ; print None.  A list is (py-list . elements): the tag distinguishes it from
 ; every other value this runtime produces, and from nil.
-(def %py-list-tag (lit py-list))
+(def %py-mklist (fn (_ . elems) (%py-list-new elems)))
 
-(def %py-mklist (fn (_ . elems) (pair %py-list-tag elems)))
-
-(def %py-list?
-  (fn (_ v) (if (pair? v) (eq? (first v) %py-list-tag) #f)))
+(def %py-list? (fn (_ v) (%py-list-is v)))
 
 (def %py-len
   (fn (_ v)
     (if (%py-dict? v)
       (List length (rest v))
     (if (%py-list? v)
-      (List length (rest v))
+      (List length (%py-list-elems v))
       (if (str? v)
         (Str8 length v)
         (Err raise (lit type) "object of this type has no len()" ()))))))
@@ -119,11 +118,11 @@
       (%py-dget v i)
     (if (not (%py-list? v))
       (Err raise (lit type) "object is not subscriptable" ())
-      (let ((n (List length (rest v))))
+      (let ((n (List length (%py-list-elems v))))
         (let ((k (if (< i 0) (+ n i) i)))
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "list index out of range" ())
-            (List ref k (rest v))))))))))
+            (List ref k (%py-list-elems v))))))))))
 
 ; Store into a list at an index.  Rebuilds the element list and hangs it back on
 ; the SAME tag pair, so every reference sees the store -- the identity argument
@@ -140,11 +139,11 @@
       (%py-dset obj i v)
     (if (not (%py-list? obj))
       (Err raise (lit type) "object does not support item assignment" ())
-      (let ((n (List length (rest obj))))
+      (let ((n (List length (%py-list-elems obj))))
         (let ((k (if (< i 0) (+ n i) i)))
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "list assignment index out of range" ())
-            (%seq (%set-rest! obj (%py-set-nth (rest obj) k v)) ()))))))))
+            (%py-list-set! obj (%py-set-nth (%py-list-elems obj) k v)))))))))
 
 ; The escape continuation a `return` invokes.  Fetched rather than assumed
 ; global, the way every other prim in this bundle is reached.
@@ -165,7 +164,7 @@
     (if (%py-dict? v)
       (%py-dkeys (rest v))
     (if (%py-list? v)
-      (rest v)
+      (%py-list-elems v)
       (if (str? v)
         (%py-str-chars v 0 (Str8 length v))
         (Err raise (lit type) "object is not iterable" ()))))))
@@ -197,7 +196,7 @@
                        (first (rest (rest args)))))))
         (if (= step 0)
           (Err raise (lit value) "range() arg 3 must not be zero" ())
-          (pair %py-list-tag (%py-range-build start stop step ())))))))
+          (%py-list-new (%py-range-build start stop step ())))))))
 
 ; --- Dicts -------------------------------------------------------------------
 ;
@@ -249,8 +248,8 @@
 
 (def %py-dict-attr
   (fn (_ d name)
-    (if (Str8 =? name "keys")   (fn (_) (pair %py-list-tag (%py-dkeys (rest d))))
-    (if (Str8 =? name "values") (fn (_) (pair %py-list-tag (%py-dvals (rest d))))
+    (if (Str8 =? name "keys")   (fn (_) (%py-list-new (%py-dkeys (rest d))))
+    (if (Str8 =? name "values") (fn (_) (%py-list-new (%py-dvals (rest d))))
     (if (Str8 =? name "get")
       ; get returns a default instead of raising -- that is the whole reason it
       ; exists next to subscripting.
@@ -282,14 +281,14 @@
   (fn (_ obj name)
     (if (%py-list? obj)
       (if (Str8 =? name "append")
-        (fn (_ v) (%seq (%set-rest! obj (%py-append-elem (rest obj) v)) ()))
+        (fn (_ v) (%py-list-set! obj (%py-append-elem (%py-list-elems obj) v)))
         (if (Str8 =? name "pop")
           (fn (_ . a)
-            (let ((n (List length (rest obj))))
+            (let ((n (List length (%py-list-elems obj))))
               (if (= n 0)
                 (Err raise (lit index) "pop from empty list" ())
-                (let ((v (List ref (- n 1) (rest obj))))
-                  (%seq (%set-rest! obj (%py-drop-last (rest obj))) v)))))
+                (let ((v (List ref (- n 1) (%py-list-elems obj))))
+                  (%seq (%py-list-set! obj (%py-drop-last (%py-list-elems obj))) v)))))
           (Err raise (lit attribute)
             (Str8 append (Str8 append "'list' object has no attribute '" name) "'")
             ())))
@@ -316,14 +315,13 @@
     (if (Str8 =? name "split")
       ; Python's split returns a LIST, so the result is tagged on the way out.
       (fn (_ . a)
-        (pair %py-list-tag
-          (Str8 split (if (null? a) " " (first a)) s)))
+        (%py-list-new (Str8 split (if (null? a) " " (first a)) s)))
     (if (Str8 =? name "join")
       ; and join takes one, so it is untagged on the way in.
       (fn (_ lst)
         (if (not (%py-list? lst))
           (Err raise (lit type) "can only join an iterable of str" ())
-          (Str8 join s (rest lst))))
+          (Str8 join s (%py-list-elems lst))))
     (if (Str8 =? name "replace")
       (fn (_ old new) (Str8 replace old new s))
     (if (Str8 =? name "startswith") (fn (_ p) (Str8 starts? p s))
@@ -371,10 +369,16 @@
           (if (null? v)
             (display "None")
             (if (%py-list? v)
-              (%seq (display "[") (%seq (%py-write-elems (rest v)) (display "]")))
+              ; The type's `write` handler renders it, calling back here per element.
+              (write v)
               (if (%py-dict? v)
                 (%seq (display "{") (%seq (%py-write-entries (rest v)) (display "}")))
                 (display v)))))))))
+
+; Close the loop: python/types.x forward-declares %py-repr and its PY-LIST write
+; handler calls it per element, so that a string inside a list shows its quotes.
+; The hook is set HERE because repr is Python's rule, not the container's.
+(set! %py-repr %py-write)
 
 (def %py-write-entries
   (fn (self entries)
@@ -387,14 +391,6 @@
               ()
               (%seq (display ", ") (self (rest entries))))))))))
 
-(def %py-write-elems
-  (fn (self elems)
-    (if (null? elems)
-      ()
-      (%seq (%py-write (first elems))
-        (if (null? (rest elems))
-          ()
-          (%seq (display ", ") (self (rest elems))))))))
 
 ; display and write differ in exactly ONE way: a string prints BARE at top level
 ; and quoted inside a container. Everything else -- True/False/None, lists,
