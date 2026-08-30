@@ -118,11 +118,10 @@
       (%py-dget v i)
     (if (not (%py-list? v))
       (Err raise (lit type) "object is not subscriptable" ())
-      (let ((n (List length (%py-list-elems v))))
-        (let ((k (if (< i 0) (+ n i) i)))
-          (if (if (< k 0) #t (>= k n))
-            (Err raise (lit index) "list index out of range" ())
-            (List ref k (%py-list-elems v))))))))))
+      ; SUBSCRIPTING A LIST IS A CALL.  x dispatches `(v i)` through the type's
+      ; `call` handler, so negative indices and IndexError are stated once in
+      ; python/types.x rather than copied here.
+      (v i))))))
 
 ; Store into a list at an index.  Rebuilds the element list and hangs it back on
 ; the SAME tag pair, so every reference sees the store -- the identity argument
