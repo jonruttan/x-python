@@ -271,29 +271,210 @@
 (def python-parse-expr (fn (_ toks) (%py-comparison toks)))
 
 ; --- Statements --------------------------------------------------------------
-; One slice only: an expression statement, and assignment. Blocks come with the
-; suite that needs them.
+;
+; A Python statement is not an expression, and the shapes it compiles to say so:
+;
+;   x = e            (def x e)
+;   if c: B          (if c B ())
+;   if c: B else: C  (if c B C)
+;   while c: B       ((fn (self) (if c (%seq B (self)) ())))
+;   def f(a): B      (def f (fn (_ a) B))
+;
+; WHILE IS RECURSION, because x has no loop construct -- `if`, `let`, `when`,
+; `unless`, `cond` and `case` are the whole of the control vocabulary.  The
+; self-call sits in TAIL position, so x's TCO makes it a loop rather than a
+; stack that grows with the iteration count.  Written any other way it would
+; blow the stack on the first program that counts to a thousand, and x has no
+; depth limit on non-tail calls to catch it (x-lang#56).
+
+; A body is a chain of %seq, because %seq takes two.  One statement is itself.
+(def %py-seq-of
+  (fn (self forms)
+    (if (null? forms)
+      ()
+      (if (null? (rest forms))
+        (first forms)
+        (list (lit %seq) (first forms) (self (rest forms)))))))
+
+(def %py-skip-nl
+  (fn (self toks)
+    (if (null? toks)
+      toks
+      (if (eq? (%py-tag (first toks)) (lit tok-newline))
+        (self (rest toks))
+        toks))))
+
+(def %py-stmts ())
+(def %py-stmt ())
+
+; `: NEWLINE INDENT stmts DEDENT` -- the suite after a compound header.
+(def %py-block
+  (fn (_ toks)
+    (if (not (%py-op-is? (if (null? toks) () (first toks)) ":"))
+      (Err raise (lit syntax) "expected : after a compound statement header" ())
+      (let ((t (%py-skip-nl (rest toks))))
+        (if (not (eq? (%py-tag (if (null? t) () (first t))) (lit tok-indent)))
+          (Err raise (lit syntax) "expected an indented block" ())
+          (let ((r (%py-stmts (rest t) ())))
+            (pair (%py-seq-of (first r)) (rest r))))))))
+
+; Statements until DEDENT (which is consumed) or end of input.
+(set! %py-stmts
+  (fn (self toks acc)
+    (let ((t (%py-skip-nl toks)))
+      (if (null? t)
+        (pair (List reverse acc) t)
+        (if (eq? (%py-tag (first t)) (lit tok-dedent))
+          (pair (List reverse acc) (rest t))
+          (let ((r (%py-stmt t)))
+            (self (rest r) (pair (first r) acc))))))))
+
+(set! %py-stmt
+  (fn (_ toks)
+    (let ((t (first toks)))
+      ; if / while / def are decided by the leading NAME.  They are keywords to
+      ; the parser and plain names to the tokenizer, which is where that
+      ; distinction belongs.
+      (if (%py-name-is? t "if")
+        (let ((c (%py-comparison (rest toks))))
+          (let ((b (%py-block (rest c))))
+            (let ((e (%py-else (rest b))))
+              (pair (list (lit if) (first c) (first b) (first e)) (rest e)))))
+        (if (%py-name-is? t "while")
+          (let ((c (%py-comparison (rest toks))))
+            (let ((b (%py-block (rest c))))
+              (pair
+                (list
+                  (list (lit fn) (list (lit self))
+                    (list (lit if) (first c)
+                      (list (lit %seq) (first b) (list (lit self)))
+                      ())))
+                (rest b))))
+          (if (%py-name-is? t "def")
+            (%py-def (rest toks))
+            (if (%py-name-is? t "return")
+              ; RETURN IS THE BODY'S VALUE, and only correct in tail position:
+              ; x returns a body's last expression, so a `return` anywhere else
+              ; computes and discards.  Early return wants an escape
+              ; continuation and is not here yet.
+              (let ((r (%py-comparison (rest toks))))
+                (pair (first r) (rest r)))
+              (if (%py-name-is? t "pass")
+                (pair () (rest toks))
+                ; NAME '=' expr, decided by looking one token ahead.  Only a
+                ; bare name is a target; subscripts and attributes are
+                ; assignable in Python and are not yet.
+                (if (if (eq? (%py-tag t) (lit tok-name))
+                      (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "=")
+                      #f)
+                  ; set!, NOT def -- see the hoisting note on python-parse.
+                  (let ((r (%py-comparison (rest (rest toks)))))
+                    (pair (list (lit set!) (%py-name->sym (%py-val t)) (first r))
+                      (rest r)))
+                  (%py-comparison toks))))))))))
+
+; `else:` after an if.  `elif` is `else: if ...`, which is what Python's own
+; grammar says it is, so it needs no separate shape.
+(def %py-else
+  (fn (_ toks)
+    (let ((t (%py-skip-nl toks)))
+      (if (null? t)
+        (pair () t)
+        (if (%py-name-is? (first t) "else")
+          (let ((b (%py-block (rest t))))
+            (pair (first b) (rest b)))
+          (if (%py-name-is? (first t) "elif")
+            (let ((c (%py-comparison (rest t))))
+              (let ((b (%py-block (rest c))))
+                (let ((e (%py-else (rest b))))
+                  (pair (list (lit if) (first c) (first b) (first e)) (rest e)))))
+            (pair () t)))))))
+
+; `def NAME ( params ) : BLOCK`
+(def %py-params
+  (fn (self toks acc)
+    (if (%py-op-is? (if (null? toks) () (first toks)) ")")
+      (pair (List reverse acc) (rest toks))
+      (let ((t (first toks)))
+        (if (eq? (%py-tag t) (lit tok-name))
+          (let ((more (rest toks)))
+            (if (%py-op-is? (if (null? more) () (first more)) ",")
+              (self (rest more) (pair (%py-name->sym (%py-val t)) acc))
+              (self more (pair (%py-name->sym (%py-val t)) acc))))
+          (Err raise (lit syntax) "expected a parameter name" t))))))
+
+(def %py-def
+  (fn (_ toks)
+    (let ((name (first toks)))
+      (if (not (eq? (%py-tag name) (lit tok-name)))
+        (Err raise (lit syntax) "expected a function name after def" name)
+        (if (not (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "("))
+          (Err raise (lit syntax) "expected ( after a function name" ())
+          (let ((p (%py-params (rest (rest toks)) ())))
+            (let ((b (%py-block (rest p))))
+              (pair
+                (list (lit def) (%py-name->sym (%py-val name))
+                  (list (lit fn) (pair (lit _) (first p)) (first b)))
+                (rest b)))))))))
+
+; ASSIGNMENT IS set!, AND EVERY TARGET IS HOISTED TO A def FIRST.
+;
+; x's `def` decides global-versus-local by save-stack depth, so a `def` inside
+; the function a while-loop compiles to would bind a fresh LOCAL every
+; iteration. `i = i + 1` in a loop body would then never advance the outer `i`
+; and the loop would never terminate -- an infinite loop with no depth limit
+; behind it (x-lang#56), which on this platform means an OOM rather than a
+; stack overflow.
+;
+; So: scan the token stream for assignment targets, emit `(def name ())` for
+; each before the body, and compile every assignment to `set!`. That also
+; matches Python's module semantics more closely than per-statement `def` does
+; -- a name assigned anywhere in a module scope is that scope's name throughout.
+;
+; Function-local scoping is NOT modelled yet: a `def` body's assignments hoist
+; to the same module scope. That is wrong for Python and is the next thing this
+; wants, but it is wrong in a way that produces a visible name clash rather
+; than a loop that never ends.
+(def %py-assign-targets
+  (fn (self toks acc)
+    (if (null? toks)
+      (List reverse acc)
+      (let ((t (first toks)))
+        (if (if (eq? (%py-tag t) (lit tok-name))
+              (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "=")
+              #f)
+          (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
+          (self (rest toks) acc))))))
+
+; Hand-rolled rather than reaching for List: `member?` is not a static there,
+; and a wrong method name fails at RUN time in a form this file generates,
+; which is a long way from where it would be read.
+(def %py-seen?
+  (fn (self x lst)
+    (if (null? lst) #f
+      (if (eq? x (first lst)) #t (self x (rest lst))))))
+
+(def %py-dedupe
+  (fn (self seen syms acc)
+    (if (null? syms)
+      (List reverse acc)
+      (if (%py-seen? (first syms) seen)
+        (self seen (rest syms) acc)
+        (self (pair (first syms) seen) (rest syms) (pair (first syms) acc))))))
+
 (def python-parse
   (fn (_ src)
-    (def %go
-      (fn (self toks acc)
-        (if (null? toks)
-          (List reverse acc)
-          (let ((t (first toks)))
-            ; NEWLINE, INDENT and DEDENT between statements are not errors --
-            ; they are the structure this slice does not use yet.
-            (if (eq? (%py-tag t) (lit tok-newline)) (self (rest toks) acc)
-              (if (eq? (%py-tag t) (lit tok-indent)) (self (rest toks) acc)
-                (if (eq? (%py-tag t) (lit tok-dedent)) (self (rest toks) acc)
-                  ; NAME '=' expr, decided by looking one token ahead.  Only a
-                  ; bare name is a target here; subscripts and attributes are
-                  ; assignable in Python and are not yet.
-                  (if (if (eq? (%py-tag t) (lit tok-name))
-                        (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "=")
-                        #f)
-                    (let ((r (%py-comparison (rest (rest toks)))))
-                      (self (rest r)
-                        (pair (list (lit def) (%py-name->sym (%py-val t)) (first r)) acc)))
-                    (let ((r (%py-comparison toks)))
-                      (self (rest r) (pair (first r) acc)))))))))))
-    (%go (python-lex src) ())))
+    (def %toks (python-lex src))
+    (def %targets (%py-dedupe () (%py-assign-targets %toks ()) ()))
+    (def %body (first (%py-stmts %toks ())))
+    (%py-append (%py-decls %targets ()) %body)))
+
+(def %py-decls
+  (fn (self syms acc)
+    (if (null? syms)
+      (List reverse acc)
+      (self (rest syms) (pair (list (lit def) (first syms) ()) acc)))))
+
+(def %py-append
+  (fn (self a b)
+    (if (null? a) b (pair (first a) (self (rest a) b)))))

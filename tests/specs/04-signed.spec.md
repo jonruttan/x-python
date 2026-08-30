@@ -99,8 +99,8 @@ Pending: no subscript support in the parser yet.
 
 ### a negative argument to a user function
 
-Pending: no `def` yet.
-
 ```python
 (python-run "def f(x):\n    return x\nprint(f(-1))")
 ```
+---
+    -1
