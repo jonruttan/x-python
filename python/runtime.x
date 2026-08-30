@@ -30,7 +30,8 @@
   %py-add %py-sub %py-mul %py-div %py-floordiv %py-mod %py-pow %py-neg
   %py-eq %py-ne %py-lt %py-gt %py-le %py-ge
   %py-print %py-display
-  %py-mklist %py-index %py-len %py-list? %py-write %py-getattr %py-setindex)
+  %py-mklist %py-index %py-len %py-list? %py-write %py-getattr %py-setindex
+  %py-range %py-iter-elems)
 
 ; --- Arithmetic --------------------------------------------------------------
 ; `+` dispatches on the operands, and the string case is not an extra: Python
@@ -129,6 +130,52 @@
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "list assignment index out of range" ())
             (%seq (%set-rest! obj (%py-set-nth (rest obj) k v)) ())))))))
+
+; --- Iteration ---------------------------------------------------------------
+;
+; The elements a `for` walks.  A list gives its own; a string gives its
+; characters, because Python iterates a string by character and several
+; conformance programs depend on it.
+(def %py-str-chars
+  (fn (self v i n)
+    (if (>= i n) () (pair (Str8 sub i 1 v) (self v (+ i 1) n)))))
+
+(def %py-iter-elems
+  (fn (_ v)
+    (if (%py-list? v)
+      (rest v)
+      (if (str? v)
+        (%py-str-chars v 0 (Str8 length v))
+        (Err raise (lit type) "object is not iterable" ())))))
+
+; range(stop) / range(start, stop) / range(start, stop, step)
+;
+; EAGER, and that is a simplification with a known cost: Python 3's range is
+; lazy, so `range(10000000)` is free there and a ten-million element list here.
+; Every conformance program that uses range walks all of it, so the difference
+; is memory rather than answers -- but it is a difference, and it is written
+; down rather than discovered.
+;
+; A zero step raises rather than looping forever.  There is no depth limit on
+; non-tail calls here (x-lang#56), so an unbounded loop is an OOM.
+(def %py-range-build
+  (fn (self i stop step acc)
+    (if (if (> step 0) (>= i stop) (<= i stop))
+      (List reverse acc)
+      (self (+ i step) stop step (pair i acc)))))
+
+(def %py-range
+  (fn (_ . args)
+    (if (null? args)
+      (Err raise (lit type) "range expected at least 1 argument" ())
+      (let ((start (if (null? (rest args)) 0 (first args)))
+            (stop  (if (null? (rest args)) (first args) (first (rest args))))
+            (step  (if (null? (rest args)) 1
+                     (if (null? (rest (rest args))) 1
+                       (first (rest (rest args)))))))
+        (if (= step 0)
+          (Err raise (lit value) "range() arg 3 must not be zero" ())
+          (pair %py-list-tag (%py-range-build start stop step ())))))))
 
 ; --- Attributes and methods --------------------------------------------------
 ;

@@ -298,7 +298,8 @@
         (list "True"  #t)
         (list "False" #f)
         (list "None"  ())
-        (list "len"   (lit %py-len))))
+        (list "len"   (lit %py-len))
+        (list "range" (lit %py-range))))
 
 ; PYTHON'S NAMESPACE IS NOT x's, AND KEEPING THEM APART IS NOT TIDINESS.
 ;
@@ -402,6 +403,8 @@
           (let ((b (%py-block (rest c))))
             (let ((e (%py-else (rest b))))
               (pair (list (lit if) (first c) (first b) (first e)) (rest e)))))
+        (if (%py-name-is? t "for")
+          (%py-for (rest toks))
         (if (%py-name-is? t "while")
           (let ((c (%py-comparison (rest toks))))
             (let ((b (%py-block (rest c))))
@@ -446,13 +449,42 @@
                             (pair
                               (%py-store (first tgt)
                                 (list aug (first tgt) (first r)))
-                              (rest r))))))))))))))))
+                              (rest r)))))))))))))))))
 
 ; `else:` after an if.  `elif` is `else: if ...`, which is what Python's own
 ; grammar says it is, so it needs no separate shape.
 ; A store depends on the target's SHAPE: a name is a set!, a subscript is an
 ; item assignment. Anything else is not assignable, and saying so here is better
 ; than emitting a form that fails obscurely at run time.
+; `for NAME in ITER: BODY` walks the iterable's elements, binding NAME each
+; time. Recursion in tail position, the same shape `while` uses and for the same
+; reason: there is no loop construct, and a non-tail call has no depth limit
+; behind it.
+;
+; The item variable is a plain assignment, so it lives in whatever scope the
+; hoist put it in -- which is Python's rule too: a for target outlives its loop.
+(def %py-for
+  (fn (_ toks)
+    (let ((v (if (null? toks) () (first toks))))
+      (if (not (eq? (%py-tag v) (lit tok-name)))
+        (Err raise (lit syntax) "expected a name after for" ())
+        (if (not (%py-name-is? (if (null? (rest toks)) () (first (rest toks))) "in"))
+          (Err raise (lit syntax) "expected in after a for target" ())
+          (let ((it (%py-comparison (rest (rest toks)))))
+            (let ((b (%py-block (rest it))))
+              (pair
+                (list
+                  (list (lit fn) (list (lit self) (lit %py-items))
+                    (list (lit if) (list (lit null?) (lit %py-items))
+                      ()
+                      (list (lit %seq)
+                        (list (lit set!) (%py-name->sym (%py-val v))
+                          (list (lit first) (lit %py-items)))
+                        (list (lit %seq) (first b)
+                          (list (lit self) (list (lit rest) (lit %py-items)))))))
+                  (list (lit %py-iter-elems) (first it)))
+                (rest b)))))))))
+
 (def %py-store
   (fn (_ target value)
     (if (pair? target)
@@ -609,6 +641,8 @@
     (if (null? toks)
       (List reverse acc)
       (let ((t (first toks)))
+        (if (%py-for-target? toks)
+          (self (rest (rest toks)) (pair (%py-val (first (rest toks))) acc))
         (if (%py-name-is? t "def")
           ; the def name, then its parameters up to the closing paren
           (let ((n (if (null? (rest toks)) () (first (rest toks)))))
@@ -618,20 +652,31 @@
                 (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
             (self (rest toks) (pair (%py-val t) acc))
-            (self (rest toks) acc)))))))
+            (self (rest toks) acc))))))))
 
 (def %py-assign-targets
   (fn (self toks acc)
     (if (null? toks)
       (List reverse acc)
       (let ((t (first toks)))
+        (if (%py-for-target? toks)
+          (self (rest (rest toks))
+            (pair (%py-name->sym (%py-val (first (rest toks)))) acc))
         (if (%py-name-is? t "def")
           (self (%py-skip-def (rest toks) 0) acc)
           (if (if (eq? (%py-tag t) (lit tok-name))
                 (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
             (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
-            (self (rest toks) acc)))))))
+            (self (rest toks) acc))))))))
+
+; A `for` target binds its name as surely as an assignment does.
+(def %py-for-target?
+  (fn (_ toks)
+    (if (%py-name-is? (if (null? toks) () (first toks)) "for")
+      (if (eq? (%py-tag (if (null? (rest toks)) () (first (rest toks)))) (lit tok-name))
+        #t #f)
+      #f)))
 
 ; `=` or any augmented form: all of them bind the name.
 (def %py-assign-op?
