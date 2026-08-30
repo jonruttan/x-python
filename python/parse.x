@@ -179,6 +179,24 @@
 ; Python binds a unary minus tighter on the right of ** than on the left.
 (set! %py-power
   (fn (_ toks)
+    (def %head (if (null? toks) () (first toks)))
+    ; `-2 ** 2` IS `-(2 ** 2)`, which is -4, not `(-2) ** 2` = 4.  Unary minus
+    ; binds LOOSER than **, and the tokenizer has already glued the sign to the
+    ; literal -- so a signed literal standing in front of ** has to give its
+    ; sign back before the power is taken.  Getting this wrong produces a
+    ; different number rather than an error, which is the whole hazard of
+    ; claiming signed literals in the tokenizer.
+    (if (if (%py-signed? %head)
+          (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "**")
+          #f)
+      (let ((r (%py-power (pair (%py-signed-num %head) (rest toks)))))
+        (if (= (%py-char->int (Str8 ref 0 (%py-val %head))) 45)
+          (pair (list (lit %py-neg) (first r)) (rest r))
+          r))
+      (%py-power-tail toks))))
+
+(def %py-power-tail
+  (fn (_ toks)
     (def %base (%py-postfix toks))
     (if (%py-op-is? (if (null? (rest %base)) () (first (rest %base))) "**")
       (let ((r (%py-unary (rest (rest %base)))))

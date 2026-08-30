@@ -53,7 +53,18 @@
 
 (def %py-floordiv (fn (_ a b) (Num quotient a b)))
 (def %py-mod (fn (_ a b) (Num modulo a b)))
-(def %py-pow (fn (_ a b) (Num expt a b)))
+; NEVER HAND Num expt A NEGATIVE EXPONENT.  Its parameter is documented
+; "Non-negative integer exponent" and nothing enforces it: with exp < 0 the
+; recursion never reaches 0 and SQUARES THE BASE on every even step, so it
+; allocates exponentially growing bignums until the machine dies.  Not a hang --
+; an unbounded-allocation bomb, and `2 ** -1` is ordinary Python.
+;
+; Python's answer is a float: 2 ** -1 is 0.5.
+(def %py-pow
+  (fn (_ a b)
+    (if (< b 0)
+      (/ 1.0 (Num expt a (- 0 b)))
+      (Num expt a b))))
 (def %py-neg (fn (_ a) (- 0 a)))
 
 ; --- Comparison --------------------------------------------------------------
