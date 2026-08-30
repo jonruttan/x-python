@@ -37,7 +37,22 @@ LOG="${TMPDIR:-/tmp}/x-python-score.$$"
 trap 'rm -f "$LOG"' EXIT INT TERM
 
 set +e
-X="${X:-x}" SPEC_PATH="$CONF" PARALLEL="${PARALLEL:-1}" \
+# SERIAL BY DEFAULT, AND THIS ONE CRASHED A MACHINE.
+#
+# This forced PARALLEL=1.  The suite is 112 spec files, each booting a FULL
+# XENON TOWER, and the platform runner defaults PARALLEL_JOBS to the CPU count
+# -- twelve towers resident at once on this box.  The shared runner's own header
+# says why that is not survivable: "a per-process guard cannot fix memory
+# exhaustion from many heavy specs loading in PARALLEL; for that lower
+# PARALLEL_JOBS."  The alloc ceiling bounds ONE interpreter, not twelve.
+#
+# The same mistake was diagnosed and removed from tools/check/langs.sh earlier
+# the same day, where it merely made r7rs flaky because that gate runs six
+# bundles.  Here it runs a hundred and twelve, and the failure mode is not a
+# flaky number.
+#
+# Export PARALLEL yourself if you want it, and lower PARALLEL_JOBS with it.
+X="${X:-x}" SPEC_PATH="$CONF" \
 	sh "$BUNDLE/tests/spec-runner.sh" > "$LOG" 2>&1
 STATUS=$?
 set -e

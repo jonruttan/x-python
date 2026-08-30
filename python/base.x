@@ -45,7 +45,12 @@
 ; scoreboard that starts above zero for that reason is lying about the port
 ; before it has begun.
 
-(provide python/base python-version python-run %python-repl-print)
+(import python/tokens)
+(import python/indent)
+(import python/runtime)
+(import python/parse)
+
+(provide python/base python-version python-run python-tokenize python-lex python-parse python-parse-expr %python-repl-print)
 
 (def python-version "0.0.1")
 
@@ -60,13 +65,20 @@
 ; stdout itself, so the REPL printer below has nothing to say about a program
 ; that ran.  An expression typed at the prompt is a different question and gets
 ; answered when there is an evaluator to answer it with.
+; (python-run SRC) -- run a Python program held in a string.
+;
+; Lex, parse, evaluate. Returns nil: a Python statement has no value to show and
+; `print` writes to stdout itself, so the REPL printer has nothing to say about
+; a program that ran.
 (def python-run
   (fn (_ src)
-    (%seq (display %python-not-implemented) (%seq (newline) ()))))
+    (def %go
+      (fn (self forms)
+        (if (null? forms)
+          ()
+          (%seq (eval! (first forms)) (self (rest forms))))))
+    (%go (python-parse src))))
 
-; Python shows `None` as nothing at the prompt and everything else with repr().
-; Until there are values, the printer's whole job is to stay out of the way --
-; python-run has already written what there was to write.
 (def %python-repl-print
   (fn (_ result)
     (unless (null? result) (%seq (write result) (newline)))))
