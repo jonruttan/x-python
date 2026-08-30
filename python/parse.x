@@ -58,9 +58,19 @@
 
 (def %py-char->int (prim-ref (lit char) (lit ->int)))
 
+; A FLOAT LITERAL CANNOT BE READ IN %py-sexp-base.  That base is a `(Base make)`
+; child, and float is a LIBRARY type registered on whichever base loaded it -- a
+; child base has none of the tower.  The int type there then accepts the "1"
+; prefix of "1.5" and the fraction is dropped SILENTLY: `print(2 * 1.5)` answered
+; 2.  `Float from` reads it in the ambient base, which has the tower.
+;
+; This is the same constraint that decided python/types.x, in a smaller place:
+; work in the base that already has what you need.
 (def %py-num
   (fn (_ text)
-    (first (%py-read-str (Base raw-of %py-sexp-base) (Str8 append text " ")))))
+    (if (null? (Str8 index-of "." text))
+      (first (%py-read-str (Base raw-of %py-sexp-base) (Str8 append text " ")))
+      (Float from text))))
 
 ; --- Token helpers -----------------------------------------------------------
 ; Guarded for the same reason as python/indent.x's %py-tok-type: (first 2)

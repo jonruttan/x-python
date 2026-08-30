@@ -222,3 +222,83 @@ b
 ```python
 (python-run "counts = {}\nfor c in 'abca':\n    if c in counts:\n        counts[c] += 1\n    else:\n        counts[c] = 1\nprint(counts)")
 ```
+
+## nesting
+
+Both containers are now x types, and each one's `write` handler renders its
+elements by calling back into Python's repr — which is the thing that decides
+whether a string shows its quotes. Nesting is where that call-back is actually
+exercised in both directions, so it is worth stating rather than assuming.
+
+### a list inside a dict
+
+```python
+(python-run "print({'a': [1, 2]})")
+```
+---
+    {'a': [1, 2]}
+
+### dicts inside a list
+
+```python
+(python-run "print([{'a': 1}, {'b': 2}])")
+```
+---
+    [{'a': 1}, {'b': 2}]
+
+### a dict inside a dict
+
+```python
+(python-run "print({'outer': {'inner': 'v'}})")
+```
+---
+    {'outer': {'inner': 'v'}}
+
+### an empty dict is not None
+
+The reason neither container is a bare x list: nil is None here, so an empty one
+had to be distinguishable from it. A type is distinguishable by construction.
+
+```python
+(python-run "print({})\nprint([])\nprint(None)")
+```
+---
+```output
+{}
+[]
+None
+```
+
+## dict subscripting through the type
+
+### subscripting reaches the call handler
+
+```python
+(python-run "print({'a': 1}['a'])")
+```
+---
+    1
+
+### an integer key
+
+```python
+(python-run "print({1: 'x'}[1])")
+```
+---
+    x
+
+### a missing key still raises
+
+```python
+(python-run "print({'a': 1}['b'])")
+```
+---
+    Error: #<err:key key not found>
+
+### len of a dict
+
+```python
+(python-run "d = {'a': 1, 'b': 2}\nprint(len(d))")
+```
+---
+    2

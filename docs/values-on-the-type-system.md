@@ -1,7 +1,11 @@
 # Python values want x's type system, not tagged pairs
 
-**Status:** designed and proved, not built. The mechanism below was verified
-probe by probe against x-engine-c v0.1.3; nothing here is inferred.
+**Status:** **done for lists**, in `python/types.x`. The first attempt at it
+failed and this note recorded that failure as a property of the design; that was
+wrong, and the correction is at the end under "The wrong turn, and what it cost".
+The short version: a lang does not need a base of its own. `make-type` registers
+onto the base it is CALLED in, so Python's types go onto the running base — the
+one that already carries the numeric tower.
 
 ## What is there now
 
@@ -106,9 +110,71 @@ name missed is an error at run time, in generated code, which is a long way from
 where it would be read. The bind list is load-bearing and wants a spec of its
 own asserting each name resolves.
 
-`Base eval` per statement is heavier than `eval!`. Not measured. Worth measuring
-before committing, because the suite is 232 cases and a per-statement cost shows
-up there first.
+`Base eval` per statement is heavier than `eval!` -- measured at ~1.0 ms against
+~0.027 ms, about 38x. That turned out not to matter: the statements fold into
+one form with the parser's own %py-seq-of, so it is one eval per PROGRAM, about
+a millisecond. Recorded because the measurement was worth having and the fold is
+the right shape regardless.
+
+## The wrong turn, and what it cost
+
+The first attempt gave Python a base of its own: `(Base make)`, ~34 names bound
+into it, the folded program evaluated with `Base eval`. It reached **190 of 232**
+specs and stopped dead. Every one of the 42 failures was an expression involving
+a float or a bignum. Measured:
+
+    (* 2 1.5)                    child base: 105759989792   ambient: 3.0
+    (* 99999999999 99999999999)  child base: 1864711849423024129  (wrapped)
+
+That much is true and worth keeping. `(Base make)` registers the C built-in
+types — prim, operative, procedure, symbol, list, int, str, char, whitespace,
+comment. Float, bigint and rational are LIBRARY types, and a child base gets
+none of them; a float object there is read as the integer its pointer happens to
+be.
+
+**The wrong part was the conclusion.** This note went on to say the design was
+unreachable, and asked for an engine capability to unblock it:
+
+> A way to register a type on the base that is ALREADY RUNNING — something like
+> `(prim-ref 'base 'current)` returning the running base.
+
+That capability already existed, under a name I had not looked at. There are
+**two** type-registering prims, not one:
+
+| prim | catalog | arity | registers onto |
+|---|---|---|---|
+| `base-make-type` | `base` / `make-type` | target, name, handlers | the base you name |
+| `make-type` | `type` / `make` | name, handlers | **the base it is called in** |
+
+I had found the first, used it for the isolated tokenizer base where naming a
+target is exactly what you want, and assumed it was the only door. The claim
+that "the `base` namespace exposes `make-type`, `make-tok`, `make`, `eval` and
+`bind`, and none of them yields the current base" was true and beside the point:
+the answer was not in the `base` namespace at all.
+
+The cost was one wrong conclusion written down as a finding — the expensive kind
+of mistake, because a note that says "does not work" stops the next attempt
+before it starts. It survived about a day.
+
+**The models were in the library the whole time.** `x/num/rational.x` and
+`x/type/vector.x` are value types registered on the running base with exactly
+this prim. This file follows them down to the handler arity, and the tower they
+depend on is the same one Python now keeps.
+
+## Two things that bite, both learned the hard way
+
+**Handler arity is `(fn (_ self) ...)`.** The first parameter is the TYPE, the
+second the instance. Writing `(fn (self) ...)` binds the type to `self`, and
+`(first <a type>)` is a read of a non-pair — x-engine-c#16, a segfault rather
+than an error.
+
+**The %-globals share one flat namespace across the bundle's modules.** Naming
+the element accessor `%py-elems` collided with `parse.x`'s list-literal element
+parser of the same name, and 47 specs failed with a *syntax* error from a change
+that touched only the runtime. It is the second collision of this kind here; the
+first was `%py-len`, defined once as a parser helper and once as Python's
+`len`, which made `len('hello')` answer 119. Grep the bundle for a name before
+defining it.
 
 ## Why not sooner
 
