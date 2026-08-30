@@ -59,7 +59,16 @@
 (def mk-tok-indent (fn (_) (list (lit tok-indent))))
 (def mk-tok-dedent (fn (_) (list (lit tok-dedent))))
 
-(def %py-tok-type (fn (_ t) (first t)))
+; NEVER `first` A NON-PAIR.  x-engine-c#16: (first 2) does not raise, it
+; SEGFAULTS -- x_prim_first has no pair check and walks the immediate as a
+; pointer. The tokenizer can still hand back a bare value for input its types do
+; not fully claim (`0x` reads as the integer 0), and this pass then asked that
+; value for its first element and took the interpreter with it.
+;
+; A non-pair has no token tag, so it gets nil and is treated as a token this
+; pass does not recognise -- which is a wrong answer rather than a dead process,
+; and a wrong answer is something a spec can catch.
+(def %py-tok-type (fn (_ t) (if (pair? t) (first t) ())))
 
 ; Bracket depth.  The closers are not checked against their openers -- a
 ; mismatched bracket is a PARSE error with a good message, and a lexer that

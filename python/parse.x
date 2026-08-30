@@ -63,7 +63,10 @@
     (first (%py-read-str (Base raw-of %py-sexp-base) (Str8 append text " ")))))
 
 ; --- Token helpers -----------------------------------------------------------
-(def %py-tag (fn (_ t) (if (null? t) () (first t))))
+; Guarded for the same reason as python/indent.x's %py-tok-type: (first 2)
+; segfaults rather than raising (x-engine-c#16), and a bare value can still
+; reach here from the tokenizer.
+(def %py-tag (fn (_ t) (if (pair? t) (first t) ())))
 (def %py-val (fn (_ t) (first (rest t))))
 
 (def %py-op-is?
