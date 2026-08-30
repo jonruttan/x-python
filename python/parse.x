@@ -256,12 +256,30 @@
 (def %py-builtins
   (list (list "print" (lit %py-print))))
 
+; PYTHON'S NAMESPACE IS NOT x's, AND KEEPING THEM APART IS NOT TIDINESS.
+;
+; A Python name used to become the x symbol of the same spelling, so any name
+; this bundle does not define resolved to whatever x happens to have bound.
+; `int` is bound in x. `print(int(False))` therefore did not raise NameError --
+; it CALLED x's int with arguments it never expected, and the interpreter died.
+; In a spec batch that kills every case after it too: all 34 of basics/int
+; reported "no result" because the first one crashed.
+;
+; So every Python identifier is prefixed. A Python identifier is [A-Za-z0-9_],
+; so a `-` in the symbol cannot collide with one -- and an undefined name now
+; fails as `Unbound SYMBOL 'py-int`, which is a diagnosable error in ONE case
+; rather than a crash that takes the file.
+;
+; Builtins are the exception, and they are an explicit list rather than a
+; fallthrough: a name is a builtin because it appears here, never because x
+; happened to have it.
 (def %py-name->sym
   (fn (_ s)
     (def %look
       (fn (self rows)
         (if (null? rows)
-          (%py-read-str (Base raw-of %py-sexp-base) (Str8 append s " "))
+          (%py-read-str (Base raw-of %py-sexp-base)
+            (Str8 append (Str8 append "py-" s) " "))
           (if (Str8 =? s (first (first rows)))
             (first (rest (first rows)))
             (self (rest rows))))))
