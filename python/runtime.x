@@ -104,13 +104,21 @@
 ; from the subscript that produced it.
 (def %py-index
   (fn (_ v i)
+    (if (str? v)
+      ; A string index yields a one-character STRING, as in Python -- there is
+      ; no character type at this surface.
+      (let ((n (Str8 length v)))
+        (let ((k (if (< i 0) (+ n i) i)))
+          (if (if (< k 0) #t (>= k n))
+            (Err raise (lit index) "string index out of range" ())
+            (Str8 sub k 1 v))))
     (if (not (%py-list? v))
       (Err raise (lit type) "object is not subscriptable" ())
       (let ((n (List length (rest v))))
         (let ((k (if (< i 0) (+ n i) i)))
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "list index out of range" ())
-            (List ref k (rest v))))))))
+            (List ref k (rest v)))))))))
 
 ; Store into a list at an index.  Rebuilds the element list and hangs it back on
 ; the SAME tag pair, so every reference sees the store -- the identity argument
@@ -209,8 +217,49 @@
           (Err raise (lit attribute)
             (Str8 append (Str8 append "'list' object has no attribute '" name) "'")
             ())))
+      (if (str? obj)
+        (%py-str-attr obj name)
+        (Err raise (lit attribute)
+          (Str8 append (Str8 append "object has no attribute '" name) "'") ())))))
+
+; STRING METHODS MAP ONTO Str8, WHICH ALREADY HAS THEM -- upcase, downcase,
+; trim, split, join, replace, starts?, ends?, index-of. The work here is the
+; SHAPE, not the algorithm: Str8 takes its subject LAST, Python takes it first
+; as the receiver, and split/join cross the list boundary so their results have
+; to be tagged or untagged on the way through.
+;
+; find() returns -1 when absent, which is Python's contract and the reason it is
+; not index() -- that one raises. Only find is here.
+(def %py-str-attr
+  (fn (_ s name)
+    (if (Str8 =? name "upper")   (fn (_) (Str8 upcase s))
+    (if (Str8 =? name "lower")   (fn (_) (Str8 downcase s))
+    (if (Str8 =? name "strip")   (fn (_) (Str8 trim s))
+    (if (Str8 =? name "split")
+      ; Python's split returns a LIST, so the result is tagged on the way out.
+      (fn (_ . a)
+        (pair %py-list-tag
+          (Str8 split (if (null? a) " " (first a)) s)))
+    (if (Str8 =? name "join")
+      ; and join takes one, so it is untagged on the way in.
+      (fn (_ lst)
+        (if (not (%py-list? lst))
+          (Err raise (lit type) "can only join an iterable of str" ())
+          (Str8 join s (rest lst))))
+    (if (Str8 =? name "replace")
+      (fn (_ old new) (Str8 replace old new s))
+    (if (Str8 =? name "startswith") (fn (_ p) (Str8 starts? p s))
+    (if (Str8 =? name "endswith")   (fn (_ p) (Str8 ends? p s))
+    ; Str8 index-of answers nil for absent; Python's find answers -1. Passing
+    ; the nil through would print None and, worse, compare equal to nothing --
+    ; `if s.find(x) == -1` would silently never fire.
+    (if (Str8 =? name "find")
+      (fn (_ sub)
+        (let ((i (Str8 index-of sub s)))
+          (if (null? i) (- 0 1) i)))
       (Err raise (lit attribute)
-        (Str8 append (Str8 append "object has no attribute '" name) "'") ()))))
+        (Str8 append (Str8 append "'str' object has no attribute '" name) "'")
+        ()))))))))))))
 
 (def %py-drop-last
   (fn (self lst)
