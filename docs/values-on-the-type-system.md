@@ -161,7 +161,16 @@ before it starts. It survived about a day.
 this prim. This file follows them down to the handler arity, and the tower they
 depend on is the same one Python now keeps.
 
-## Two things that bite, both learned the hard way
+## Three things that bite, all learned the hard way
+
+**The iterator step returns `(value . next-state)`, and only a nil PAIR ends the
+walk.** Written the other way -- bare values, nil means exhausted -- a container
+holding `None` truncates at the first one, because Python's `None` is nil here.
+The first version of both `iter` handlers had exactly that bug, and nothing
+consumed the slot, so nothing failed. `x/type/iter.x` states the contract on
+`Iter make`: "exhaustion rides the STATE". Its doc example is the correct step
+function, verbatim.
+
 
 **Handler arity is `(fn (_ self) ...)`.** The first parameter is the TYPE, the
 second the instance. Writing `(fn (self) ...)` binds the type to `self`, and

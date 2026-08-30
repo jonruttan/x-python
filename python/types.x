@@ -52,6 +52,21 @@
 (def %make-type (prim-ref (lit type) (lit make)))
 (def %type-by-atom (prim-ref (lit type) (lit by-atom)))
 (def %type-push-op (prim-ref (lit type) (lit push-op)))
+(def %i-make (prim-ref (lit iter) (lit make)))
+
+; EXHAUSTION RIDES THE STATE, NOT THE VALUE.  A step answers
+; (value . next-state) and only a nil PAIR ends the walk -- so a nil VALUE is an
+; ordinary element.  That is what makes a list containing None iterable, and it
+; is the whole reason these are shaped this way: the first version returned bare
+; values and ended on nil, which would have stopped at the first None.  Nothing
+; consumed the slot, so nothing caught it.
+(def %py-list-step
+  (fn (_ st) (if (null? st) () (pair (first st) (rest st)))))
+
+; Iterating a dict yields its KEYS, as in Python.  The state stays the entry
+; list; only the yielded value differs.
+(def %py-dict-step
+  (fn (_ st) (if (null? st) () (pair (first (first st)) (rest st)))))
 (def %make-instance (prim-ref (lit type) (lit make-instance)))
 (def %type? (prim-ref (lit type) (lit ?)))
 
@@ -109,20 +124,9 @@
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "list index out of range" ())
             (List ref k l))))
-      ; A stepper that answers nil when exhausted, as x/type/vector.x does.
-      ; NIL TERMINATES, so a list containing None cannot be walked through this
-      ; slot -- Python's None is nil here.  `for` therefore still walks the
-      ; element list directly; this is registered for everything else that
-      ; iterates, and the caveat is the reason it is not the loop's source.
       (pair
         (lit iter)
-        (fn (_ self)
-          (def l (rest (first self)))
-          (fn (_)
-            (if (null? l) ()
-              (let ((v (first l)))
-                (set! l (rest l))
-                v))))))))
+        (fn (_ self) (%i-make %py-list-step (rest (first self))))))))
 
 ; --- PY-DICT -----------------------------------------------------------------
 ;
@@ -172,18 +176,9 @@
       (pair
         (lit call)
         (fn (_ self . args) (%py-dict-get self (first args))))
-      ; Iterating a dict yields its KEYS, as in Python.  Same nil-termination
-      ; caveat as PY-LIST: a None key would end the walk early, so `for` still
-      ; takes the key list directly.
       (pair
         (lit iter)
-        (fn (_ self)
-          (def es (rest (first self)))
-          (fn (_)
-            (if (null? es) ()
-              (let ((k (first (first es))))
-                (set! es (rest es))
-                k))))))))
+        (fn (_ self) (%i-make %py-dict-step (rest (first self))))))))
 
 ; --- Operators ---------------------------------------------------------------
 ;
