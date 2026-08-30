@@ -1,7 +1,10 @@
 # Python values want x's type system, not tagged pairs
 
-**Status:** designed and proved, not built. The mechanism below was verified
-probe by probe against x-engine-c v0.1.3; nothing here is inferred.
+**Status:** the design below was **tried and does not work**. The mechanism is
+real — types, handlers and instances behave as described — but the shape it
+implies, running Python inside a child base, founders on the numeric tower. See
+"Why running in a base does not work" at the end. Left in place because the
+constraint it documents is still true and still decides any future attempt.
 
 ## What is there now
 
@@ -106,9 +109,50 @@ name missed is an error at run time, in generated code, which is a long way from
 where it would be read. The bind list is load-bearing and wants a spec of its
 own asserting each name resolves.
 
-`Base eval` per statement is heavier than `eval!`. Not measured. Worth measuring
-before committing, because the suite is 232 cases and a per-statement cost shows
-up there first.
+`Base eval` per statement is heavier than `eval!` -- measured at ~1.0 ms against
+~0.027 ms, about 38x. That turned out not to matter: the statements fold into
+one form with the parser's own %py-seq-of, so it is one eval per PROGRAM, about
+a millisecond. Recorded because the measurement was worth having and the fold is
+the right shape regardless.
+
+## Why running in a base does not work
+
+**A child base has no numeric tower.** Measured:
+
+    (* 2 1.5)                    child base: 105759989792   ambient: 3.0
+    (* 99999999999 99999999999)  child base: 1864711849423024129  (wrapped)
+
+`(Base make)` registers the C built-in types — prim, operative, procedure,
+symbol, list, int, str, char, whitespace, comment. Float, bigint and rational
+are LIBRARY types, loaded into the ambient base by the xenon dialect's
+tower-compiled block. A child base gets none of them, and a float object there
+is read as the integer its pointer happens to be.
+
+Python cannot run without them. Arbitrary-precision `int` and `1 / 2 == 0.5` are
+the reason this bundle declares xenon rather than helium.
+
+The attempt got to **190 of 232** specs before this surfaced: every failure was
+an expression involving a float or a bignum. The core forms, the bind list and
+the one-eval-per-program fold all worked. It was the arithmetic underneath them
+that was gone.
+
+Loading the tower into a child base would mean booting a dialect inside it,
+which is a much larger thing than this note describes and may not be reachable
+from lang code at all.
+
+## What would actually unblock it
+
+A way to register a type on the base that is ALREADY RUNNING — something like
+`(prim-ref 'base 'current)` returning the running base, so
+
+    (Base make-type (Base current) "PY-LIST" (list (pair 'write ...)))
+
+becomes possible. Then instances resolve where the program already runs, the
+tower is the ambient one, and none of the base-hopping above is needed.
+
+That is an engine capability, not something a lang can work around: the `base`
+namespace exposes `make-type`, `make-tok`, `make`, `eval` and `bind`, and none
+of them yields the current base.
 
 ## Why not sooner
 
