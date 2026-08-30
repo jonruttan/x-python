@@ -197,3 +197,55 @@ x's own reader, so the tower comes for free.
 1
 2
 ```
+
+## float literals
+
+A float literal is not read the way an integer literal is, and the difference is
+not cosmetic. Integers are read in `%py-sexp-base`, a `(Base make)` child; float
+is a library type registered on whichever base loaded it, so that child has no
+float at all. The int type there accepted the `1` of `1.5` as a prefix and the
+fraction was dropped without an error — `2 * 1.5` answered `2`. These cases exist
+because that failure was silent, and a silent wrong number is the worst kind.
+
+### a bare float literal
+
+```python
+(python-run "print(1.5)")
+```
+---
+    1.5
+
+### a float literal in arithmetic
+
+```python
+(python-run "print(2 * 1.5)")
+```
+---
+    3.0
+
+### a negative float literal
+
+```python
+(python-run "print(-0.25)")
+```
+---
+    -0.25
+
+### a float literal inside a list
+
+```python
+(python-run "print([1.5, 2])")
+```
+---
+    [1.5, 2]
+
+### integers are still exact, and still arbitrary-precision
+
+The dot is the only thing that routes a literal to the float reader, so this one
+still goes through the integer path — and Python's int does not overflow.
+
+```python
+(python-run "print(99999999999 * 99999999999)")
+```
+---
+    9999999999800000000001
