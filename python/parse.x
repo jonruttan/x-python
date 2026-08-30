@@ -432,6 +432,10 @@
       ; if / while / def are decided by the leading NAME.  They are keywords to
       ; the parser and plain names to the tokenizer, which is where that
       ; distinction belongs.
+      (if (%py-name-is? t "try")
+        (%py-try (rest toks))
+      (if (%py-name-is? t "raise")
+        (%py-raise-stmt (rest toks))
       (if (%py-name-is? t "if")
         (let ((c (%py-comparison (rest toks))))
           (let ((b (%py-block (rest c))))
@@ -494,7 +498,7 @@
                             (pair
                               (%py-store (first tgt)
                                 (list aug (first tgt) (first r)))
-                              (rest r)))))))))))))))))
+                              (rest r)))))))))))))))))))
 
 ; `else:` after an if.  `elif` is `else: if ...`, which is what Python's own
 ; grammar says it is, so it needs no separate shape.
@@ -529,6 +533,121 @@
                           (list (lit self) (list (lit rest) (lit %py-items)))))))
                   (list (lit %py-iter-elems) (first it)))
                 (rest b)))))))))
+
+; --- try / except / finally --------------------------------------------------
+;
+; `try` compiles to x's `guard`, which binds the raised value and runs a handler
+; -- and `(error e)` inside that handler re-raises it.  So the except clauses
+; become an if-chain over %py-exc-match, and the fallthrough is a re-raise:
+; an exception no clause names must keep travelling, not be swallowed.
+;
+; %py-exc is the guard's variable.  It cannot collide with a Python name
+; because every Python name is emitted with a `py-` prefix.
+
+(def %py-except-clause
+  (fn (_ toks)
+    ; positioned just after the `except` keyword
+    (if (%py-op-is? (if (null? toks) () (first toks)) ":")
+      ; a bare `except:` catches everything
+      (let ((b (%py-block toks)))
+        (pair (list () () (first b)) (rest b)))
+      (let ((n (first toks)))
+        (if (not (eq? (%py-tag n) (lit tok-name)))
+          (Err raise (lit syntax) "expected an exception name after except" ())
+          (let ((after (rest toks)))
+            (if (%py-name-is? (if (null? after) () (first after)) "as")
+              (let ((v (if (null? (rest after)) () (first (rest after)))))
+                (if (not (eq? (%py-tag v) (lit tok-name)))
+                  (Err raise (lit syntax) "expected a name after as" ())
+                  (let ((b (%py-block (rest (rest after)))))
+                    (pair (list (%py-val n) (%py-val v) (first b)) (rest b)))))
+              (let ((b (%py-block after)))
+                (pair (list (%py-val n) () (first b)) (rest b))))))))))
+
+(def %py-except-clauses ())
+(set! %py-except-clauses
+  (fn (self toks acc)
+    (let ((t (%py-skip-nl toks)))
+      (if (not (%py-name-is? (if (null? t) () (first t)) "except"))
+        (pair (List reverse acc) t)
+        (let ((r (%py-except-clause (rest t))))
+          (self (rest r) (pair (first r) acc)))))))
+
+(def %py-except-chain ())
+(set! %py-except-chain
+  (fn (self clauses)
+    (if (null? clauses)
+      ; NOTHING MATCHED, SO RE-RAISE.  A guard catches everything x can raise;
+      ; without this an `except ValueError` would also swallow a KeyError.
+      (list (lit error) (lit %py-exc))
+      (let ((c (first clauses)))
+        (let ((name (first c))
+              (var (first (rest c)))
+              (body (first (rest (rest c)))))
+          (let ((handler
+                  (if (null? var)
+                    body
+                    (list (lit %seq)
+                      (list (lit set!) (%py-name->sym var) (lit %py-exc))
+                      body))))
+            (if (null? name)
+              handler
+              (list (lit if)
+                (list (lit %py-exc-match) (lit %py-exc) name)
+                handler
+                (self (rest clauses))))))))))
+
+(def %py-finally
+  (fn (_ toks)
+    (let ((t (%py-skip-nl toks)))
+      (if (%py-name-is? (if (null? t) () (first t)) "finally")
+        (let ((b (%py-block (rest t))))
+          (pair (first b) (rest b)))
+        (pair () t)))))
+
+(def %py-try
+  (fn (_ toks)
+    ; positioned just after the `try` keyword
+    (let ((b (%py-block toks)))
+      (let ((cs (%py-except-clauses (rest b) ())))
+        (let ((f (%py-finally (rest cs))))
+          (if (if (null? (first cs)) (null? (first f)) #f)
+            (Err raise (lit syntax) "try needs an except or a finally" ())
+            (let ((guarded
+                    (if (null? (first cs))
+                      (first b)
+                      (list (lit guard)
+                        (list (lit %py-exc) (%py-except-chain (first cs)))
+                        (first b)))))
+              (pair
+                (if (null? (first f))
+                  guarded
+                  ; FINALLY RUNS ON BOTH PATHS: once in the body after the
+                  ; guarded form, once in a handler that re-raises.  A `return`
+                  ; inside try escapes through call/cc and skips it -- Python
+                  ; runs it there too, and that is not modelled.
+                  (list (lit guard)
+                    (list (lit %py-fin)
+                      (list (lit %seq) (first f) (list (lit error) (lit %py-fin))))
+                    (list (lit %seq) guarded (first f))))
+                (rest f)))))))))
+
+(def %py-raise-stmt
+  (fn (_ toks)
+    ; positioned just after the `raise` keyword
+    (if (if (null? toks) #t (eq? (%py-tag (first toks)) (lit tok-newline)))
+      ; a bare `raise` re-raises what the enclosing except caught
+      (pair (list (lit error) (lit %py-exc)) toks)
+      (let ((n (first toks)))
+        (if (not (eq? (%py-tag n) (lit tok-name)))
+          (Err raise (lit syntax) "expected an exception name after raise" ())
+          (if (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "(")
+            (let ((r (%py-comparison (rest (rest toks)))))
+              (if (not (%py-op-is? (if (null? (rest r)) () (first (rest r))) ")"))
+                (Err raise (lit syntax) "expected )" ())
+                (pair (list (lit %py-raise) (%py-val n) (first r))
+                      (rest (rest r)))))
+            (pair (list (lit %py-raise) (%py-val n) "") (rest toks))))))))
 
 (def %py-store
   (fn (_ target value)
@@ -697,6 +816,13 @@
       (let ((t (first toks)))
         (if (%py-for-target? toks)
           (self (rest (rest toks)) (pair (%py-val (first (rest toks))) acc))
+        (if (%py-name-is? t "as")
+          ; `except ValueError as e` binds e, and the hoisting scan is what
+          ; turns that into a def -- without this the set! below has nothing
+          ; to store into.
+          (let ((n (if (null? (rest toks)) () (first (rest toks)))))
+            (self (rest (rest toks))
+              (if (eq? (%py-tag n) (lit tok-name)) (pair (%py-val n) acc) acc)))
         (if (%py-name-is? t "def")
           ; the def name, then its parameters up to the closing paren
           (let ((n (if (null? (rest toks)) () (first (rest toks)))))
@@ -706,7 +832,7 @@
                 (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
             (self (rest toks) (pair (%py-val t) acc))
-            (self (rest toks) acc))))))))
+            (self (rest toks) acc)))))))))
 
 (def %py-assign-targets
   (fn (self toks acc)
@@ -716,13 +842,27 @@
         (if (%py-for-target? toks)
           (self (rest (rest toks))
             (pair (%py-name->sym (%py-val (first (rest toks)))) acc))
+        (if (%py-as-target? toks)
+          ; `except ValueError as e` binds e as surely as an assignment does,
+          ; and this is the scan that emits the hoisted defs -- the other one
+          ; only keeps the undefined-name check from shimming it.
+          (self (rest (rest toks))
+            (pair (%py-name->sym (%py-val (first (rest toks)))) acc))
         (if (%py-name-is? t "def")
           (self (%py-skip-def (rest toks) 0) acc)
           (if (if (eq? (%py-tag t) (lit tok-name))
                 (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
             (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
-            (self (rest toks) acc))))))))
+            (self (rest toks) acc)))))))))
+
+; The name after `as` in an except clause.
+(def %py-as-target?
+  (fn (_ toks)
+    (if (%py-name-is? (if (null? toks) () (first toks)) "as")
+      (if (eq? (%py-tag (if (null? (rest toks)) () (first (rest toks)))) (lit tok-name))
+        #t #f)
+      #f)))
 
 ; A `for` target binds its name as surely as an assignment does.
 (def %py-for-target?
