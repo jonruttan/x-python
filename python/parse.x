@@ -63,7 +63,10 @@
     (first (%py-read-str (Base raw-of %py-sexp-base) (Str8 append text " ")))))
 
 ; --- Token helpers -----------------------------------------------------------
-(def %py-tag (fn (_ t) (if (null? t) () (first t))))
+; Guarded for the same reason as python/indent.x's %py-tok-type: (first 2)
+; segfaults rather than raising (x-engine-c#16), and a bare value can still
+; reach here from the tokenizer.
+(def %py-tag (fn (_ t) (if (pair? t) (first t) ())))
 (def %py-val (fn (_ t) (first (rest t))))
 
 (def %py-op-is?
@@ -115,6 +118,12 @@
   (fn (_ t)
     (let ((v (%py-val t)))
       (mk-tok-number (Str8 sub 1 (- (Str8 length v) 1) v)))))
+
+; Augmented assignment: the operator that folds the old value with the new.
+(def %py-aug-ops
+  (list (list "+=" (lit %py-add)) (list "-=" (lit %py-sub))
+        (list "*=" (lit %py-mul)) (list "/=" (lit %py-div))
+        (list "%=" (lit %py-mod))))
 
 (def %py-cmp-ops
   (list (list "==" (lit %py-eq)) (list "!=" (lit %py-ne))
@@ -213,7 +222,22 @@
         (if (%py-op-is? (if (null? more) () (first more)) "(")
           (let ((r (%py-args (rest more) ())))
             (self (pair acc (first r)) (rest r)))
-          (pair acc more))))
+          ; Attribute access binds like a call, and yields a VALUE -- the
+          ; bound method -- so `f = x.append` works and a following `(` simply
+          ; applies it.
+          (if (%py-op-is? (if (null? more) () (first more)) ".")
+            (let ((n (if (null? (rest more)) () (first (rest more)))))
+              (if (not (eq? (%py-tag n) (lit tok-name)))
+                (Err raise (lit syntax) "expected a name after ." ())
+                (self (list (lit %py-getattr) acc (%py-val n))
+                      (rest (rest more)))))
+          ; Subscript binds like a call: left-associative, same level.
+          (if (%py-op-is? (if (null? more) () (first more)) "[")
+            (let ((r (%py-comparison (rest more))))
+              (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) "]")
+                (self (list (lit %py-index) acc (first r)) (rest (rest r)))
+                (Err raise (lit syntax) "expected ] after a subscript" ())))
+            (pair acc more))))))
     (%go (first %a) (rest %a))))
 
 ; Arguments up to the closing paren.  A trailing comma is legal Python and costs
@@ -243,25 +267,64 @@
             (pair (%py-val t) (rest toks))
             (if (eq? (%py-tag t) (lit tok-name))
               (pair (%py-name->sym (%py-val t)) (rest toks))
+              (if (%py-op-is? t "[")
+                (let ((r (%py-elems (rest toks) ())))
+                  (pair (pair (lit %py-mklist) (first r)) (rest r)))
               (if (%py-op-is? t "(")
                 (let ((r (%py-comparison (rest toks))))
                   (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ")")
                     (pair (first r) (rest (rest r)))
                     (Err raise (lit syntax) "expected )" ())))
-                (Err raise (lit syntax) "unexpected token in expression" t)))))))))
+                (Err raise (lit syntax) "unexpected token in expression" t))))))))))
+
+; Elements of a list literal, up to the closing bracket.  A trailing comma is
+; legal Python and costs one branch.
+(def %py-elems
+  (fn (self toks acc)
+    (if (%py-op-is? (if (null? toks) () (first toks)) "]")
+      (pair (List reverse acc) (rest toks))
+      (let ((r (%py-comparison toks)))
+        (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ",")
+          (self (rest (rest r)) (pair (first r) acc))
+          (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) "]")
+            (pair (List reverse (pair (first r) acc)) (rest (rest r)))
+            (Err raise (lit syntax) "expected , or ] in list literal" ())))))))
 
 ; A Python name becomes an x symbol, EXCEPT the builtins that have a runtime
 ; function -- `print` is the only one so far.  A name table rather than a
 ; rewrite in the parser, so the list is one place.
 (def %py-builtins
-  (list (list "print" (lit %py-print))))
+  (list (list "print" (lit %py-print))
+        (list "True"  #t)
+        (list "False" #f)
+        (list "None"  ())
+        (list "len"   (lit %py-len))
+        (list "range" (lit %py-range))))
 
+; PYTHON'S NAMESPACE IS NOT x's, AND KEEPING THEM APART IS NOT TIDINESS.
+;
+; A Python name used to become the x symbol of the same spelling, so any name
+; this bundle does not define resolved to whatever x happens to have bound.
+; `int` is bound in x. `print(int(False))` therefore did not raise NameError --
+; it CALLED x's int with arguments it never expected, and the interpreter died.
+; In a spec batch that kills every case after it too: all 34 of basics/int
+; reported "no result" because the first one crashed.
+;
+; So every Python identifier is prefixed. A Python identifier is [A-Za-z0-9_],
+; so a `-` in the symbol cannot collide with one -- and an undefined name now
+; fails as `Unbound SYMBOL 'py-int`, which is a diagnosable error in ONE case
+; rather than a crash that takes the file.
+;
+; Builtins are the exception, and they are an explicit list rather than a
+; fallthrough: a name is a builtin because it appears here, never because x
+; happened to have it.
 (def %py-name->sym
   (fn (_ s)
     (def %look
       (fn (self rows)
         (if (null? rows)
-          (%py-read-str (Base raw-of %py-sexp-base) (Str8 append s " "))
+          (%py-read-str (Base raw-of %py-sexp-base)
+            (Str8 append (Str8 append "py-" s) " "))
           (if (Str8 =? s (first (first rows)))
             (first (rest (first rows)))
             (self (rest rows))))))
@@ -340,6 +403,8 @@
           (let ((b (%py-block (rest c))))
             (let ((e (%py-else (rest b))))
               (pair (list (lit if) (first c) (first b) (first e)) (rest e)))))
+        (if (%py-name-is? t "for")
+          (%py-for (rest toks))
         (if (%py-name-is? t "while")
           (let ((c (%py-comparison (rest toks))))
             (let ((b (%py-block (rest c))))
@@ -361,20 +426,74 @@
                 (pair (first r) (rest r)))
               (if (%py-name-is? t "pass")
                 (pair () (rest toks))
-                ; NAME '=' expr, decided by looking one token ahead.  Only a
-                ; bare name is a target; subscripts and attributes are
-                ; assignable in Python and are not yet.
-                (if (if (eq? (%py-tag t) (lit tok-name))
-                      (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "=")
-                      #f)
-                  ; set!, NOT def -- see the hoisting note on python-parse.
-                  (let ((r (%py-comparison (rest (rest toks)))))
-                    (pair (list (lit set!) (%py-name->sym (%py-val t)) (first r))
-                      (rest r)))
-                  (%py-comparison toks))))))))))
+                ; ASSIGNMENT IS DECIDED BY WHAT FOLLOWS A TARGET, not by the
+                ; shape of the first token.  Parse a postfix expression -- a
+                ; name, a subscript, an attribute, a call -- and then look.
+                ; If it is not an assignment the tokens are re-parsed as a full
+                ; expression from the start, which costs a second pass over one
+                ; statement and keeps the two cases from having to agree about
+                ; precedence.
+                (let ((tgt (%py-postfix toks)))
+                  (let ((nxt (if (null? (rest tgt)) () (first (rest tgt)))))
+                    (if (%py-op-is? nxt "=")
+                      (let ((r (%py-comparison (rest (rest tgt)))))
+                        (pair (%py-store (first tgt) (first r)) (rest r)))
+                      (let ((aug (%py-op-sym nxt %py-aug-ops)))
+                        (if (null? aug)
+                          (%py-comparison toks)
+                          ; `t op= v` is `t = t op v`.  The target is evaluated
+                          ; twice for a subscript, which is wrong for an
+                          ; expression with side effects and right for every
+                          ; case this handles today.
+                          (let ((r (%py-comparison (rest (rest tgt)))))
+                            (pair
+                              (%py-store (first tgt)
+                                (list aug (first tgt) (first r)))
+                              (rest r)))))))))))))))))
 
 ; `else:` after an if.  `elif` is `else: if ...`, which is what Python's own
 ; grammar says it is, so it needs no separate shape.
+; A store depends on the target's SHAPE: a name is a set!, a subscript is an
+; item assignment. Anything else is not assignable, and saying so here is better
+; than emitting a form that fails obscurely at run time.
+; `for NAME in ITER: BODY` walks the iterable's elements, binding NAME each
+; time. Recursion in tail position, the same shape `while` uses and for the same
+; reason: there is no loop construct, and a non-tail call has no depth limit
+; behind it.
+;
+; The item variable is a plain assignment, so it lives in whatever scope the
+; hoist put it in -- which is Python's rule too: a for target outlives its loop.
+(def %py-for
+  (fn (_ toks)
+    (let ((v (if (null? toks) () (first toks))))
+      (if (not (eq? (%py-tag v) (lit tok-name)))
+        (Err raise (lit syntax) "expected a name after for" ())
+        (if (not (%py-name-is? (if (null? (rest toks)) () (first (rest toks))) "in"))
+          (Err raise (lit syntax) "expected in after a for target" ())
+          (let ((it (%py-comparison (rest (rest toks)))))
+            (let ((b (%py-block (rest it))))
+              (pair
+                (list
+                  (list (lit fn) (list (lit self) (lit %py-items))
+                    (list (lit if) (list (lit null?) (lit %py-items))
+                      ()
+                      (list (lit %seq)
+                        (list (lit set!) (%py-name->sym (%py-val v))
+                          (list (lit first) (lit %py-items)))
+                        (list (lit %seq) (first b)
+                          (list (lit self) (list (lit rest) (lit %py-items)))))))
+                  (list (lit %py-iter-elems) (first it)))
+                (rest b)))))))))
+
+(def %py-store
+  (fn (_ target value)
+    (if (pair? target)
+      (if (eq? (first target) (lit %py-index))
+        (list (lit %py-setindex) (first (rest target))
+              (first (rest (rest target))) value)
+        (Err raise (lit syntax) "cannot assign to this target" ()))
+      (list (lit set!) target value))))
+
 (def %py-else
   (fn (_ toks)
     (let ((t (%py-skip-nl toks)))
@@ -418,7 +537,7 @@
               ; is the function's.  Parameters are already bound and are not
               ; re-declared; shadowing them with a nil would break every call.
               (let ((span (%py-take
-                            (- (%py-len (rest p)) (%py-len (rest b)))
+                            (- (%py-count (rest p)) (%py-count (rest b)))
                             (rest p))))
                 (let ((locals (%py-minus
                                 (%py-dedupe () (%py-assign-targets span ()) ())
@@ -487,23 +606,92 @@
             (if (<= depth 1) (rest toks) (self (rest toks) (- depth 1)))
             (self (rest toks) depth)))))))
 
+; Names the grammar owns.  They reach the tokenizer as tok-name -- `if` is a
+; name there and a keyword to the parser -- so the undefined-name scan has to
+; know them, or it would emit a NameError shim for `while`.
+(def %py-keywords
+  (list "if" "elif" "else" "while" "def" "return" "pass" "and" "or" "not"
+        "in" "is" "for" "break" "continue" "class" "import" "from" "as"
+        "try" "except" "finally" "raise" "with" "lambda" "global" "nonlocal"
+        "assert" "del" "yield" "async" "await"))
+
+(def %py-str-seen?
+  (fn (self x lst)
+    (if (null? lst) #f
+      (if (Str8 =? x (first lst)) #t (self x (rest lst))))))
+
+(def %py-builtin-name?
+  (fn (self s rows)
+    (if (null? rows) #f
+      (if (Str8 =? s (first (first rows))) #t (self s (rest rows))))))
+
+; Every name the program MENTIONS, as text.
+(def %py-mentioned
+  (fn (self toks acc)
+    (if (null? toks)
+      (List reverse acc)
+      (let ((t (first toks)))
+        (if (eq? (%py-tag t) (lit tok-name))
+          (self (rest toks) (pair (%py-val t) acc))
+          (self (rest toks) acc))))))
+
+; Every name the program BINDS: assignment targets, def names, parameters.
+(def %py-bound-names
+  (fn (self toks acc)
+    (if (null? toks)
+      (List reverse acc)
+      (let ((t (first toks)))
+        (if (%py-for-target? toks)
+          (self (rest (rest toks)) (pair (%py-val (first (rest toks))) acc))
+        (if (%py-name-is? t "def")
+          ; the def name, then its parameters up to the closing paren
+          (let ((n (if (null? (rest toks)) () (first (rest toks)))))
+            (self (rest (rest toks))
+              (if (eq? (%py-tag n) (lit tok-name)) (pair (%py-val n) acc) acc)))
+          (if (if (eq? (%py-tag t) (lit tok-name))
+                (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
+                #f)
+            (self (rest toks) (pair (%py-val t) acc))
+            (self (rest toks) acc))))))))
+
 (def %py-assign-targets
   (fn (self toks acc)
     (if (null? toks)
       (List reverse acc)
       (let ((t (first toks)))
+        (if (%py-for-target? toks)
+          (self (rest (rest toks))
+            (pair (%py-name->sym (%py-val (first (rest toks)))) acc))
         (if (%py-name-is? t "def")
           (self (%py-skip-def (rest toks) 0) acc)
           (if (if (eq? (%py-tag t) (lit tok-name))
-                (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "=")
+                (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
             (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
-            (self (rest toks) acc)))))))
+            (self (rest toks) acc))))))))
+
+; A `for` target binds its name as surely as an assignment does.
+(def %py-for-target?
+  (fn (_ toks)
+    (if (%py-name-is? (if (null? toks) () (first toks)) "for")
+      (if (eq? (%py-tag (if (null? (rest toks)) () (first (rest toks)))) (lit tok-name))
+        #t #f)
+      #f)))
+
+; `=` or any augmented form: all of them bind the name.
+(def %py-assign-op?
+  (fn (_ t)
+    (if (%py-op-is? t "=") #t
+      (if (null? (%py-op-sym t %py-aug-ops)) #f #t))))
 
 ; Hand-rolled rather than reaching for List: `member?` is not a static there,
 ; and a wrong method name fails at RUN time in a form this file generates,
 ; which is a long way from where it would be read.
-(def %py-len (fn (self l) (if (null? l) 0 (+ 1 (self (rest l))))))
+; %py-count, NOT %py-len: python/runtime.x defines %py-len as Python's `len`,
+; and two definitions of one name in the same module namespace means the last
+; loaded wins.  It cost `len([])` returning 1 and `len('hello')` returning 119 --
+; wrong numbers, no error.
+(def %py-count (fn (self l) (if (null? l) 0 (+ 1 (self (rest l))))))
 (def %py-take
   (fn (self n l)
     (if (= n 0) () (if (null? l) () (pair (first l) (self (- n 1) (rest l)))))))
@@ -521,12 +709,73 @@
         (self seen (rest syms) acc)
         (self (pair (first syms) seen) (rest syms) (pair (first syms) acc))))))
 
+; A name mentioned but never bound gets a shim that raises PYTHON's error.
+;
+; Without this the program dies on `Unbound SYMBOL 'py-int` -- and `py-int` is
+; not in anyone's source. The prefix exists so Python's names cannot resolve to
+; x's, which it must; it has no business appearing in a diagnostic. The shim
+; puts the programmer's own spelling back.
+(def %py-undefined
+  (fn (self names bound acc)
+    (if (null? names)
+      (List reverse acc)
+      (let ((n (first names)))
+        (if (if (%py-str-seen? n bound) #t
+              (if (%py-str-seen? n %py-keywords) #t
+                (%py-builtin-name? n %py-builtins)))
+          (self (rest names) bound acc)
+          (if (%py-str-seen? n (%py-names-of acc))
+            (self (rest names) bound acc)
+            (self (rest names) bound (pair n acc))))))))
+
+(def %py-names-of
+  (fn (self acc) (if (null? acc) () (pair (first acc) (self (rest acc))))))
+
+(def %py-shims
+  (fn (self names acc)
+    (if (null? names)
+      (List reverse acc)
+      (self (rest names)
+        (pair
+          (list (lit def) (%py-name->sym (first names))
+            (list (lit fn) (list (lit _))
+              (list (lit Err) (lit raise) (list (lit lit) (lit name))
+                (Str8 append (Str8 append "name '" (first names))
+                  "' is not defined")
+                ())))
+          acc)))))
+
 (def python-parse
   (fn (_ src)
     (def %toks (python-lex src))
     (def %targets (%py-dedupe () (%py-assign-targets %toks ()) ()))
     (def %body (first (%py-stmts %toks ())))
-    (%py-append (%py-decls %targets ()) %body)))
+    (def %undef
+      (%py-undefined (%py-mentioned %toks ())
+                     (%py-append (%py-bound-names %toks ()) (%py-param-names %toks ()))
+                     ()))
+    (%py-append (%py-shims %undef ())
+      (%py-append (%py-decls %targets ()) %body))))
+
+; Parameter names: any name between a def's parens.
+(def %py-param-names
+  (fn (self toks acc)
+    (if (null? toks)
+      (List reverse acc)
+      (if (%py-name-is? (first toks) "def")
+        (let ((r (%py-param-span (rest (rest toks)) ())))
+          (self (first r) (%py-append (rest r) acc)))
+        (self (rest toks) acc)))))
+
+(def %py-param-span
+  (fn (self toks acc)
+    (if (null? toks)
+      (pair toks acc)
+      (if (%py-op-is? (first toks) ")")
+        (pair (rest toks) acc)
+        (if (eq? (%py-tag (first toks)) (lit tok-name))
+          (self (rest toks) (pair (%py-val (first toks)) acc))
+          (self (rest toks) acc))))))
 
 (def %py-decls
   (fn (self syms acc)

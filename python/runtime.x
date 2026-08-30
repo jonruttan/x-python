@@ -29,7 +29,9 @@
 (provide python/runtime
   %py-add %py-sub %py-mul %py-div %py-floordiv %py-mod %py-pow %py-neg
   %py-eq %py-ne %py-lt %py-gt %py-le %py-ge
-  %py-print %py-display)
+  %py-print %py-display
+  %py-mklist %py-index %py-len %py-list? %py-write %py-getattr %py-setindex
+  %py-range %py-iter-elems)
 
 ; --- Arithmetic --------------------------------------------------------------
 ; `+` dispatches on the operands, and the string case is not an extra: Python
@@ -75,6 +77,194 @@
 (def %py-le (fn (_ a b) (if (< a b) #t (= a b))))
 (def %py-ge (fn (_ a b) (if (> a b) #t (= a b))))
 
+; --- Lists ------------------------------------------------------------------
+;
+; TAGGED, not a bare x list.  An empty Python list and None are different
+; values, and a bare x list would make both of them nil -- so `print([])` would
+; print None.  A list is (py-list . elements): the tag distinguishes it from
+; every other value this runtime produces, and from nil.
+(def %py-list-tag (lit py-list))
+
+(def %py-mklist (fn (_ . elems) (pair %py-list-tag elems)))
+
+(def %py-list?
+  (fn (_ v) (if (pair? v) (eq? (first v) %py-list-tag) #f)))
+
+(def %py-len
+  (fn (_ v)
+    (if (%py-list? v)
+      (List length (rest v))
+      (if (str? v)
+        (Str8 length v)
+        (Err raise (lit type) "object of this type has no len()" ())))))
+
+; NEGATIVE INDICES COUNT FROM THE END, which is Python and not x.  -1 is the
+; last element, and an index past either end raises IndexError rather than
+; returning nil -- a silent nil would propagate into arithmetic and surface far
+; from the subscript that produced it.
+(def %py-index
+  (fn (_ v i)
+    (if (str? v)
+      ; A string index yields a one-character STRING, as in Python -- there is
+      ; no character type at this surface.
+      (let ((n (Str8 length v)))
+        (let ((k (if (< i 0) (+ n i) i)))
+          (if (if (< k 0) #t (>= k n))
+            (Err raise (lit index) "string index out of range" ())
+            (Str8 sub k 1 v))))
+    (if (not (%py-list? v))
+      (Err raise (lit type) "object is not subscriptable" ())
+      (let ((n (List length (rest v))))
+        (let ((k (if (< i 0) (+ n i) i)))
+          (if (if (< k 0) #t (>= k n))
+            (Err raise (lit index) "list index out of range" ())
+            (List ref k (rest v)))))))))
+
+; Store into a list at an index.  Rebuilds the element list and hangs it back on
+; the SAME tag pair, so every reference sees the store -- the identity argument
+; that made append work.
+(def %py-set-nth
+  (fn (self lst k v)
+    (if (= k 0)
+      (pair v (rest lst))
+      (pair (first lst) (self (rest lst) (- k 1) v)))))
+
+(def %py-setindex
+  (fn (_ obj i v)
+    (if (not (%py-list? obj))
+      (Err raise (lit type) "object does not support item assignment" ())
+      (let ((n (List length (rest obj))))
+        (let ((k (if (< i 0) (+ n i) i)))
+          (if (if (< k 0) #t (>= k n))
+            (Err raise (lit index) "list assignment index out of range" ())
+            (%seq (%set-rest! obj (%py-set-nth (rest obj) k v)) ())))))))
+
+; --- Iteration ---------------------------------------------------------------
+;
+; The elements a `for` walks.  A list gives its own; a string gives its
+; characters, because Python iterates a string by character and several
+; conformance programs depend on it.
+(def %py-str-chars
+  (fn (self v i n)
+    (if (>= i n) () (pair (Str8 sub i 1 v) (self v (+ i 1) n)))))
+
+(def %py-iter-elems
+  (fn (_ v)
+    (if (%py-list? v)
+      (rest v)
+      (if (str? v)
+        (%py-str-chars v 0 (Str8 length v))
+        (Err raise (lit type) "object is not iterable" ())))))
+
+; range(stop) / range(start, stop) / range(start, stop, step)
+;
+; EAGER, and that is a simplification with a known cost: Python 3's range is
+; lazy, so `range(10000000)` is free there and a ten-million element list here.
+; Every conformance program that uses range walks all of it, so the difference
+; is memory rather than answers -- but it is a difference, and it is written
+; down rather than discovered.
+;
+; A zero step raises rather than looping forever.  There is no depth limit on
+; non-tail calls here (x-lang#56), so an unbounded loop is an OOM.
+(def %py-range-build
+  (fn (self i stop step acc)
+    (if (if (> step 0) (>= i stop) (<= i stop))
+      (List reverse acc)
+      (self (+ i step) stop step (pair i acc)))))
+
+(def %py-range
+  (fn (_ . args)
+    (if (null? args)
+      (Err raise (lit type) "range expected at least 1 argument" ())
+      (let ((start (if (null? (rest args)) 0 (first args)))
+            (stop  (if (null? (rest args)) (first args) (first (rest args))))
+            (step  (if (null? (rest args)) 1
+                     (if (null? (rest (rest args))) 1
+                       (first (rest (rest args)))))))
+        (if (= step 0)
+          (Err raise (lit value) "range() arg 3 must not be zero" ())
+          (pair %py-list-tag (%py-range-build start stop step ())))))))
+
+; --- Attributes and methods --------------------------------------------------
+;
+; `x.append` is a VALUE, not just a call form.  Python binds the receiver at
+; attribute-access time -- `f = x.append; f(4)` appends to x -- so getattr
+; returns a closure over the object rather than the parser emitting a
+; three-argument call. That costs one closure per access and buys the bound
+; method for free.
+;
+; MUTATION IS IN PLACE, and the tag pair is what makes it possible. A list is
+; (py-list . elements); %set-rest! replaces the elements on THAT pair, so every
+; reference to the list sees the change. Rebuilding and returning a new list
+; would make `x.append(5)` silently do nothing to x, which is the bug this
+; representation was chosen to avoid.
+(def %py-append-elem
+  (fn (self lst v)
+    (if (null? lst) (list v) (pair (first lst) (self (rest lst) v)))))
+
+(def %py-getattr
+  (fn (_ obj name)
+    (if (%py-list? obj)
+      (if (Str8 =? name "append")
+        (fn (_ v) (%seq (%set-rest! obj (%py-append-elem (rest obj) v)) ()))
+        (if (Str8 =? name "pop")
+          (fn (_ . a)
+            (let ((n (List length (rest obj))))
+              (if (= n 0)
+                (Err raise (lit index) "pop from empty list" ())
+                (let ((v (List ref (- n 1) (rest obj))))
+                  (%seq (%set-rest! obj (%py-drop-last (rest obj))) v)))))
+          (Err raise (lit attribute)
+            (Str8 append (Str8 append "'list' object has no attribute '" name) "'")
+            ())))
+      (if (str? obj)
+        (%py-str-attr obj name)
+        (Err raise (lit attribute)
+          (Str8 append (Str8 append "object has no attribute '" name) "'") ())))))
+
+; STRING METHODS MAP ONTO Str8, WHICH ALREADY HAS THEM -- upcase, downcase,
+; trim, split, join, replace, starts?, ends?, index-of. The work here is the
+; SHAPE, not the algorithm: Str8 takes its subject LAST, Python takes it first
+; as the receiver, and split/join cross the list boundary so their results have
+; to be tagged or untagged on the way through.
+;
+; find() returns -1 when absent, which is Python's contract and the reason it is
+; not index() -- that one raises. Only find is here.
+(def %py-str-attr
+  (fn (_ s name)
+    (if (Str8 =? name "upper")   (fn (_) (Str8 upcase s))
+    (if (Str8 =? name "lower")   (fn (_) (Str8 downcase s))
+    (if (Str8 =? name "strip")   (fn (_) (Str8 trim s))
+    (if (Str8 =? name "split")
+      ; Python's split returns a LIST, so the result is tagged on the way out.
+      (fn (_ . a)
+        (pair %py-list-tag
+          (Str8 split (if (null? a) " " (first a)) s)))
+    (if (Str8 =? name "join")
+      ; and join takes one, so it is untagged on the way in.
+      (fn (_ lst)
+        (if (not (%py-list? lst))
+          (Err raise (lit type) "can only join an iterable of str" ())
+          (Str8 join s (rest lst))))
+    (if (Str8 =? name "replace")
+      (fn (_ old new) (Str8 replace old new s))
+    (if (Str8 =? name "startswith") (fn (_ p) (Str8 starts? p s))
+    (if (Str8 =? name "endswith")   (fn (_ p) (Str8 ends? p s))
+    ; Str8 index-of answers nil for absent; Python's find answers -1. Passing
+    ; the nil through would print None and, worse, compare equal to nothing --
+    ; `if s.find(x) == -1` would silently never fire.
+    (if (Str8 =? name "find")
+      (fn (_ sub)
+        (let ((i (Str8 index-of sub s)))
+          (if (null? i) (- 0 1) i)))
+      (Err raise (lit attribute)
+        (Str8 append (Str8 append "'str' object has no attribute '" name) "'")
+        ()))))))))))))
+
+(def %py-drop-last
+  (fn (self lst)
+    (if (null? (rest lst)) () (pair (first lst) (self (rest lst))))))
+
 ; --- print -------------------------------------------------------------------
 ; Python's `print` is not `display`: arguments are separated by a single space,
 ; a newline follows, and a string prints WITHOUT its quotes while everything
@@ -86,13 +276,51 @@
 ;
 ; `display` is otherwise already right: it writes a string WITHOUT quotes and a
 ; number as a number, which is what print wants. `write` would quote the string.
+; REPR WRITES, IT DOES NOT BUILD A STRING.  Rendering a number into a string
+; would need a number->string conversion this layer does not have; writing it
+; needs only `display`, which already knows how.  So repr is a procedure that
+; emits, and the container cases emit their punctuation around it.
+(def %py-write ())
+(set! %py-write
+  (fn (_ v)
+    (if (str? v)
+      ; A string inside a container shows its quotes; on its own it does not.
+      (%seq (display "'") (%seq (display v) (display "'")))
+      (if (eq? v #t)
+        (display "True")
+        (if (eq? v #f)
+          (display "False")
+          (if (null? v)
+            (display "None")
+            (if (%py-list? v)
+              (%seq (display "[") (%seq (%py-write-elems (rest v)) (display "]")))
+              (display v))))))))
+
+(def %py-write-elems
+  (fn (self elems)
+    (if (null? elems)
+      ()
+      (%seq (%py-write (first elems))
+        (if (null? (rest elems))
+          ()
+          (%seq (display ", ") (self (rest elems))))))))
+
 (def %py-display
   (fn (_ v)
     (if (eq? v #t)
       (display "True")
       (if (eq? v #f)
         (display "False")
-        (display v)))))
+        ; Python prints None; x displays nil as nothing at all, so a program
+        ; that prints a function's result would print a blank line where CPython
+        ; prints None -- a difference the conformance suite compares on.
+        (if (null? v)
+          (display "None")
+          ; A list at top level prints with its brackets, and its ELEMENTS print
+          ; as reprs -- print(['a']) is ['a'], not [a].
+          (if (%py-list? v)
+            (%py-write v)
+            (display v)))))))
 
 (def %py-print
   (fn (_ . args)

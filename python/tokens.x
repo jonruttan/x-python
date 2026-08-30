@@ -329,11 +329,13 @@
             (if (= c 44) #t (if (= c 58) #t (if (= c 46) #t
               (= c 59)))))))))))))))))))))
 
-; Which pairs extend: == != <= >= // **
+; Which pairs extend: == != <= >= // ** and += -= *= /= %=
 (def %py-op-pair?
   (fn (_ a b)
     (if (= b 61)
-      (if (= a 61) #t (if (= a 33) #t (if (= a 60) #t (= a 62))))
+      (if (= a 61) #t (if (= a 33) #t (if (= a 60) #t (if (= a 62) #t
+        (if (= a 43) #t (if (= a 45) #t (if (= a 42) #t
+          (if (= a 47) #t (= a 37)))))))))
       (if (if (= a 47) (= b 47) #f) #t
         (if (= a 42) (= b 42) #f)))))
 
@@ -350,10 +352,13 @@
 ;
 ; ash's SH-OP has the same split -- `(` and `)` accept immediately, the rest
 ; look ahead -- and this is why.
+; The augmented-assignment operators put + - * % into the lookahead set too:
+; `+=` must beat `+`, the same way `==` beats `=`.
 (def %py-op-pairable?
   (fn (_ c)
     (if (= c 61) #t (if (= c 33) #t (if (= c 60) #t (if (= c 62) #t
-      (if (= c 47) #t (= c 42))))))))
+      (if (= c 47) #t (if (= c 42) #t
+        (if (= c 43) #t (if (= c 45) #t (= c 37))))))))))) 
 
 (def %py-op-second
   (fn (_ c1)
