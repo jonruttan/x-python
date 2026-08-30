@@ -30,7 +30,7 @@
   %py-add %py-sub %py-mul %py-div %py-floordiv %py-mod %py-pow %py-neg
   %py-eq %py-ne %py-lt %py-gt %py-le %py-ge
   %py-print %py-display
-  %py-mklist %py-index %py-len %py-list? %py-write %py-getattr)
+  %py-mklist %py-index %py-len %py-list? %py-write %py-getattr %py-setindex)
 
 ; --- Arithmetic --------------------------------------------------------------
 ; `+` dispatches on the operands, and the string case is not an extra: Python
@@ -110,6 +110,25 @@
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "list index out of range" ())
             (List ref k (rest v))))))))
+
+; Store into a list at an index.  Rebuilds the element list and hangs it back on
+; the SAME tag pair, so every reference sees the store -- the identity argument
+; that made append work.
+(def %py-set-nth
+  (fn (self lst k v)
+    (if (= k 0)
+      (pair v (rest lst))
+      (pair (first lst) (self (rest lst) (- k 1) v)))))
+
+(def %py-setindex
+  (fn (_ obj i v)
+    (if (not (%py-list? obj))
+      (Err raise (lit type) "object does not support item assignment" ())
+      (let ((n (List length (rest obj))))
+        (let ((k (if (< i 0) (+ n i) i)))
+          (if (if (< k 0) #t (>= k n))
+            (Err raise (lit index) "list assignment index out of range" ())
+            (%seq (%set-rest! obj (%py-set-nth (rest obj) k v)) ())))))))
 
 ; --- Attributes and methods --------------------------------------------------
 ;

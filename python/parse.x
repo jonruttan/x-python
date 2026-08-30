@@ -119,6 +119,12 @@
     (let ((v (%py-val t)))
       (mk-tok-number (Str8 sub 1 (- (Str8 length v) 1) v)))))
 
+; Augmented assignment: the operator that folds the old value with the new.
+(def %py-aug-ops
+  (list (list "+=" (lit %py-add)) (list "-=" (lit %py-sub))
+        (list "*=" (lit %py-mul)) (list "/=" (lit %py-div))
+        (list "%=" (lit %py-mod))))
+
 (def %py-cmp-ops
   (list (list "==" (lit %py-eq)) (list "!=" (lit %py-ne))
         (list "<"  (lit %py-lt)) (list ">"  (lit %py-gt))
@@ -417,20 +423,45 @@
                 (pair (first r) (rest r)))
               (if (%py-name-is? t "pass")
                 (pair () (rest toks))
-                ; NAME '=' expr, decided by looking one token ahead.  Only a
-                ; bare name is a target; subscripts and attributes are
-                ; assignable in Python and are not yet.
-                (if (if (eq? (%py-tag t) (lit tok-name))
-                      (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "=")
-                      #f)
-                  ; set!, NOT def -- see the hoisting note on python-parse.
-                  (let ((r (%py-comparison (rest (rest toks)))))
-                    (pair (list (lit set!) (%py-name->sym (%py-val t)) (first r))
-                      (rest r)))
-                  (%py-comparison toks))))))))))
+                ; ASSIGNMENT IS DECIDED BY WHAT FOLLOWS A TARGET, not by the
+                ; shape of the first token.  Parse a postfix expression -- a
+                ; name, a subscript, an attribute, a call -- and then look.
+                ; If it is not an assignment the tokens are re-parsed as a full
+                ; expression from the start, which costs a second pass over one
+                ; statement and keeps the two cases from having to agree about
+                ; precedence.
+                (let ((tgt (%py-postfix toks)))
+                  (let ((nxt (if (null? (rest tgt)) () (first (rest tgt)))))
+                    (if (%py-op-is? nxt "=")
+                      (let ((r (%py-comparison (rest (rest tgt)))))
+                        (pair (%py-store (first tgt) (first r)) (rest r)))
+                      (let ((aug (%py-op-sym nxt %py-aug-ops)))
+                        (if (null? aug)
+                          (%py-comparison toks)
+                          ; `t op= v` is `t = t op v`.  The target is evaluated
+                          ; twice for a subscript, which is wrong for an
+                          ; expression with side effects and right for every
+                          ; case this handles today.
+                          (let ((r (%py-comparison (rest (rest tgt)))))
+                            (pair
+                              (%py-store (first tgt)
+                                (list aug (first tgt) (first r)))
+                              (rest r))))))))))))))))
 
 ; `else:` after an if.  `elif` is `else: if ...`, which is what Python's own
 ; grammar says it is, so it needs no separate shape.
+; A store depends on the target's SHAPE: a name is a set!, a subscript is an
+; item assignment. Anything else is not assignable, and saying so here is better
+; than emitting a form that fails obscurely at run time.
+(def %py-store
+  (fn (_ target value)
+    (if (pair? target)
+      (if (eq? (first target) (lit %py-index))
+        (list (lit %py-setindex) (first (rest target))
+              (first (rest (rest target))) value)
+        (Err raise (lit syntax) "cannot assign to this target" ()))
+      (list (lit set!) target value))))
+
 (def %py-else
   (fn (_ toks)
     (let ((t (%py-skip-nl toks)))
@@ -584,7 +615,7 @@
             (self (rest (rest toks))
               (if (eq? (%py-tag n) (lit tok-name)) (pair (%py-val n) acc) acc)))
           (if (if (eq? (%py-tag t) (lit tok-name))
-                (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "=")
+                (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
             (self (rest toks) (pair (%py-val t) acc))
             (self (rest toks) acc)))))))
@@ -597,10 +628,16 @@
         (if (%py-name-is? t "def")
           (self (%py-skip-def (rest toks) 0) acc)
           (if (if (eq? (%py-tag t) (lit tok-name))
-                (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "=")
+                (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
             (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
             (self (rest toks) acc)))))))
+
+; `=` or any augmented form: all of them bind the name.
+(def %py-assign-op?
+  (fn (_ t)
+    (if (%py-op-is? t "=") #t
+      (if (null? (%py-op-sym t %py-aug-ops)) #f #t))))
 
 ; Hand-rolled rather than reaching for List: `member?` is not a static there,
 ; and a wrong method name fails at RUN time in a form this file generates,
