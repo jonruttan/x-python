@@ -412,10 +412,47 @@
           (Err raise (lit syntax) "expected ( after a function name" ())
           (let ((p (%py-params (rest (rest toks)) ())))
             (let ((b (%py-block (rest p))))
-              (pair
-                (list (lit def) (%py-name->sym (%py-val name))
-                  (list (lit fn) (pair (lit _) (first p)) (first b)))
-                (rest b)))))))))
+              ; A FUNCTION'S ASSIGNMENTS ARE ITS OWN.  The module-level scan
+              ; skips def bodies, so their targets are hoisted HERE instead --
+              ; inside the fn, where x's `def` binds locally because the frame
+              ; is the function's.  Parameters are already bound and are not
+              ; re-declared; shadowing them with a nil would break every call.
+              (let ((span (%py-take
+                            (- (%py-len (rest p)) (%py-len (rest b)))
+                            (rest p))))
+                (let ((locals (%py-minus
+                                (%py-dedupe () (%py-assign-targets span ()) ())
+                                (first p))))
+                  ; `let`, NOT `def`.  x's `def` decides global-versus-local by
+                  ; save-stack depth, and inside a called function TCO can leave
+                  ; that stack empty -- so `(def x ())` in a body binds
+                  ; GLOBALLY, clobbering the module's `x` with nil on every
+                  ; call.  Measured: a def merely PRESENT left the module name
+                  ; alone; calling it set the name to nil.
+                  ;
+                  ; `let` binds in the frame unconditionally, which is what a
+                  ; function-local is.  A body with no locals gets no wrapper.
+                  (pair
+                    (list (lit def) (%py-name->sym (%py-val name))
+                      (list (lit fn) (pair (lit _) (first p))
+                        (if (null? locals)
+                          (first b)
+                          (list (lit let) (%py-lets locals ()) (first b)))))
+                    (rest b)))))))))))
+
+(def %py-lets
+  (fn (self syms acc)
+    (if (null? syms)
+      (List reverse acc)
+      (self (rest syms) (pair (list (first syms) ()) acc)))))
+
+(def %py-minus
+  (fn (self syms drop)
+    (if (null? syms)
+      ()
+      (if (%py-seen? (first syms) drop)
+        (self (rest syms) drop)
+        (pair (first syms) (self (rest syms) drop))))))
 
 ; ASSIGNMENT IS set!, AND EVERY TARGET IS HOISTED TO A def FIRST.
 ;
@@ -435,20 +472,42 @@
 ; to the same module scope. That is wrong for Python and is the next thing this
 ; wants, but it is wrong in a way that produces a visible name clash rather
 ; than a loop that never ends.
+; Skip from a `def` to the DEDENT that closes it: names assigned inside a
+; function body are that function's, not the module's.  Depth is tracked because
+; a def body can contain further indented blocks, and only the dedent that
+; returns to the def's own level ends it.
+(def %py-skip-def
+  (fn (self toks depth)
+    (if (null? toks)
+      toks
+      (let ((g (%py-tag (first toks))))
+        (if (eq? g (lit tok-indent))
+          (self (rest toks) (+ depth 1))
+          (if (eq? g (lit tok-dedent))
+            (if (<= depth 1) (rest toks) (self (rest toks) (- depth 1)))
+            (self (rest toks) depth)))))))
+
 (def %py-assign-targets
   (fn (self toks acc)
     (if (null? toks)
       (List reverse acc)
       (let ((t (first toks)))
-        (if (if (eq? (%py-tag t) (lit tok-name))
-              (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "=")
-              #f)
-          (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
-          (self (rest toks) acc))))))
+        (if (%py-name-is? t "def")
+          (self (%py-skip-def (rest toks) 0) acc)
+          (if (if (eq? (%py-tag t) (lit tok-name))
+                (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "=")
+                #f)
+            (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
+            (self (rest toks) acc)))))))
 
 ; Hand-rolled rather than reaching for List: `member?` is not a static there,
 ; and a wrong method name fails at RUN time in a form this file generates,
 ; which is a long way from where it would be read.
+(def %py-len (fn (self l) (if (null? l) 0 (+ 1 (self (rest l))))))
+(def %py-take
+  (fn (self n l)
+    (if (= n 0) () (if (null? l) () (pair (first l) (self (- n 1) (rest l)))))))
+
 (def %py-seen?
   (fn (self x lst)
     (if (null? lst) #f
