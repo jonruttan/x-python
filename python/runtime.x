@@ -92,7 +92,12 @@
       (display "True")
       (if (eq? v #f)
         (display "False")
-        (display v)))))
+        ; Python prints None; x displays nil as nothing at all, so a program
+        ; that prints a function's result would print a blank line where CPython
+        ; prints None -- a difference the conformance suite compares on.
+        (if (null? v)
+          (display "None")
+          (display v))))))
 
 (def %py-print
   (fn (_ . args)

@@ -254,7 +254,10 @@
 ; function -- `print` is the only one so far.  A name table rather than a
 ; rewrite in the parser, so the list is one place.
 (def %py-builtins
-  (list (list "print" (lit %py-print))))
+  (list (list "print" (lit %py-print))
+        (list "True"  #t)
+        (list "False" #f)
+        (list "None"  ())))
 
 ; PYTHON'S NAMESPACE IS NOT x's, AND KEEPING THEM APART IS NOT TIDINESS.
 ;
@@ -505,6 +508,52 @@
             (if (<= depth 1) (rest toks) (self (rest toks) (- depth 1)))
             (self (rest toks) depth)))))))
 
+; Names the grammar owns.  They reach the tokenizer as tok-name -- `if` is a
+; name there and a keyword to the parser -- so the undefined-name scan has to
+; know them, or it would emit a NameError shim for `while`.
+(def %py-keywords
+  (list "if" "elif" "else" "while" "def" "return" "pass" "and" "or" "not"
+        "in" "is" "for" "break" "continue" "class" "import" "from" "as"
+        "try" "except" "finally" "raise" "with" "lambda" "global" "nonlocal"
+        "assert" "del" "yield" "async" "await"))
+
+(def %py-str-seen?
+  (fn (self x lst)
+    (if (null? lst) #f
+      (if (Str8 =? x (first lst)) #t (self x (rest lst))))))
+
+(def %py-builtin-name?
+  (fn (self s rows)
+    (if (null? rows) #f
+      (if (Str8 =? s (first (first rows))) #t (self s (rest rows))))))
+
+; Every name the program MENTIONS, as text.
+(def %py-mentioned
+  (fn (self toks acc)
+    (if (null? toks)
+      (List reverse acc)
+      (let ((t (first toks)))
+        (if (eq? (%py-tag t) (lit tok-name))
+          (self (rest toks) (pair (%py-val t) acc))
+          (self (rest toks) acc))))))
+
+; Every name the program BINDS: assignment targets, def names, parameters.
+(def %py-bound-names
+  (fn (self toks acc)
+    (if (null? toks)
+      (List reverse acc)
+      (let ((t (first toks)))
+        (if (%py-name-is? t "def")
+          ; the def name, then its parameters up to the closing paren
+          (let ((n (if (null? (rest toks)) () (first (rest toks)))))
+            (self (rest (rest toks))
+              (if (eq? (%py-tag n) (lit tok-name)) (pair (%py-val n) acc) acc)))
+          (if (if (eq? (%py-tag t) (lit tok-name))
+                (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "=")
+                #f)
+            (self (rest toks) (pair (%py-val t) acc))
+            (self (rest toks) acc)))))))
+
 (def %py-assign-targets
   (fn (self toks acc)
     (if (null? toks)
@@ -539,12 +588,73 @@
         (self seen (rest syms) acc)
         (self (pair (first syms) seen) (rest syms) (pair (first syms) acc))))))
 
+; A name mentioned but never bound gets a shim that raises PYTHON's error.
+;
+; Without this the program dies on `Unbound SYMBOL 'py-int` -- and `py-int` is
+; not in anyone's source. The prefix exists so Python's names cannot resolve to
+; x's, which it must; it has no business appearing in a diagnostic. The shim
+; puts the programmer's own spelling back.
+(def %py-undefined
+  (fn (self names bound acc)
+    (if (null? names)
+      (List reverse acc)
+      (let ((n (first names)))
+        (if (if (%py-str-seen? n bound) #t
+              (if (%py-str-seen? n %py-keywords) #t
+                (%py-builtin-name? n %py-builtins)))
+          (self (rest names) bound acc)
+          (if (%py-str-seen? n (%py-names-of acc))
+            (self (rest names) bound acc)
+            (self (rest names) bound (pair n acc))))))))
+
+(def %py-names-of
+  (fn (self acc) (if (null? acc) () (pair (first acc) (self (rest acc))))))
+
+(def %py-shims
+  (fn (self names acc)
+    (if (null? names)
+      (List reverse acc)
+      (self (rest names)
+        (pair
+          (list (lit def) (%py-name->sym (first names))
+            (list (lit fn) (list (lit _))
+              (list (lit Err) (lit raise) (list (lit lit) (lit name))
+                (Str8 append (Str8 append "name '" (first names))
+                  "' is not defined")
+                ())))
+          acc)))))
+
 (def python-parse
   (fn (_ src)
     (def %toks (python-lex src))
     (def %targets (%py-dedupe () (%py-assign-targets %toks ()) ()))
     (def %body (first (%py-stmts %toks ())))
-    (%py-append (%py-decls %targets ()) %body)))
+    (def %undef
+      (%py-undefined (%py-mentioned %toks ())
+                     (%py-append (%py-bound-names %toks ()) (%py-param-names %toks ()))
+                     ()))
+    (%py-append (%py-shims %undef ())
+      (%py-append (%py-decls %targets ()) %body))))
+
+; Parameter names: any name between a def's parens.
+(def %py-param-names
+  (fn (self toks acc)
+    (if (null? toks)
+      (List reverse acc)
+      (if (%py-name-is? (first toks) "def")
+        (let ((r (%py-param-span (rest (rest toks)) ())))
+          (self (first r) (%py-append (rest r) acc)))
+        (self (rest toks) acc)))))
+
+(def %py-param-span
+  (fn (self toks acc)
+    (if (null? toks)
+      (pair toks acc)
+      (if (%py-op-is? (first toks) ")")
+        (pair (rest toks) acc)
+        (if (eq? (%py-tag (first toks)) (lit tok-name))
+          (self (rest toks) (pair (%py-val (first toks)) acc))
+          (self (rest toks) acc))))))
 
 (def %py-decls
   (fn (self syms acc)
