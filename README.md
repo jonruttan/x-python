@@ -85,9 +85,17 @@ the digest in `tools/conformance/upstream.pin.xon`; `tests/conformance/` is
 derived from it and from whichever CPython was the oracle. `make clean` drops
 both.
 
+## Design notes
+
+- [Python values want x's type system, not tagged pairs](docs/values-on-the-type-system.md)
+  — why containers are tagged pairs today, the constraint that decides how they
+  stop being (`make-instance` resolves the type in the *calling* base), and the
+  shape that follows. Designed and proved, not built.
+
 ## Layout
 
 ```
+docs/                        design notes
 lang.xon                     name, dialect, release pairing
 run.x                        THE entry -- and it knows no paths at all
 python/base.x                    the language (today: a stub, and a loud one)
