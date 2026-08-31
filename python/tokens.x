@@ -47,7 +47,7 @@
 (provide python/tokens
   python-tokenize %py-base
   mk-tok-name mk-tok-number mk-tok-string mk-tok-op mk-tok-newline
-  mk-tok-group)
+  mk-tok-group mk-tok-block)
 
 ; (Base make-tok) is the isolated, type-free base -- 2024's make-token-base.
 (import x/reader/indent)
@@ -75,8 +75,10 @@
 (def mk-tok-op      (fn (_ s) (list (lit tok-op) s)))
 ; A bracketed run, already nested by the reader: (tok-group "[" (tok ...)).
 (def mk-tok-group   (fn (_ open elems) (list (lit tok-group) open elems)))
+; An indented run, already nested by the reader: (tok-block (tok ...)).
+(def mk-tok-block   (fn (_ elems) (list (lit tok-block) elems)))
 ; A newline carries the column of the line it opens.
-(def mk-tok-newline (fn (_ col) (list (lit tok-newline) col)))
+(def mk-tok-newline (fn (_) (list (lit tok-newline))))
 
 ; --- Character classes -------------------------------------------------------
 ; Nested if, never `or`: operatives expand per evaluation and these run per
@@ -141,12 +143,133 @@
 ; this bundle instead of three.  Tab stop 8: SRFI-110's answer and CPython's.
 (def %py-indent-scan (prim-ref (lit indent) (lit scan)))
 
+; --- Blocks are READ, not spliced -------------------------------------------
+;
+; An indented run is a region the way a bracket is, so it is read the same way:
+; PY-NL measures the column, asks the shared Indent stack what opened or closed,
+; and on an `open` recurses through the engine's reader to collect the block.
+; The result is a nested (tok-block (tok ...)) rather than INDENT/DEDENT markers
+; spliced into a flat stream by a pass afterwards.
+;
+; ONE READ RETURNS ONE TOKEN, and a single dedent can close several blocks.  So
+; the surplus is left in %py-owed for the enclosing block loops to collect: each
+; one, on finding a debt outstanding, ends too.  That counter is the whole
+; reason this works with a protocol that has no way to return two things.
+;
+; Policy -- tab stop, and what an unmatched dedent means -- stays with Indent
+; (x-lang#520), which is what keeps the answer the same across Logo, x-sweet and
+; this bundle.
+(def %py-ind (pair () ()))
+(def %py-owed (pair 0 ()))
+
+; A NEWLINE INSIDE BRACKETS IS NOT LINE STRUCTURE, and the indent stack must
+; never see its column.  The group reader raises this while it collects, so
+; PY-NL can tell the two cases apart -- the depth counter python/indent.x used
+; to keep, moved to where the nesting is actually known and kept to one bit of
+; state rather than a pass-wide walk.
+(def %py-in-group (pair 0 ()))
+
+; A READ HANDLER CANNOT RAISE.  The C reader loop is driving, and an error
+; unwinding out of a handler through it takes the interpreter down rather than
+; reaching a guard -- measured, not assumed: `(guard (e ...) (python-tokenize
+; "a\n    b\n  c"))` died where the old pass raised cleanly, because the old
+; pass was x code driving its own loop.
+;
+; So a bad dedent is CARRIED OUT AS DATA.  Indent still decides -- its default
+; mode is Python's IndentationError, which is the one place Logo, x-sweet and
+; this bundle genuinely disagree -- and the first error it raises is parked
+; here for python-tokenize to re-raise once reading is over and x is driving
+; again.  The error object is kept whole, so the kind and message are the ones
+; Indent chose.
+(def %py-ind-error (pair () ()))
+
+(def %py-ind-reset!
+  (fn (_)
+    (%set-first! %py-ind (Indent make))
+    (%set-first! %py-owed 0)
+    (%set-first! %py-in-group 0)
+    (%set-first! %py-ind-error ())))
+
+; A FLAG, NOT THE ERROR OBJECT.  The caught value arrives NIL here: a raise
+; crossing the C reader boundary reaches the guard, but its payload does not
+; survive the trip -- traced, with the handler printing `<NOTE ()>` where the
+; same guard around a direct `Err raise` prints the error.  So what is recorded
+; is THAT it failed, and python-tokenize builds the error itself.
+;
+; The cost is stated rather than hidden: `feed`'s only documented failure is the
+; unmatched dedent, so synthesising that message is right today -- but if Indent
+; grows a second failure mode, this will report it as the wrong one.
+(def %py-note-ind-error!
+  (fn (_) (%set-first! %py-ind-error #t)))
+
+(def %py-evs-opens?
+  (fn (self evs) (if (null? evs) #f
+    (if (eq? (first evs) (lit open)) #t (self (rest evs))))))
+
+(def %py-evs-closes
+  (fn (self evs n) (if (null? evs) n
+    (self (rest evs) (if (eq? (first evs) (lit close)) (+ n 1) n)))))
+
+(def %py-block-of
+  (fn (_ buffer)
+    (def go
+      (fn (self acc)
+        (let ((v (%py-token-read buffer)))
+          (if (null? v)
+            (mk-tok-block (List reverse acc))
+            (if (eq? v (lit %py-dedent))
+              (mk-tok-block (List reverse acc))
+              ; a nested block may have closed more levels than its own
+              (if (> (first %py-owed) 0)
+                (%seq (%set-first! %py-owed (- (first %py-owed) 1))
+                  (mk-tok-block (List reverse (pair v acc))))
+                (self (pair v acc))))))))
+    (go ())))
+
+; A BLANK OR COMMENT-ONLY LINE IS DISCARDED HERE, where the decision is cheap.
+; The character after the indentation is visible to the ANALYSER -- it is the
+; one that ends the whitespace run -- so a line with nothing on it can be
+; refused before it ever becomes a token.  python/indent.x used to carry a
+; `pending` column for exactly this, deferring the decision until a real token
+; arrived to prove the line was not blank; the reader can just look.
+;
+; A negative score is "matched and discarded", so the line leaves no trace and
+; the indentation stack never sees a column that was not a real line.
+; A BLANK OR COMMENT-ONLY LINE IS A DIFFERENT TYPE, not a discarded PY-NL.
+;
+; DISCARDING IS "MATCHED, WITH NO READ HANDLER" -- that is how PY-WS and
+; PY-COMMENT vanish, and it is why a negative score cannot suppress PY-NL: PY-NL
+; HAS a reader, so it always produces a token whatever the score says.  So the
+; two cases are split into two types that cannot both match: PY-NL rejects a
+; line with nothing on it, and PY-BLANK claims exactly those and has no reader.
+;
+; The character after the indentation is what decides, and the ANALYSER can see
+; it -- it is the one that ends the whitespace run.  python/indent.x used to
+; carry a `pending` column for this, deferring until a real token proved the
+; line was not blank; the reader can just look.
 (def %py-nl-ws ())
 (set! %py-nl-ws
   (fn (_ buffer score chr)
     (if (if (= chr #\space) #t (= chr #\tab))
       %py-nl-ws
-      (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
+      (if (if (= chr #\newline) #t (= chr 35))
+        ()
+        (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+
+(def %py-blank-ws ())
+(set! %py-blank-ws
+  (fn (_ buffer score chr)
+    (if (if (= chr #\space) #t (= chr #\tab))
+      %py-blank-ws
+      (if (if (= chr #\newline) #t (= chr 35))
+        (%seq (%buffer-unread buffer) (%score-set score (- 0 1) buffer))
+        ()))))
+
+(Base make-type %py-base "PY-BLANK"
+  (list
+    (pair (lit analyse)
+      (fn (_ buffer score chr)
+        (if (= chr #\newline) %py-blank-ws ())))))
 
 (Base make-type %py-base "PY-NL"
   (list
@@ -157,8 +280,24 @@
       (fn (_ . args)
         ; Index 1 skips the newline itself; scan hands back the column and the
         ; end index from one walk, and the column is the half wanted here.
-        (mk-tok-newline
-          (first (%py-indent-scan (%buffer-token (first args)) 1 8)))))))
+        (def buffer (first args))
+        (if (> (first %py-in-group) 0)
+          ; inside brackets: whitespace, and the group reader drops it
+          (mk-tok-newline)
+          (do
+        (def col (first (%py-indent-scan (%buffer-token buffer) 1 8)))
+        (def evs
+          (guard (_ (%seq (%py-note-ind-error!) (list (lit same))))
+            ((first %py-ind) feed col)))
+        (if (%py-evs-opens? evs)
+          (%py-block-of buffer)
+          (let ((n (%py-evs-closes evs 0)))
+            (if (> n 0)
+              (%seq (%set-first! %py-owed (- n 1)) (lit %py-dedent))
+              ; NO COLUMN ON THE TOKEN.  It carried one for the pass that used
+              ; to consume it; the block structure now says everything the
+              ; column said, so emitting it would be dead data.
+              (mk-tok-newline))))))))))
 
 ; --- PY-NAME: identifiers and keywords ---------------------------------------
 ; Keywords are NOT distinguished here.  `if` is a name to the tokenizer and a
@@ -393,9 +532,19 @@
 ; ending in a name, a number or an operator loses its last token.  Both of the
 ; platform's own call sites append a delimiter for exactly this reason.  A
 ; space is safe: PY-WS discards it.
+; The indentation stack is per-RUN state, so it is reset here rather than at
+; load: two tokenize calls in one process must not share a stack.
 (def python-tokenize
   (fn (_ input)
-    (%py-token-read-string (Base raw-of %py-base) (Str8 append input " "))))
+    (%py-ind-reset!)
+    (let ((toks (%py-token-read-string (Base raw-of %py-base)
+                  (Str8 append input " "))))
+      ; Reading is over and x is driving again, so this is where an indentation
+      ; error can finally be raised.
+      (if (null? (first %py-ind-error))
+        toks
+        (Err raise (lit indent)
+          "unindent does not match any outer indentation level" ())))))
 
 ; --- PY-OPEN / PY-CLOSE: brackets are READ AS GROUPS -------------------------
 ;
@@ -437,6 +586,7 @@
       (fn (_ . args)
         (def buffer (first args))
         (def open (%buffer-token buffer))
+        (%set-first! %py-in-group (+ (first %py-in-group) 1))
         (def go
           (fn (self acc)
             (let ((v (%py-token-read buffer)))
@@ -451,4 +601,6 @@
                   (if (%py-group-nl? v)
                     (self acc)
                     (self (pair v acc))))))))
-        (mk-tok-group open (go ()))))))
+        (let ((elems (go ())))
+          (%set-first! %py-in-group (- (first %py-in-group) 1))
+          (mk-tok-group open elems))))))
