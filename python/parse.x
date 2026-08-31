@@ -229,9 +229,9 @@
     (def %a (%py-atom toks))
     (def %go
       (fn (self acc more)
-        (if (%py-op-is? (if (null? more) () (first more)) "(")
-          (let ((r (%py-args (rest more) ())))
-            (self (pair acc (first r)) (rest r)))
+        (if (%py-group? (if (null? more) () (first more)) "(")
+          (self (pair acc (%py-group-exprs (%py-group-of (first more))))
+                (rest more))
           ; Attribute access binds like a call, and yields a VALUE -- the
           ; bound method -- so `f = x.append` works and a following `(` simply
           ; applies it.
@@ -242,27 +242,85 @@
                 (self (list (lit %py-getattr) acc (%py-val n))
                       (rest (rest more)))))
           ; Subscript binds like a call: left-associative, same level.
-          (if (%py-op-is? (if (null? more) () (first more)) "[")
-            (let ((r (%py-comparison (rest more))))
-              (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) "]")
-                (self (list (lit %py-index) acc (first r)) (rest (rest r)))
-                (Err raise (lit syntax) "expected ] after a subscript" ())))
+          (if (%py-group? (if (null? more) () (first more)) "[")
+            (self
+              (list (lit %py-index) acc
+                (%py-expr-of (%py-group-of (first more))))
+              (rest more))
             (pair acc more))))))
     (%go (first %a) (rest %a))))
 
-; Tuple elements after the first comma, up to the closing paren.  A trailing
-; comma is legal -- `(1,)` needs it and `(1, 2,)` is allowed.
-(def %py-tuple-rest ())
-(set! %py-tuple-rest
-  (fn (self toks acc)
-    (if (%py-op-is? (if (null? toks) () (first toks)) ")")
-      (pair (List reverse acc) (rest toks))
+; --- Groups ------------------------------------------------------------------
+;
+; A BRACKETED RUN ARRIVES ALREADY NESTED.  python/tokens.x reads it through the
+; engine's own reader loop, so it is one token -- (tok-group "[" (tok ...)) --
+; whose contents are a complete token list ending exactly where the bracket did.
+;
+; Everything below is smaller because of that.  There is no closing bracket to
+; find, so no "expected , or ] in list literal" scan.  And splitting on commas
+; needs NO DEPTH COUNT, because an inner group is a single token at this level:
+; the nesting the old scanners had to rediscover is already the shape.
+
+(def %py-group?
+  (fn (_ t o)
+    (if (pair? t)
+      (if (eq? (first t) (lit tok-group)) (Str8 =? (first (rest t)) o) #f)
+      #f)))
+
+(def %py-group-of (fn (_ t) (first (rest (rest t)))))
+
+(def %py-comma-split
+  (fn (self toks cur acc)
+    (if (null? toks)
+      (List reverse (if (null? cur) acc (pair (List reverse cur) acc)))
+      (if (%py-op-is? (first toks) ",")
+        (self (rest toks) () (if (null? cur) acc (pair (List reverse cur) acc)))
+        (self (rest toks) (pair (first toks) cur) acc)))))
+
+(def %py-has-comma?
+  (fn (self toks)
+    (if (null? toks)
+      #f
+      (if (%py-op-is? (first toks) ",") #t (self (rest toks))))))
+
+; One complete expression from a complete token list -- anything left over is a
+; syntax error HERE, where the bracket that bounded it is known.
+(def %py-expr-of
+  (fn (_ toks)
+    (if (null? toks)
+      (Err raise (lit syntax) "expected an expression" ())
       (let ((r (%py-comparison toks)))
-        (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ",")
-          (self (rest (rest r)) (pair (first r) acc))
-          (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ")")
-            (pair (List reverse (pair (first r) acc)) (rest (rest r)))
-            (Err raise (lit syntax) "expected , or ) in a tuple" ())))))))
+        (if (null? (rest r))
+          (first r)
+          (Err raise (lit syntax) "unexpected token after an expression" ()))))))
+
+(def %py-exprs-of
+  (fn (self parts acc)
+    (if (null? parts)
+      (List reverse acc)
+      (self (rest parts) (pair (%py-expr-of (first parts)) acc)))))
+
+(def %py-group-exprs
+  (fn (_ elems) (%py-exprs-of (%py-comma-split elems () ()) ())))
+
+; A dict entry: KEY : VALUE, split at the first colon of one comma-part.
+(def %py-colon-split
+  (fn (self toks acc)
+    (if (null? toks)
+      (Err raise (lit syntax) "expected : after a dict key" ())
+      (if (%py-op-is? (first toks) ":")
+        (pair (List reverse acc) (rest toks))
+        (self (rest toks) (pair (first toks) acc))))))
+
+(def %py-entries-of
+  (fn (self parts acc)
+    (if (null? parts)
+      (List reverse acc)
+      (let ((kv (%py-colon-split (first parts) ())))
+        (self (rest parts)
+          (pair
+            (list (lit pair) (%py-expr-of (first kv)) (%py-expr-of (rest kv)))
+            acc))))))
 
 ; AN EXPRESSION LIST IS A BARE TUPLE.  `x = 1, 2` and `return 1, 2` need no
 ; parens in Python, and this is the rule that says so -- one comparison, and if
@@ -289,16 +347,7 @@
 
 ; Arguments up to the closing paren.  A trailing comma is legal Python and costs
 ; one branch to accept.
-(def %py-args
-  (fn (self toks acc)
-    (if (%py-op-is? (if (null? toks) () (first toks)) ")")
-      (pair (List reverse acc) (rest toks))
-      (let ((r (%py-comparison toks)))
-        (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ",")
-          (self (rest (rest r)) (pair (first r) acc))
-          (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ")")
-            (pair (List reverse (pair (first r) acc)) (rest (rest r)))
-            (Err raise (lit syntax) "expected , or ) in argument list" ())))))))
+
 
 (set! %py-atom
   (fn (_ toks)
@@ -314,60 +363,30 @@
             (pair (%py-val t) (rest toks))
             (if (eq? (%py-tag t) (lit tok-name))
               (pair (%py-name->sym (%py-val t)) (rest toks))
-              (if (%py-op-is? t "{")
-                (let ((r (%py-entries (rest toks) ())))
-                  (pair (pair (lit %py-mkdict) (first r)) (rest r)))
-              (if (%py-op-is? t "[")
-                (let ((r (%py-elems (rest toks) ())))
-                  (pair (pair (lit %py-mklist) (first r)) (rest r)))
-              (if (%py-op-is? t "(")
+              (if (%py-group? t "{")
+                (pair
+                  (pair (lit %py-mkdict)
+                    (%py-entries-of (%py-comma-split (%py-group-of t) () ()) ()))
+                  (rest toks))
+              (if (%py-group? t "[")
+                (pair
+                  (pair (lit %py-mklist) (%py-group-exprs (%py-group-of t)))
+                  (rest toks))
+              (if (%py-group? t "(")
                 ; THE COMMA MAKES A TUPLE, NOT THE PARENS.  `(x)` is just x in
                 ; Python, so a one-element tuple is spelled `(x,)` and the
-                ; trailing comma is load-bearing rather than decorative.
-                (if (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) ")")
-                  (pair (list (lit %py-mktuple)) (rest (rest toks)))
-                  (let ((r (%py-comparison (rest toks))))
-                    (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ",")
-                      (let ((m (%py-tuple-rest (rest (rest r)) (list (first r)))))
-                        (pair (pair (lit %py-mktuple) (first m)) (rest m)))
-                      (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ")")
-                        (pair (first r) (rest (rest r)))
-                        (Err raise (lit syntax) "expected )" ())))))
+                ; trailing comma is load-bearing rather than decorative -- which
+                ; is why this asks whether a comma was PRESENT, not how many
+                ; parts the split produced.
+                (let ((elems (%py-group-of t)))
+                  (if (null? elems)
+                    (pair (list (lit %py-mktuple)) (rest toks))
+                    (if (%py-has-comma? elems)
+                      (pair
+                        (pair (lit %py-mktuple) (%py-group-exprs elems))
+                        (rest toks))
+                      (pair (%py-expr-of elems) (rest toks)))))
                 (Err raise (lit syntax) "unexpected token in expression" t)))))))))))
-
-; Entries of a dict literal: KEY : VALUE, up to the closing brace. Each entry
-; becomes (pair KEY VALUE) so the runtime holds an association list in insertion
-; order -- which is the printed order, and therefore part of the answer.
-;
-; `{}` is an empty DICT, not an empty set. Python spells the empty set as set(),
-; which is not implemented, so there is no ambiguity to resolve here.
-(def %py-entries
-  (fn (self toks acc)
-    (if (%py-op-is? (if (null? toks) () (first toks)) "}")
-      (pair (List reverse acc) (rest toks))
-      (let ((k (%py-comparison toks)))
-        (if (not (%py-op-is? (if (null? (rest k)) () (first (rest k))) ":"))
-          (Err raise (lit syntax) "expected : after a dict key" ())
-          (let ((v (%py-comparison (rest (rest k)))))
-            (let ((e (list (lit pair) (first k) (first v))))
-              (if (%py-op-is? (if (null? (rest v)) () (first (rest v))) ",")
-                (self (rest (rest v)) (pair e acc))
-                (if (%py-op-is? (if (null? (rest v)) () (first (rest v))) "}")
-                  (pair (List reverse (pair e acc)) (rest (rest v)))
-                  (Err raise (lit syntax) "expected , or } in dict literal" ()))))))))))
-
-; Elements of a list literal, up to the closing bracket.  A trailing comma is
-; legal Python and costs one branch.
-(def %py-elems
-  (fn (self toks acc)
-    (if (%py-op-is? (if (null? toks) () (first toks)) "]")
-      (pair (List reverse acc) (rest toks))
-      (let ((r (%py-comparison toks)))
-        (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ",")
-          (self (rest (rest r)) (pair (first r) acc))
-          (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) "]")
-            (pair (List reverse (pair (first r) acc)) (rest (rest r)))
-            (Err raise (lit syntax) "expected , or ] in list literal" ())))))))
 
 ; A Python name becomes an x symbol, EXCEPT the builtins that have a runtime
 ; function -- `print` is the only one so far.  A name table rather than a
@@ -647,16 +666,18 @@
       (let ((b (%py-block toks)))
         (pair (list matcher () (first b)) (rest b))))))
 
-(def %py-except-names
+; The names inside a group, commas ignored -- shared by `except (A, B)` and a
+; def's parameter list, which are the same shape once the bracket is a group.
+(def %py-group-names
   (fn (self toks acc)
-    (if (%py-op-is? (if (null? toks) () (first toks)) ")")
-      (pair (List reverse acc) (rest toks))
+    (if (null? toks)
+      (List reverse acc)
       (let ((t (first toks)))
         (if (%py-op-is? t ",")
           (self (rest toks) acc)
           (if (eq? (%py-tag t) (lit tok-name))
             (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
-            (Err raise (lit syntax) "expected an exception name" ())))))))
+            (Err raise (lit syntax) "expected a name" t)))))))
 
 (def %py-except-clause
   (fn (_ toks)
@@ -665,13 +686,12 @@
       ; a bare `except:` catches everything
       (let ((b (%py-block toks)))
         (pair (list () () (first b)) (rest b)))
-      (if (%py-op-is? (if (null? toks) () (first toks)) "(")
+      (if (%py-group? (if (null? toks) () (first toks)) "(")
         ; `except (A, B):` -- a tuple of classes, any of which matches
-        (let ((ns (%py-except-names (rest toks) ())))
-          (%py-except-tail
-            (list (lit %py-exc-match-any) (lit %py-exc)
-              (pair (lit list) (first ns)))
-            (rest ns)))
+        (%py-except-tail
+          (list (lit %py-exc-match-any) (lit %py-exc)
+            (pair (lit list) (%py-group-names (%py-group-of (first toks)) ())))
+          (rest toks))
         (let ((n (first toks)))
           (if (not (eq? (%py-tag n) (lit tok-name)))
             (Err raise (lit syntax) "expected an exception name after except" ())
@@ -758,20 +778,15 @@
           ; does -- and is why an undefined name still answers NameError with no
           ; special case: it is bound to a shim that raises when called.
           ; `raise X` with no parens instantiates it too, as Python does.
-          (if (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "(")
-            ; `raise X()` -- no argument, so no expression to parse
-            (if (%py-op-is?
-                  (if (null? (rest (rest toks))) () (first (rest (rest toks)))) ")")
+          (if (%py-group? (if (null? (rest toks)) () (first (rest toks))) "(")
+            (let ((g (%py-group-of (first (rest toks)))))
               (pair
-                (list (lit %py-raise) (list (%py-name->sym (%py-val n))))
-                (rest (rest (rest toks))))
-            (let ((r (%py-comparison (rest (rest toks)))))
-              (if (not (%py-op-is? (if (null? (rest r)) () (first (rest r))) ")"))
-                (Err raise (lit syntax) "expected )" ())
-                (pair
-                  (list (lit %py-raise)
-                    (list (%py-name->sym (%py-val n)) (first r)))
-                  (rest (rest r))))))
+                (list (lit %py-raise)
+                  (if (null? g)
+                    ; `raise X()` -- no argument
+                    (list (%py-name->sym (%py-val n)))
+                    (list (%py-name->sym (%py-val n)) (%py-expr-of g))))
+                (rest (rest toks))))
             (pair
               (list (lit %py-raise) (list (%py-name->sym (%py-val n))))
               (rest toks))))))))
@@ -826,16 +841,15 @@
       (if (not (eq? (%py-tag n) (lit tok-name)))
         (Err raise (lit syntax) "expected a class name after class" ())
         (let ((after (rest toks)))
-          (if (%py-op-is? (if (null? after) () (first after)) "(")
+          (if (%py-group? (if (null? after) () (first after)) "(")
             ; single inheritance: `class Dog(Animal):`
-            (let ((b (if (null? (rest after)) () (first (rest after)))))
+            (let ((b (let ((g (%py-group-of (first after))))
+                       (if (null? g) () (first g)))))
               (if (not (eq? (%py-tag b) (lit tok-name)))
                 (Err raise (lit syntax) "expected a base class name" ())
-                (if (not (%py-op-is?
-                           (if (null? (rest (rest after))) ()
-                             (first (rest (rest after)))) ")"))
-                  (Err raise (lit syntax) "expected ) after a base class" ())
-                  (let ((r (%py-class-block (rest (rest (rest after))))))
+                (if #f
+                  ()
+                  (let ((r (%py-class-block (rest after))))
                     (pair
                       (list (lit set!) (%py-name->sym (%py-val n))
                         (list (lit %py-mkclass) (%py-val n)
@@ -936,26 +950,17 @@
             (pair () t)))))))
 
 ; `def NAME ( params ) : BLOCK`
-(def %py-params
-  (fn (self toks acc)
-    (if (%py-op-is? (if (null? toks) () (first toks)) ")")
-      (pair (List reverse acc) (rest toks))
-      (let ((t (first toks)))
-        (if (eq? (%py-tag t) (lit tok-name))
-          (let ((more (rest toks)))
-            (if (%py-op-is? (if (null? more) () (first more)) ",")
-              (self (rest more) (pair (%py-name->sym (%py-val t)) acc))
-              (self more (pair (%py-name->sym (%py-val t)) acc))))
-          (Err raise (lit syntax) "expected a parameter name" t))))))
+
 
 (def %py-def
   (fn (_ toks)
     (let ((name (first toks)))
       (if (not (eq? (%py-tag name) (lit tok-name)))
         (Err raise (lit syntax) "expected a function name after def" name)
-        (if (not (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "("))
+        (if (not (%py-group? (if (null? (rest toks)) () (first (rest toks))) "("))
           (Err raise (lit syntax) "expected ( after a function name" ())
-          (let ((p (%py-params (rest (rest toks)) ())))
+          (let ((p (pair (%py-group-names (%py-group-of (first (rest toks))) ())
+                         (rest (rest toks)))))
             (let ((b (%py-block (rest p))))
               ; A FUNCTION'S ASSIGNMENTS ARE ITS OWN.  The module-level scan
               ; skips def bodies, so their targets are hoisted HERE instead --
@@ -1061,6 +1066,9 @@
       (if (Str8 =? s (first (first rows))) #t (self s (rest rows))))))
 
 ; Every name the program MENTIONS, as text.
+; DESCENDS INTO GROUPS.  A bracketed run is one token now, so a scan that only
+; walked the top level would never see `x` in `f(x)` -- and the undefined-name
+; check would shim a name the program plainly uses.
 (def %py-mentioned
   (fn (self toks acc)
     (if (null? toks)
@@ -1068,7 +1076,9 @@
       (let ((t (first toks)))
         (if (eq? (%py-tag t) (lit tok-name))
           (self (rest toks) (pair (%py-val t) acc))
-          (self (rest toks) acc))))))
+          (if (eq? (%py-tag t) (lit tok-group))
+            (self (rest toks) (%py-append (List reverse (self (%py-group-of t) ())) acc))
+            (self (rest toks) acc)))))))
 
 ; Every name the program BINDS: assignment targets, def names, parameters.
 (def %py-bound-names
@@ -1238,11 +1248,17 @@
   (fn (self toks acc)
     (if (null? toks)
       (pair toks acc)
-      (if (%py-op-is? (first toks) ")")
-        (pair (rest toks) acc)
-        (if (eq? (%py-tag (first toks)) (lit tok-name))
-          (self (rest toks) (pair (%py-val (first toks)) acc))
-          (self (rest toks) acc))))))
+      (if (eq? (%py-tag (first toks)) (lit tok-group))
+        (pair (rest toks) (%py-append (%py-raw-names (%py-group-of (first toks)) ()) acc))
+        (self (rest toks) acc)))))
+
+(def %py-raw-names
+  (fn (self toks acc)
+    (if (null? toks)
+      (List reverse acc)
+      (if (eq? (%py-tag (first toks)) (lit tok-name))
+        (self (rest toks) (pair (%py-val (first toks)) acc))
+        (self (rest toks) acc)))))
 
 (def %py-decls
   (fn (self syms acc)

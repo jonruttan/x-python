@@ -46,7 +46,8 @@
 
 (provide python/tokens
   python-tokenize %py-base
-  mk-tok-name mk-tok-number mk-tok-string mk-tok-op mk-tok-newline)
+  mk-tok-name mk-tok-number mk-tok-string mk-tok-op mk-tok-newline
+  mk-tok-group)
 
 ; (Base make-tok) is the isolated, type-free base -- 2024's make-token-base.
 (import x/reader/indent)
@@ -72,6 +73,8 @@
 (def mk-tok-number  (fn (_ s) (list (lit tok-number) s)))
 (def mk-tok-string  (fn (_ s) (list (lit tok-string) s)))
 (def mk-tok-op      (fn (_ s) (list (lit tok-op) s)))
+; A bracketed run, already nested by the reader: (tok-group "[" (tok ...)).
+(def mk-tok-group   (fn (_ open elems) (list (lit tok-group) open elems)))
 ; A newline carries the column of the line it opens.
 (def mk-tok-newline (fn (_ col) (list (lit tok-newline) col)))
 
@@ -324,10 +327,9 @@
   (fn (_ c)
     (if (= c 43) #t (if (= c 45) #t (if (= c 42) #t (if (= c 47) #t
       (if (= c 37) #t (if (= c 61) #t (if (= c 60) #t (if (= c 62) #t
-        (if (= c 33) #t (if (= c 40) #t (if (= c 41) #t (if (= c 91) #t
-          (if (= c 93) #t (if (= c 123) #t (if (= c 125) #t
+        (if (= c 33) #t
             (if (= c 44) #t (if (= c 58) #t (if (= c 46) #t
-              (= c 59)))))))))))))))))))))
+              (= c 59)))))))))))))))
 
 ; Which pairs extend: == != <= >= // ** and += -= *= /= %=
 (def %py-op-pair?
@@ -394,3 +396,59 @@
 (def python-tokenize
   (fn (_ input)
     (%py-token-read-string (Base raw-of %py-base) (Str8 append input " "))))
+
+; --- PY-OPEN / PY-CLOSE: brackets are READ AS GROUPS -------------------------
+;
+; THE C READER DOES THE NESTING.  `(prim-ref 'tok 'read)` reads the next
+; expression from the same buffer, and a `read` handler may call it -- so an
+; opening bracket collects its own contents by recursing through the engine's
+; own reader loop rather than by a matching pass in x afterwards.  This is what
+; x-sweet's curly reader does, and it is why none of the other bundles has a
+; parser that scans for a closing bracket.
+;
+; Two things fall out.  Line structure inside brackets stops being a special
+; case: a newline inside a group is simply inside the group, so the bracket
+; DEPTH COUNTER python/indent.x used to carry is gone.  And an unclosed bracket
+; ends at EOF with what it has, which the parser reports -- the lexer does not
+; need to know about matching, only about nesting.
+
+(def %py-token-read (prim-ref (lit tok) (lit read)))
+
+(def %py-open? (fn (_ c) (if (= c 40) #t (if (= c 91) #t (= c 123)))))
+(def %py-close? (fn (_ c) (if (= c 41) #t (if (= c 93) #t (= c 125)))))
+
+(Base make-type %py-base "PY-CLOSE"
+  (list
+    (pair (lit analyse)
+      (fn (_ buffer score chr)
+        (if (%py-close? chr) (%score-set score 1 buffer) ())))
+    (pair (lit read)
+      (fn (_ . args) (list (lit tok-close) (%buffer-token (first args)))))))
+
+(def %py-group-close? (fn (_ t) (if (pair? t) (eq? (first t) (lit tok-close)) #f)))
+(def %py-group-nl? (fn (_ t) (if (pair? t) (eq? (first t) (lit tok-newline)) #f)))
+
+(Base make-type %py-base "PY-OPEN"
+  (list
+    (pair (lit analyse)
+      (fn (_ buffer score chr)
+        (if (%py-open? chr) (%score-set score 1 buffer) ())))
+    (pair (lit read)
+      (fn (_ . args)
+        (def buffer (first args))
+        (def open (%buffer-token buffer))
+        (def go
+          (fn (self acc)
+            (let ((v (%py-token-read buffer)))
+              ; EOF inside a bracket: give back what there is and let the parser
+              ; say so.  A lexer that raised here would report the wrong place.
+              (if (null? v)
+                (List reverse acc)
+                (if (%py-group-close? v)
+                  (List reverse acc)
+                  ; A newline inside brackets is not line structure, it is
+                  ; whitespace -- which used to need a depth counter to know.
+                  (if (%py-group-nl? v)
+                    (self acc)
+                    (self (pair v acc))))))))
+        (mk-tok-group open (go ()))))))

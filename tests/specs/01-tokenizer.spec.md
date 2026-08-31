@@ -224,7 +224,7 @@ as two divisions, which is not an error — it is different arithmetic.
 (%seq (write (python-tokenize "print('hi')")) (newline))
 ```
 ---
-    (('tok-name "print") ('tok-op "(") ('tok-string "hi") ('tok-op ")"))
+    (('tok-name "print") ('tok-group "(" (('tok-string "hi"))))
 
 ### two lines
 
@@ -240,4 +240,4 @@ as two divisions, which is not an error — it is different arithmetic.
 (%seq (write (python-tokenize "def f(x):")) (newline))
 ```
 ---
-    (('tok-name "def") ('tok-name "f") ('tok-op "(") ('tok-name "x") ('tok-op ")") ('tok-op ":"))
+    (('tok-name "def") ('tok-name "f") ('tok-group "(" (('tok-name "x"))) ('tok-op ":"))

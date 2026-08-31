@@ -101,13 +101,22 @@ treats it.
 
 ## lines brackets
 
+A newline inside brackets is not line structure — it is whitespace. This pass
+used to carry a bracket DEPTH COUNTER to know when it was inside them.
+
+It does not any more. python/tokens.x reads a bracketed run through the engine's
+own reader loop, so it arrives as ONE token with its contents nested inside, and
+a newline within it never reaches this pass at all. These cases are the same
+cases; what changed is that the nesting is now the shape rather than something
+rediscovered by counting.
+
 ### a newline inside parens is not line structure
 
 ```python
 (%seq (write (python-lex "f(\n  1\n)")) (newline))
 ```
 ---
-    (('tok-name "f") ('tok-op "(") ('tok-number "1") ('tok-op ")"))
+    (('tok-name "f") ('tok-group "(" (('tok-number "1"))))
 
 ### a continuation line opens no block
 
@@ -118,7 +127,7 @@ reaches the indenter.
 (%seq (write (python-lex "a = [\n      1,\n  2]\nb")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-op "=") ('tok-op "[") ('tok-number "1") ('tok-op ",") ('tok-number "2") ('tok-op "]") ('tok-newline) ('tok-name "b"))
+    (('tok-name "a") ('tok-op "=") ('tok-group "[" (('tok-number "1") ('tok-op ",") ('tok-number "2"))) ('tok-newline) ('tok-name "b"))
 
 ### line structure resumes after the brackets close
 
@@ -126,7 +135,7 @@ reaches the indenter.
 (%seq (write (python-lex "f(\n1)\n  x")) (newline))
 ```
 ---
-    (('tok-name "f") ('tok-op "(") ('tok-number "1") ('tok-op ")") ('tok-newline) ('tok-indent) ('tok-name "x") ('tok-dedent))
+    (('tok-name "f") ('tok-group "(" (('tok-number "1"))) ('tok-newline) ('tok-indent) ('tok-name "x") ('tok-dedent))
 
 ## lines errors
 
@@ -150,4 +159,4 @@ and `(Indent make)`'s default is Python's answer.
 (%seq (write (python-lex "def f():\n    return 1\nf()")) (newline))
 ```
 ---
-    (('tok-name "def") ('tok-name "f") ('tok-op "(") ('tok-op ")") ('tok-op ":") ('tok-newline) ('tok-indent) ('tok-name "return") ('tok-number "1") ('tok-newline) ('tok-dedent) ('tok-name "f") ('tok-op "(") ('tok-op ")"))
+    (('tok-name "def") ('tok-name "f") ('tok-group "(" ()) ('tok-op ":") ('tok-newline) ('tok-indent) ('tok-name "return") ('tok-number "1") ('tok-newline) ('tok-dedent) ('tok-name "f") ('tok-group "(" ()))
