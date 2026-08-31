@@ -414,6 +414,10 @@
         (list "None"  ())
         (list "len"   (lit %py-len))
         (list "range" (lit %py-range))
+        (list "str"     (lit %py-str))
+        (list "repr"    (lit %py-repr-of))
+        (list "list"    (lit %py-mklist-of))
+        (list "hasattr" (lit %py-hasattr))
         ; The builtin exceptions are ordinary names bound to ordinary class
         ; values, so `except ValueError` and `except MyError` take one path.
         (list "Exception"         (lit %py-exc-Exception))

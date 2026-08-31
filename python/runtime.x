@@ -36,6 +36,7 @@
   %py-range %py-iter-elems %py-callcc
   %py-raise %py-exc-match %py-exc-match-any
   %py-mkclass %py-setattr %py-super
+  %py-str %py-repr-of %py-mklist-of %py-hasattr
   %py-exc-Exception %py-exc-ArithmeticError %py-exc-LookupError
   %py-exc-ZeroDivisionError %py-exc-IndexError %py-exc-KeyError
   %py-exc-AttributeError %py-exc-NameError %py-exc-TypeError
@@ -748,3 +749,41 @@
                 (Str8 append "'super' object has no attribute '" name) "'")
               ())
             (%py-bind-method m (%py-super-self sup))))))))
+
+; --- Builtins that render ----------------------------------------------------
+;
+; `str` and `repr` need a value AS A STRING, and %py-write only emits -- the
+; comment above it says so, and says why: rendering a number would need a
+; number-to-string conversion this layer does not have.
+;
+; It does not need one.  `(prim-ref 'io 'write-to-str)` runs the writer with its
+; sink redirected into a string, so a container's write handler -- and the
+; callback into %py-write it makes for each element -- lands in the string
+; instead of on stdout.  Nested containers come out right for free, because the
+; same handlers do the same work.
+;
+; STRINGS ARE THE EXCEPTION, both ways.  x writes a string with double quotes;
+; Python's repr uses single, and its str uses none at all.  That difference is
+; the whole distinction between the two builtins, so it is stated here rather
+; than pushed into the writer.
+(def %py-write-to-str (prim-ref (lit io) (lit write-to-str)))
+
+(def %py-str
+  (fn (_ v) (if (str? v) v (%py-write-to-str v))))
+
+(def %py-repr-of
+  (fn (_ v)
+    (if (str? v)
+      (Str8 append (Str8 append "'" v) "'")
+      (%py-write-to-str v))))
+
+; `list(x)` takes anything iterable, which is exactly what `for` already asks
+; for -- so it is the same function, wrapped.
+(def %py-mklist-of
+  (fn (_ v) (%py-list-new (%py-iter-elems v))))
+
+; `hasattr` is defined in terms of getattr in Python too: it is "does this
+; raise?", not a separate lookup, so anything reachable by attribute access is
+; reachable here and the two can never disagree.
+(def %py-hasattr
+  (fn (_ o name) (guard (_ #f) (%seq (%py-getattr o name) #t))))
