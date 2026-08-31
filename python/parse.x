@@ -261,6 +261,12 @@
 ; needs NO DEPTH COUNT, because an inner group is a single token at this level:
 ; the nesting the old scanners had to rediscover is already the shape.
 
+(def %py-super-call?
+  (fn (_ toks)
+    (if (%py-name-is? (if (null? toks) () (first toks)) "super")
+      (%py-group? (if (null? (rest toks)) () (first (rest toks))) "(")
+      #f)))
+
 (def %py-group?
   (fn (_ t o)
     (if (pair? t)
@@ -361,6 +367,16 @@
             ; self-evaluating in x, but a form built here is handed to eval!,
             ; and an unquoted string in head position would be called.
             (pair (%py-val t) (rest toks))
+            (if (%py-super-call? toks)
+              ; `super()` -- the group is consumed with the name
+              (if (null? (first %py-current-class))
+                (Err raise (lit syntax) "super() outside a class" ())
+                (if (null? (first %py-current-self))
+                  (Err raise (lit syntax) "super() outside a method" ())
+                  (pair
+                    (list (lit %py-super)
+                      (first %py-current-class) (first %py-current-self))
+                    (rest (rest toks)))))
             (if (eq? (%py-tag t) (lit tok-name))
               (pair (%py-name->sym (%py-val t)) (rest toks))
               (if (%py-group? t "{")
@@ -386,7 +402,7 @@
                         (pair (lit %py-mktuple) (%py-group-exprs elems))
                         (rest toks))
                       (pair (%py-expr-of elems) (rest toks)))))
-                (Err raise (lit syntax) "unexpected token in expression" t)))))))))))
+                (Err raise (lit syntax) "unexpected token in expression" t))))))))))))
 
 ; A Python name becomes an x symbol, EXCEPT the builtins that have a runtime
 ; function -- `print` is the only one so far.  A name table rather than a
@@ -430,6 +446,15 @@
 ; Builtins are the exception, and they are an explicit list rather than a
 ; fallthrough: a name is a builtin because it appears here, never because x
 ; happened to have it.
+; ZERO-ARGUMENT `super()` IS LEXICAL.  It means the class whose body the call is
+; written in, and the object bound to the enclosing method's FIRST parameter --
+; neither of which any run-time value can tell you, which is why CPython gives
+; methods a `__class__` cell instead of deriving it from self.  So the parser
+; carries both, and both are saved and restored rather than assigned, so a class
+; nested in a method or a def nested in a method does not leak its neighbour's.
+(def %py-current-class (pair () ()))
+(def %py-current-self (pair () ()))
+
 (def %py-name->sym
   (fn (_ s)
     (def %look
@@ -867,19 +892,25 @@
                 (Err raise (lit syntax) "expected a base class name" ())
                 (if #f
                   ()
-                  (let ((r (%py-class-block (rest after))))
-                    (pair
-                      (list (lit set!) (%py-name->sym (%py-val n))
-                        (list (lit %py-mkclass) (%py-val n)
-                          (%py-name->sym (%py-val b))
-                          (pair (lit list) (first r))))
-                      (rest r))))))
-            (let ((r (%py-class-block after)))
-              (pair
-                (list (lit set!) (%py-name->sym (%py-val n))
-                  (list (lit %py-mkclass) (%py-val n) ()
-                    (pair (lit list) (first r))))
-                (rest r)))))))))
+                  (let ((outer (first %py-current-class)))
+                    (%set-first! %py-current-class (%py-name->sym (%py-val n)))
+                    (let ((r (%py-class-block (rest after))))
+                      (%set-first! %py-current-class outer)
+                      (pair
+                        (list (lit set!) (%py-name->sym (%py-val n))
+                          (list (lit %py-mkclass) (%py-val n)
+                            (%py-name->sym (%py-val b))
+                            (pair (lit list) (first r))))
+                        (rest r)))))))
+            (let ((outer (first %py-current-class)))
+              (%set-first! %py-current-class (%py-name->sym (%py-val n)))
+              (let ((r (%py-class-block after)))
+                (%set-first! %py-current-class outer)
+                (pair
+                  (list (lit set!) (%py-name->sym (%py-val n))
+                    (list (lit %py-mkclass) (%py-val n) ()
+                      (pair (lit list) (first r))))
+                  (rest r))))))))))
 
 ; --- tuple unpacking ---------------------------------------------------------
 ;
@@ -979,6 +1010,9 @@
           (Err raise (lit syntax) "expected ( after a function name" ())
           (let ((p (pair (%py-group-names (%py-group-of (first (rest toks))) ())
                          (rest (rest toks)))))
+            (let ((outer-self (first %py-current-self)))
+              (%set-first! %py-current-self
+                (if (null? (first p)) () (first (first p))))
             (let ((b (%py-block (rest p))))
               ; A FUNCTION'S ASSIGNMENTS ARE ITS OWN.  The module-level scan
               ; skips def bodies, so their targets are hoisted HERE instead --
@@ -1017,7 +1051,7 @@
                                 (first b)
                                 (list (lit let) (%py-lets locals ()) (first b)))
                               ())))))
-                    (rest b)))))))))))
+                    (%seq (%set-first! %py-current-self outer-self) (rest b)))))))))))))
 
 (def %py-lets
   (fn (self syms acc)
@@ -1253,6 +1287,14 @@
 
 (def python-parse
   (fn (_ src)
+    ; PER-RUN STATE, RESET HERE.  The lexical cells are saved and restored around
+    ; each body, but a parse that RAISES -- a bad class body, a syntax error --
+    ; skips its restore and leaves the cell set for whatever parses next in the
+    ; same process.  Measured: a spec asserting `super() outside a class`
+    ; reported `outside a method`, because an earlier case in the file had died
+    ; inside a class body and left the class behind.
+    (%set-first! %py-current-class ())
+    (%set-first! %py-current-self ())
     (def %toks (python-lex src))
     (def %targets (%py-dedupe () (%py-assign-targets %toks ()) ()))
     (def %body (first (%py-stmts %toks ())))
