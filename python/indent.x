@@ -70,19 +70,12 @@
 ; and a wrong answer is something a spec can catch.
 (def %py-tok-type (fn (_ t) (if (pair? t) (first t) ())))
 
-; Bracket depth.  The closers are not checked against their openers -- a
-; mismatched bracket is a PARSE error with a good message, and a lexer that
-; tries to diagnose it produces a worse one.
-(def %py-depth-delta
-  (fn (_ t)
-    (if (eq? (%py-tok-type t) (lit tok-op))
-      (let ((s (first (rest t))))
-        (if (if (Str8 =? s "(") #t (if (Str8 =? s "[") #t (Str8 =? s "{")))
-          1
-          (if (if (Str8 =? s ")") #t (if (Str8 =? s "]") #t (Str8 =? s "}")))
-            (- 0 1)
-            0)))
-      0)))
+; NO BRACKET DEPTH.  There used to be a counter here, because a newline inside
+; brackets is not line structure and this pass had to know when it was inside
+; them.  python/tokens.x now reads a bracketed run through the engine's own
+; reader loop, so it arrives as ONE token with its contents nested inside -- a
+; newline within it never reaches this pass at all, and the counter that had to
+; rediscover the nesting is gone.
 
 ; feed's events, as tokens.  `same` adds nothing: the line simply continues the
 ; block already open.
@@ -109,26 +102,23 @@
     ; pending: the column of a line that has opened but produced no token yet,
     ; or nil when the current line already has content.
     (def %go
-      (fn (self toks depth pending acc)
+      (fn (self toks pending acc)
         (if (null? toks)
           ; End of input.  Any trailing dedents close what is still open; a
           ; pending blank line at the end contributes nothing.
           (List reverse (%py-events->toks (ind close-all) acc))
           (let ((t (first toks)))
             (if (eq? (%py-tok-type t) (lit tok-newline))
-              (if (> depth 0)
-                ; Inside brackets: not line structure, drop it.
-                (self (rest toks) depth pending acc)
-                ; A new line opens at this column.  Whether the line that just
-                ; ENDED gets a NEWLINE token was already decided when its first
-                ; token arrived; a line that never got one was blank.
-                (self (rest toks) depth (first (rest t)) acc))
+              ; A new line opens at this column.  Whether the line that just
+              ; ENDED gets a NEWLINE token was already decided when its first
+              ; token arrived; a line that never got one was blank.
+              (self (rest toks) (first (rest t)) acc)
               ; An ordinary token.  If a line is pending, this is the token that
               ; makes it real: emit its NEWLINE and its INDENT/DEDENTs first.
-              (let ((d (+ depth (%py-depth-delta t))))
+              (do
                 (if (null? pending)
-                  (self (rest toks) d () (pair t acc))
-                  (self (rest toks) d ()
+                  (self (rest toks) () (pair t acc))
+                  (self (rest toks) ()
                     (pair t
                       (%py-events->toks (ind feed pending)
                         ; NO NEWLINE BEFORE THE FIRST TOKEN.  A file may open
@@ -141,4 +131,4 @@
     ; The first line is not preceded by a newline, so it is never pending and
     ; opens no NEWLINE of its own -- which is what Python does: a module's first
     ; logical line is at column 0 and starts no block.
-    (%go (python-tokenize src) 0 () ())))
+    (%go (python-tokenize src) () ())))

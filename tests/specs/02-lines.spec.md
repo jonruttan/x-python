@@ -101,13 +101,22 @@ treats it.
 
 ## lines brackets
 
+A newline inside brackets is not line structure — it is whitespace. This pass
+used to carry a bracket DEPTH COUNTER to know when it was inside them.
+
+It does not any more. python/tokens.x reads a bracketed run through the engine's
+own reader loop, so it arrives as ONE token with its contents nested inside, and
+a newline within it never reaches this pass at all. These cases are the same
+cases; what changed is that the nesting is now the shape rather than something
+rediscovered by counting.
+
 ### a newline inside parens is not line structure
 
 ```python
 (%seq (write (python-lex "f(\n  1\n)")) (newline))
 ```
 ---
-    (('tok-name "f") ('tok-op "(") ('tok-number "1") ('tok-op ")"))
+    (('tok-name "f") ('tok-group "(" (('tok-number "1"))))
 
 ### a continuation line opens no block
 
@@ -118,7 +127,7 @@ reaches the indenter.
 (%seq (write (python-lex "a = [\n      1,\n  2]\nb")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-op "=") ('tok-op "[") ('tok-number "1") ('tok-op ",") ('tok-number "2") ('tok-op "]") ('tok-newline) ('tok-name "b"))
+    (('tok-name "a") ('tok-op "=") ('tok-group "[" (('tok-number "1") ('tok-op ",") ('tok-number "2"))) ('tok-newline) ('tok-name "b"))
 
 ### line structure resumes after the brackets close
 
@@ -126,7 +135,7 @@ reaches the indenter.
 (%seq (write (python-lex "f(\n1)\n  x")) (newline))
 ```
 ---
-    (('tok-name "f") ('tok-op "(") ('tok-number "1") ('tok-op ")") ('tok-newline) ('tok-indent) ('tok-name "x") ('tok-dedent))
+    (('tok-name "f") ('tok-group "(" (('tok-number "1"))) ('tok-newline) ('tok-indent) ('tok-name "x") ('tok-dedent))
 
 ## lines errors
 
@@ -150,4 +159,55 @@ and `(Indent make)`'s default is Python's answer.
 (%seq (write (python-lex "def f():\n    return 1\nf()")) (newline))
 ```
 ---
-    (('tok-name "def") ('tok-name "f") ('tok-op "(") ('tok-op ")") ('tok-op ":") ('tok-newline) ('tok-indent) ('tok-name "return") ('tok-number "1") ('tok-newline) ('tok-dedent) ('tok-name "f") ('tok-op "(") ('tok-op ")"))
+    (('tok-name "def") ('tok-name "f") ('tok-group "(" ()) ('tok-op ":") ('tok-newline) ('tok-indent) ('tok-name "return") ('tok-number "1") ('tok-newline) ('tok-dedent) ('tok-name "f") ('tok-group "(" ()))
+
+## implicit line joining
+
+**This is new behaviour, not a refactor**, and it needs saying because it
+arrived on a change whose commit message is about DELETING a hand-written pass.
+
+Python joins lines implicitly inside brackets: an expression may span lines with
+no backslash, and the newlines are not line structure. The old flat token stream
+emitted a newline token in the middle of a list literal, and the element scanner
+rejected it. Now a bracketed run is read through the engine's reader loop as one
+token and the newlines inside it never reach the line-structure pass, so this
+works — for free, which is exactly why it is pinned here rather than left as
+untested behaviour nobody remembers adding.
+
+### a list literal spanning two lines
+
+```python
+(python-run "x = [1,\n 2]\nprint(x)")
+```
+---
+    [1, 2]
+
+### a call spanning two lines
+
+```python
+(python-run "def f(a, b):\n    return a + b\nprint(f(1,\n  2))")
+```
+---
+    3
+
+### a dict spanning two lines
+
+```python
+(python-run "d = {'a': 1,\n 'b': 2}\nprint(d)")
+```
+---
+    {'a': 1, 'b': 2}
+
+### a bracket inside a string is not a delimiter
+
+The group reader never sees these characters as brackets: a string is read as an
+ordinary token by PY-SQ/PY-DQ before the group handler asks for the next one. A
+reader that scanned characters to a matching closer would need its own quote
+tracking to get this right, and would have to keep it in step with the string
+types forever.
+
+```python
+(python-run "print([']'])")
+```
+---
+    [']']
