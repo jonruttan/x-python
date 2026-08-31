@@ -3,7 +3,7 @@
 ; ## python/base.x -- the language, assembled
 ;
 ; @description Python 3: an indentation-delimited, statement-oriented surface
-;   over x-lang's evaluator.  Today it is a stub with a scoreboard behind it.
+;   over x-lang's evaluator, with a conformance scoreboard behind it.
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan
 ; @license MIT No Attribution (MIT-0)
@@ -27,23 +27,23 @@
 ; presses on.  x-ash spec'd `sh-tokenize` and can tell you its token list is
 ; right while `'a'` still loses its accumulator; that is a lesson, not a model.
 ;
-; Internal seams will appear -- a tokenizer on its own base, an INDENT/DEDENT
-; layer, a parser -- and they get their own specs when they exist.  They do not
-; get to be the only thing measured.
+; The internal seams have since appeared -- a tokenizer, an INDENT/DEDENT layer,
+; a parser -- and each carries its own specs under tests/specs/.  They do not
+; get to be the only thing measured: the conformance suite still presses on
+; python-run, because that is the seam a Python program presses on.
 ;
-; ## WHY THIS FILE IS A STUB
+; ## THE SCOREBOARD CAME FIRST, AND THIS FILE CAME SECOND
 ;
-; The scoreboard came first, deliberately.  `tools/conformance/` turns 682
-; MicroPython test programs into .spec.md files whose expected output is a real
-; CPython 3.14 run, so before a line of tokenizer exists there is a sorted list
-; of what Python actually asks for.  A stub that answers everything the same way
-; scores 0, and 0 against a suite that runs is worth more than a green suite of
-; six hand-picked cases.
+; `tools/conformance/` turns 682 MicroPython test programs into .spec.md files
+; whose expected output is a real CPython 3.14 run, so before a line of
+; tokenizer existed there was a sorted list of what Python actually asks for.
+; That ordering is why the layers below are the layers they are: the ranked
+; groups named the reader as the thing nothing else was reachable without.
 ;
-; The stub prints rather than staying silent.  A silent stub would PASS every
-; conformance case whose program prints nothing -- a handful of them do -- and a
-; scoreboard that starts above zero for that reason is lying about the port
-; before it has begun.
+; This file no longer stubs anything.  `python-run` lexes, parses and evaluates
+; -- tokens.x, indent.x, types.x, runtime.x and parse.x, in that order -- and
+; what it cannot do it fails at rather than answering uniformly.  The suite
+; measures the difference; `make score` ranks what is still red.
 
 (import python/tokens)
 (import python/indent)
@@ -55,22 +55,12 @@
 
 (def python-version "0.0.1")
 
-; The marker is deliberately not valid Python output and deliberately one line:
-; it shows up once per unimplemented program in a spec diff, which reads as a
-; column rather than as noise.
-(def %python-not-implemented "#<python: not implemented>")
-
 ; (python-run SRC) -- run a Python program held in a string.
 ;
-; Returns nil.  A Python statement has no value to show, and `print` writes to
-; stdout itself, so the REPL printer below has nothing to say about a program
-; that ran.  An expression typed at the prompt is a different question and gets
-; answered when there is an evaluator to answer it with.
-; (python-run SRC) -- run a Python program held in a string.
-;
-; Lex, parse, evaluate. Returns nil: a Python statement has no value to show and
-; `print` writes to stdout itself, so the REPL printer has nothing to say about
-; a program that ran.
+; Lex, parse, evaluate.  Returns nil: a Python statement has no value to show
+; and `print` writes to stdout itself, so the REPL printer has nothing to say
+; about a program that ran.  An expression typed at the prompt is a different
+; question, and %python-repl-print below is where it gets answered.
 (def python-run
   (fn (_ src)
     (def %go
