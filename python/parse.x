@@ -250,6 +250,43 @@
             (pair acc more))))))
     (%go (first %a) (rest %a))))
 
+; Tuple elements after the first comma, up to the closing paren.  A trailing
+; comma is legal -- `(1,)` needs it and `(1, 2,)` is allowed.
+(def %py-tuple-rest ())
+(set! %py-tuple-rest
+  (fn (self toks acc)
+    (if (%py-op-is? (if (null? toks) () (first toks)) ")")
+      (pair (List reverse acc) (rest toks))
+      (let ((r (%py-comparison toks)))
+        (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ",")
+          (self (rest (rest r)) (pair (first r) acc))
+          (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ")")
+            (pair (List reverse (pair (first r) acc)) (rest (rest r)))
+            (Err raise (lit syntax) "expected , or ) in a tuple" ())))))))
+
+; AN EXPRESSION LIST IS A BARE TUPLE.  `x = 1, 2` and `return 1, 2` need no
+; parens in Python, and this is the rule that says so -- one comparison, and if
+; a comma follows, everything up to the end of the line becomes a tuple.
+(def %py-exprlist-rest ())
+(set! %py-exprlist-rest
+  (fn (self toks acc)
+    (if (if (null? toks) #t
+          (if (eq? (%py-tag (first toks)) (lit tok-newline)) #t
+            (eq? (%py-tag (first toks)) (lit tok-dedent))))
+      (pair (List reverse acc) toks)
+      (let ((r (%py-comparison toks)))
+        (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ",")
+          (self (rest (rest r)) (pair (first r) acc))
+          (pair (List reverse (pair (first r) acc)) (rest r)))))))
+
+(def %py-exprlist
+  (fn (_ toks)
+    (let ((r (%py-comparison toks)))
+      (if (not (%py-op-is? (if (null? (rest r)) () (first (rest r))) ","))
+        r
+        (let ((m (%py-exprlist-rest (rest (rest r)) (list (first r)))))
+          (pair (pair (lit %py-mktuple) (first m)) (rest m)))))))
+
 ; Arguments up to the closing paren.  A trailing comma is legal Python and costs
 ; one branch to accept.
 (def %py-args
@@ -284,10 +321,18 @@
                 (let ((r (%py-elems (rest toks) ())))
                   (pair (pair (lit %py-mklist) (first r)) (rest r)))
               (if (%py-op-is? t "(")
-                (let ((r (%py-comparison (rest toks))))
-                  (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ")")
-                    (pair (first r) (rest (rest r)))
-                    (Err raise (lit syntax) "expected )" ())))
+                ; THE COMMA MAKES A TUPLE, NOT THE PARENS.  `(x)` is just x in
+                ; Python, so a one-element tuple is spelled `(x,)` and the
+                ; trailing comma is load-bearing rather than decorative.
+                (if (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) ")")
+                  (pair (list (lit %py-mktuple)) (rest (rest toks)))
+                  (let ((r (%py-comparison (rest toks))))
+                    (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ",")
+                      (let ((m (%py-tuple-rest (rest (rest r)) (list (first r)))))
+                        (pair (pair (lit %py-mktuple) (first m)) (rest m)))
+                      (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ")")
+                        (pair (first r) (rest (rest r)))
+                        (Err raise (lit syntax) "expected )" ())))))
                 (Err raise (lit syntax) "unexpected token in expression" t)))))))))))
 
 ; Entries of a dict literal: KEY : VALUE, up to the closing brace. Each entry
@@ -487,10 +532,12 @@
                       (if (eq? (%py-tag nxt) (lit tok-newline)) #t
                         (eq? (%py-tag nxt) (lit tok-dedent))))
                   (pair (list (lit %py-return) ()) (rest toks))
-                  (let ((r (%py-comparison (rest toks))))
+                  (let ((r (%py-exprlist (rest toks))))
                     (pair (list (lit %py-return) (first r)) (rest r)))))
               (if (%py-name-is? t "pass")
                 (pair () (rest toks))
+              (if (%py-unpack-stmt? toks)
+                (%py-unpack-stmt toks)
                 ; ASSIGNMENT IS DECIDED BY WHAT FOLLOWS A TARGET, not by the
                 ; shape of the first token.  Parse a postfix expression -- a
                 ; name, a subscript, an attribute, a call -- and then look.
@@ -501,7 +548,7 @@
                 (let ((tgt (%py-postfix toks)))
                   (let ((nxt (if (null? (rest tgt)) () (first (rest tgt)))))
                     (if (%py-op-is? nxt "=")
-                      (let ((r (%py-comparison (rest (rest tgt)))))
+                      (let ((r (%py-exprlist (rest (rest tgt)))))
                         (pair (%py-store (first tgt) (first r)) (rest r)))
                       (let ((aug (%py-op-sym nxt %py-aug-ops)))
                         (if (null? aug)
@@ -514,7 +561,7 @@
                             (pair
                               (%py-store (first tgt)
                                 (list aug (first tgt) (first r)))
-                              (rest r))))))))))))))))))))
+                              (rest r)))))))))))))))))))))
 
 ; `else:` after an if.  `elif` is `else: if ...`, which is what Python's own
 ; grammar says it is, so it needs no separate shape.
@@ -528,14 +575,42 @@
 ;
 ; The item variable is a plain assignment, so it lives in whatever scope the
 ; hoist put it in -- which is Python's rule too: a for target outlives its loop.
+; `for a, b in pairs:` unpacks each item -- the same rule as `a, b = x` applied
+; once per iteration, so it reuses %py-unpack and gets its length checking free.
+(def %py-for-names
+  (fn (self toks acc)
+    (let ((t (if (null? toks) () (first toks))))
+      (if (%py-name-is? t "in")
+        (pair (List reverse acc) (rest toks))
+        (if (%py-op-is? t ",")
+          (self (rest toks) acc)
+          (if (eq? (%py-tag t) (lit tok-name))
+            (self (rest toks) (pair (%py-val t) acc))
+            (Err raise (lit syntax) "expected in after a for target" ())))))))
+
+(def %py-syms-of
+  (fn (self names acc)
+    (if (null? names)
+      (List reverse acc)
+      (self (rest names) (pair (%py-name->sym (first names)) acc)))))
+
+(def %py-for-bind
+  (fn (_ syms)
+    (if (null? (rest syms))
+      (list (lit set!) (first syms) (list (lit first) (lit %py-items)))
+      (list (lit let)
+        (list (list (lit %py-unpacked)
+                (list (lit %py-unpack) (list (lit first) (lit %py-items))
+                      (%py-count syms))))
+        (pair (lit do) (%py-unpack-sets syms 0 ()))))))
+
 (def %py-for
   (fn (_ toks)
-    (let ((v (if (null? toks) () (first toks))))
-      (if (not (eq? (%py-tag v) (lit tok-name)))
-        (Err raise (lit syntax) "expected a name after for" ())
-        (if (not (%py-name-is? (if (null? (rest toks)) () (first (rest toks))) "in"))
-          (Err raise (lit syntax) "expected in after a for target" ())
-          (let ((it (%py-comparison (rest (rest toks)))))
+    (if (not (eq? (%py-tag (if (null? toks) () (first toks))) (lit tok-name)))
+      (Err raise (lit syntax) "expected a name after for" ())
+      (let ((n (%py-for-names toks ())))
+        (let ((syms (%py-syms-of (first n) ())))
+          (let ((it (%py-comparison (rest n))))
             (let ((b (%py-block (rest it))))
               (pair
                 (list
@@ -543,8 +618,7 @@
                     (list (lit if) (list (lit null?) (lit %py-items))
                       ()
                       (list (lit %seq)
-                        (list (lit set!) (%py-name->sym (%py-val v))
-                          (list (lit first) (lit %py-items)))
+                        (%py-for-bind syms)
                         (list (lit %seq) (first b)
                           (list (lit self) (list (lit rest) (lit %py-items)))))))
                   (list (lit %py-iter-elems) (first it)))
@@ -560,6 +634,30 @@
 ; %py-exc is the guard's variable.  It cannot collide with a Python name
 ; because every Python name is emitted with a `py-` prefix.
 
+; A clause carries its own MATCH EXPRESSION rather than a name, which is what
+; lets `except X`, `except (A, B)` and bare `except` share one chain builder.
+(def %py-except-tail
+  (fn (_ matcher toks)
+    (if (%py-name-is? (if (null? toks) () (first toks)) "as")
+      (let ((v (if (null? (rest toks)) () (first (rest toks)))))
+        (if (not (eq? (%py-tag v) (lit tok-name)))
+          (Err raise (lit syntax) "expected a name after as" ())
+          (let ((b (%py-block (rest (rest toks)))))
+            (pair (list matcher (%py-val v) (first b)) (rest b)))))
+      (let ((b (%py-block toks)))
+        (pair (list matcher () (first b)) (rest b))))))
+
+(def %py-except-names
+  (fn (self toks acc)
+    (if (%py-op-is? (if (null? toks) () (first toks)) ")")
+      (pair (List reverse acc) (rest toks))
+      (let ((t (first toks)))
+        (if (%py-op-is? t ",")
+          (self (rest toks) acc)
+          (if (eq? (%py-tag t) (lit tok-name))
+            (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
+            (Err raise (lit syntax) "expected an exception name" ())))))))
+
 (def %py-except-clause
   (fn (_ toks)
     ; positioned just after the `except` keyword
@@ -567,18 +665,20 @@
       ; a bare `except:` catches everything
       (let ((b (%py-block toks)))
         (pair (list () () (first b)) (rest b)))
-      (let ((n (first toks)))
-        (if (not (eq? (%py-tag n) (lit tok-name)))
-          (Err raise (lit syntax) "expected an exception name after except" ())
-          (let ((after (rest toks)))
-            (if (%py-name-is? (if (null? after) () (first after)) "as")
-              (let ((v (if (null? (rest after)) () (first (rest after)))))
-                (if (not (eq? (%py-tag v) (lit tok-name)))
-                  (Err raise (lit syntax) "expected a name after as" ())
-                  (let ((b (%py-block (rest (rest after)))))
-                    (pair (list (%py-val n) (%py-val v) (first b)) (rest b)))))
-              (let ((b (%py-block after)))
-                (pair (list (%py-val n) () (first b)) (rest b))))))))))
+      (if (%py-op-is? (if (null? toks) () (first toks)) "(")
+        ; `except (A, B):` -- a tuple of classes, any of which matches
+        (let ((ns (%py-except-names (rest toks) ())))
+          (%py-except-tail
+            (list (lit %py-exc-match-any) (lit %py-exc)
+              (pair (lit list) (first ns)))
+            (rest ns)))
+        (let ((n (first toks)))
+          (if (not (eq? (%py-tag n) (lit tok-name)))
+            (Err raise (lit syntax) "expected an exception name after except" ())
+            (%py-except-tail
+              (list (lit %py-exc-match) (lit %py-exc)
+                (%py-name->sym (%py-val n)))
+              (rest toks))))))))
 
 (def %py-except-clauses ())
 (set! %py-except-clauses
@@ -597,7 +697,7 @@
       ; without this an `except ValueError` would also swallow a KeyError.
       (list (lit error) (lit %py-exc))
       (let ((c (first clauses)))
-        (let ((name (first c))
+        (let ((matcher (first c))
               (var (first (rest c)))
               (body (first (rest (rest c)))))
           (let ((handler
@@ -606,14 +706,9 @@
                     (list (lit %seq)
                       (list (lit set!) (%py-name->sym var) (lit %py-exc))
                       body))))
-            (if (null? name)
+            (if (null? matcher)
               handler
-              (list (lit if)
-                ; the class VALUE, not its spelling -- which is what lets a
-                ; user-defined exception class be caught by the same code
-                (list (lit %py-exc-match) (lit %py-exc) (%py-name->sym name))
-                handler
-                (self (rest clauses))))))))))
+              (list (lit if) matcher handler (self (rest clauses))))))))))
 
 (def %py-finally
   (fn (_ toks)
@@ -753,6 +848,63 @@
                   (list (lit %py-mkclass) (%py-val n) ()
                     (pair (lit list) (first r))))
                 (rest r)))))))))
+
+; --- tuple unpacking ---------------------------------------------------------
+;
+; `a, b = f()` is the reason tuples earn their keep -- it is how a Python
+; function returns two things.  It is decided by a scan rather than by the first
+; token: NAME (, NAME)+ = ... and nothing else, so `a[0], b = ...` is NOT
+; unpacked here.  Only plain names, which is the case that matters and the one
+; that can be hoisted.
+
+(def %py-unpack-scan
+  (fn (self toks comma)
+    (if (null? toks)
+      #f
+      (let ((t (first toks)))
+        (if (eq? (%py-tag t) (lit tok-newline))
+          #f
+          (if (%py-op-is? t "=")
+            comma
+            (if (%py-op-is? t ",")
+              (self (rest toks) #t)
+              (if (eq? (%py-tag t) (lit tok-name))
+                (self (rest toks) comma)
+                #f))))))))
+
+(def %py-unpack-stmt? (fn (_ toks) (%py-unpack-scan toks #f)))
+
+(def %py-unpack-names
+  (fn (self toks acc)
+    (let ((t (first toks)))
+      (if (%py-op-is? t "=")
+        (pair (List reverse acc) (rest toks))
+        (if (%py-op-is? t ",")
+          (self (rest toks) acc)
+          (self (rest toks) (pair (%py-name->sym (%py-val t)) acc)))))))
+
+(def %py-unpack-sets
+  (fn (self syms i acc)
+    (if (null? syms)
+      (List reverse acc)
+      (self (rest syms) (+ i 1)
+        (pair
+          (list (lit set!) (first syms)
+            (list (lit List) (lit ref) i (lit %py-unpacked)))
+          acc)))))
+
+(def %py-unpack-stmt
+  (fn (_ toks)
+    (let ((n (%py-unpack-names toks ())))
+      (let ((r (%py-exprlist (rest n))))
+        (pair
+          ; `let`, not `def`: the temporary binds in the frame, so an unpack
+          ; inside a function called during another unpack cannot clobber it.
+          (list (lit let)
+            (list (list (lit %py-unpacked)
+                    (list (lit %py-unpack) (first r) (%py-count (first n)))))
+            (pair (lit do) (%py-unpack-sets (first n) 0 ())))
+          (rest r))))))
 
 (def %py-store
   (fn (_ target value)
@@ -925,7 +1077,8 @@
       (List reverse acc)
       (let ((t (first toks)))
         (if (%py-for-target? toks)
-          (self (rest (rest toks)) (pair (%py-val (first (rest toks))) acc))
+          (let ((u (%py-for-names (rest toks) ())))
+            (self (rest u) (%py-append (List reverse (first u)) acc)))
         (if (%py-name-is? t "as")
           ; `except ValueError as e` binds e, and the hoisting scan is what
           ; turns that into a def -- without this the set! below has nothing
@@ -950,8 +1103,12 @@
       (List reverse acc)
       (let ((t (first toks)))
         (if (%py-for-target? toks)
-          (self (rest (rest toks))
-            (pair (%py-name->sym (%py-val (first (rest toks)))) acc))
+          (let ((u (%py-for-names (rest toks) ())))
+            (self (rest u) (%py-append (List reverse (%py-syms-of (first u) ())) acc)))
+        (if (%py-unpack-stmt? toks)
+          ; every name on the left of `a, b = ...` is bound by it
+          (let ((u (%py-unpack-names toks ())))
+            (self (rest u) (%py-append (List reverse (first u)) acc)))
         (if (%py-name-is? t "class")
           ; `class Foo:` binds Foo, and this scan is what hoists it.
           (let ((n (if (null? (rest toks)) () (first (rest toks)))))
@@ -970,7 +1127,7 @@
                 (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
             (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
-            (self (rest toks) acc))))))))))
+            (self (rest toks) acc)))))))))))
 
 ; The name after `as` in an except clause.
 (def %py-as-target?
