@@ -50,7 +50,8 @@
   %py-tuple %py-tuple-new %py-tuple-is %py-tuple-elems
   %py-class %py-class-new %py-class-is %py-class-name %py-class-base
   %py-class-methods %py-instantiate %py-obj-write
-  %py-obj %py-obj-new %py-obj-is %py-obj-class %py-obj-attrs %py-obj-set-attrs!)
+  %py-obj %py-obj-new %py-obj-is %py-obj-class %py-obj-attrs %py-obj-set-attrs!
+  %py-super-t %py-super-new %py-super-is %py-super-from %py-super-self)
 
 ; Fetch the type prims from the catalog (ns `type` is de-registered, R5).
 (def %make-type (prim-ref (lit type) (lit make)))
@@ -466,3 +467,27 @@
     (if (if (%py-tuple-is a) (%py-tuple-is b) #f)
       (%py-seq-lt (first b) (first a))
       (Err raise (lit type) "unorderable types" ()))))
+
+; --- PY-SUPER ----------------------------------------------------------------
+;
+; `super()` is a PROXY, not a class and not an instance: it holds the class to
+; start looking FROM and the object to bind to.  Attribute lookup on it skips
+; the class the method was written in and begins at that class's base, which is
+; the whole point -- starting from the INSTANCE's class would find the override
+; again and recurse until the machine died.
+;
+; Immutable, so no cell.
+
+(def %py-super-t ())
+
+(def %py-super-new
+  (fn (_ from obj) (%make-instance %py-super-t (pair from obj))))
+(def %py-super-is (fn (_ v) (%type? v %py-super-t)))
+(def %py-super-from (fn (_ v) (first (first v))))
+(def %py-super-self (fn (_ v) (rest (first v))))
+
+(set! %py-super-t
+  (%make-type
+    "PY-SUPER"
+    (list
+      (pair (lit write) (fn (_ self) (display "<super>"))))))

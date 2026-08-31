@@ -35,7 +35,7 @@
   %py-mklist %py-index %py-len %py-list? %py-write %py-getattr %py-setindex
   %py-range %py-iter-elems %py-callcc
   %py-raise %py-exc-match %py-exc-match-any
-  %py-mkclass %py-setattr
+  %py-mkclass %py-setattr %py-super
   %py-exc-Exception %py-exc-ArithmeticError %py-exc-LookupError
   %py-exc-ZeroDivisionError %py-exc-IndexError %py-exc-KeyError
   %py-exc-AttributeError %py-exc-NameError %py-exc-TypeError
@@ -349,8 +349,10 @@
         (%py-str-attr obj name)
       (if (%py-obj-is obj)
         (%py-obj-attr obj name)
+      (if (%py-super-is obj)
+        (%py-super-attr obj name)
         (Err raise (lit attribute)
-          (Str8 append (Str8 append "object has no attribute '" name) "'")())))))))
+          (Str8 append (Str8 append "object has no attribute '" name) "'")()))))))))
 
 ; STRING METHODS MAP ONTO Str8, WHICH ALREADY HAS THEM -- upcase, downcase,
 ; trim, split, join, replace, starts?, ends?, index-of. The work here is the
@@ -709,3 +711,40 @@
         (if (> got n)
           (Err raise (lit value) "too many values to unpack" ())
           (if (%py-tuple-is v) (%py-tuple-elems v) (%py-list-elems v)))))))
+
+; --- super() -----------------------------------------------------------------
+;
+; `super()` STARTS FROM THE CLASS THE METHOD WAS WRITTEN IN, not from the
+; instance's class.  That is Python's rule and it is not a detail: in
+;
+;   class Dog(Animal):
+;       def speak(self): return super().speak()
+;
+; the instance is a Dog, so looking up `speak` from the instance's class finds
+; Dog's own override and calls it again -- forever.  Starting from Dog and
+; searching its BASE finds Animal's.
+;
+; The parser supplies the class, because Python's zero-argument `super()` is
+; LEXICAL: it means the class whose body the call is written in.  Nothing about
+; the object at run time can tell you that, which is why CPython gives methods a
+; `__class__` cell rather than working it out from `self`.
+(def %py-super
+  (fn (_ cls obj)
+    (if (not (%py-class-is cls))
+      (Err raise (lit type) "super(): no class" ())
+      (%py-super-new cls obj))))
+
+(def %py-super-attr
+  (fn (_ sup name)
+    (let ((base (%py-class-base (%py-super-from sup))))
+      (if (null? base)
+        (Err raise (lit attribute)
+          (Str8 append (Str8 append "'super' object has no attribute '" name) "'")
+          ())
+        (let ((m (%py-method-find base name)))
+          (if (null? m)
+            (Err raise (lit attribute)
+              (Str8 append
+                (Str8 append "'super' object has no attribute '" name) "'")
+              ())
+            (%py-bind-method m (%py-super-self sup))))))))
