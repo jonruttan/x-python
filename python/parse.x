@@ -381,6 +381,127 @@
             (list (lit pair) (%py-expr-of (first kv)) (%py-expr-of (rest kv)))
             acc))))))
 
+; --- Comprehensions ----------------------------------------------------------
+;
+; A comprehension is a bracket group whose contents contain a top-level `for` --
+; and since a nested group is ONE token here, "top-level" is a flat scan, not a
+; depth count.
+;
+; THE VARIABLE IS A let, NOT A HOISTED set!.  Python 3 gives a comprehension
+; its own scope: `x = 5` then `[x for x in [9]]` leaves x at 5.  A let binds in
+; the frame and vanishes with it, which is exactly that rule -- the hoisting
+; the statement-level `for` needs is precisely what this must NOT do.
+;
+; Each `for` clause becomes the same self-recursive loop the statement emits;
+; each `if` clause asks %py-truthy, as every condition now does.  A list
+; accumulates through a cell and reverses once at the end.  A dict builds
+; through %py-dset, so a duplicate key OVERWRITES -- Python's rule, and it
+; falls out of the store function rather than needing a dedup pass.
+
+(def %py-comp?
+  (fn (self toks)
+    (if (null? toks)
+      #f
+      (if (%py-name-is? (first toks) "for") #t (self (rest toks))))))
+
+; ((sym (List ref N %py-unpacked)) ...) for a tuple target's inner let
+(def %py-comp-refs
+  (fn (self syms i acc)
+    (if (null? syms)
+      (List reverse acc)
+      (self (rest syms) (+ i 1)
+        (pair
+          (list (first syms)
+            (list (lit List) (lit ref) i (lit %py-unpacked)))
+          acc)))))
+
+(def %py-comp-bind
+  (fn (_ syms inner)
+    (if (null? (rest syms))
+      (list (lit let)
+        (list (list (first syms) (list (lit first) (lit %py-items))))
+        inner)
+      (list (lit let)
+        (list (list (lit %py-unpacked)
+                (list (lit %py-unpack) (list (lit first) (lit %py-items))
+                      (%py-count syms))))
+        (list (lit let) (%py-comp-refs syms 0 ()) inner)))))
+
+(def %py-comp-loop
+  (fn (_ syms iter inner)
+    (list
+      (list (lit fn) (list (lit self) (lit %py-items))
+        (list (lit if) (list (lit null?) (lit %py-items))
+          ()
+          (list (lit %seq)
+            (%py-comp-bind syms inner)
+            (list (lit self) (list (lit rest) (lit %py-items))))))
+      (list (lit %py-iter-elems) iter))))
+
+; (for SYMS ITER-FORM) and (if COND-FORM), in source order
+(def %py-comp-clauses ())
+(set! %py-comp-clauses
+  (fn (self toks acc)
+    (if (null? toks)
+      (List reverse acc)
+      (if (%py-name-is? (first toks) "for")
+        (let ((n (%py-for-names (rest toks) ())))
+          (let ((it (%py-or-e (rest n))))
+            (self (rest it)
+              (pair (list (lit for) (%py-syms-of (first n) ()) (first it)) acc))))
+        (if (%py-name-is? (first toks) "if")
+          (let ((c (%py-or-e (rest toks))))
+            (self (rest c) (pair (list (lit if) (first c)) acc)))
+          (Err raise (lit syntax) "unexpected token in comprehension" (first toks)))))))
+
+; First clause outermost: front recursion nests them the way they read.
+(def %py-comp-fold ())
+(set! %py-comp-fold
+  (fn (self clauses inner)
+    (if (null? clauses)
+      inner
+      (let ((c (first clauses)))
+        (if (eq? (first c) (lit for))
+          (%py-comp-loop (first (rest c)) (first (rest (rest c)))
+            (self (rest clauses) inner))
+          (list (lit if)
+            (list (lit %py-truthy) (first (rest c)))
+            (self (rest clauses) inner)
+            ()))))))
+
+(def %py-listcomp
+  (fn (_ elems)
+    (let ((r (%py-or-e elems)))
+      (if (not (%py-name-is? (if (null? (rest r)) () (first (rest r))) "for"))
+        (Err raise (lit syntax) "expected for in comprehension" ())
+        (let ((cls (%py-comp-clauses (rest r) ())))
+          (list (lit let)
+            (list (list (lit %py-acc) (list (lit pair) () ())))
+            (list (lit %seq)
+              (%py-comp-fold cls
+                (list (lit %set-first!) (lit %py-acc)
+                  (list (lit pair) (first r)
+                    (list (lit first) (lit %py-acc)))))
+              (list (lit %py-list-new)
+                (list (lit List) (lit reverse)
+                  (list (lit first) (lit %py-acc)))))))))))
+
+(def %py-dictcomp
+  (fn (_ elems)
+    (let ((k (%py-or-e elems)))
+      (if (not (%py-op-is? (if (null? (rest k)) () (first (rest k))) ":"))
+        (Err raise (lit syntax) "expected : in dict comprehension" ())
+        (let ((v (%py-or-e (rest (rest k)))))
+          (if (not (%py-name-is? (if (null? (rest v)) () (first (rest v))) "for"))
+            (Err raise (lit syntax) "expected for in comprehension" ())
+            (let ((cls (%py-comp-clauses (rest v) ())))
+              (list (lit let)
+                (list (list (lit %py-acc) (list (lit %py-mkdict))))
+                (list (lit %seq)
+                  (%py-comp-fold cls
+                    (list (lit %py-dset) (lit %py-acc) (first k) (first v)))
+                  (lit %py-acc))))))))))
+
 ; AN EXPRESSION LIST IS A BARE TUPLE.  `x = 1, 2` and `return 1, 2` need no
 ; parens in Python, and this is the rule that says so -- one comparison, and if
 ; a comma follows, everything up to the end of the line becomes a tuple.
@@ -433,14 +554,18 @@
             (if (eq? (%py-tag t) (lit tok-name))
               (pair (%py-name->sym (%py-val t)) (rest toks))
               (if (%py-group? t "{")
-                (pair
-                  (pair (lit %py-mkdict)
-                    (%py-entries-of (%py-comma-split (%py-group-of t) () ()) ()))
-                  (rest toks))
+                (if (%py-comp? (%py-group-of t))
+                  (pair (%py-dictcomp (%py-group-of t)) (rest toks))
+                  (pair
+                    (pair (lit %py-mkdict)
+                      (%py-entries-of (%py-comma-split (%py-group-of t) () ()) ()))
+                    (rest toks)))
               (if (%py-group? t "[")
-                (pair
-                  (pair (lit %py-mklist) (%py-group-exprs (%py-group-of t)))
-                  (rest toks))
+                (if (%py-comp? (%py-group-of t))
+                  (pair (%py-listcomp (%py-group-of t)) (rest toks))
+                  (pair
+                    (pair (lit %py-mklist) (%py-group-exprs (%py-group-of t)))
+                    (rest toks)))
               (if (%py-group? t "(")
                 ; THE COMMA MAKES A TUPLE, NOT THE PARENS.  `(x)` is just x in
                 ; Python, so a one-element tuple is spelled `(x,)` and the
