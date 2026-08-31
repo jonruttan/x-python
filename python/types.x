@@ -49,7 +49,7 @@
   %py-repr %py-equal %py-repeat
   %py-tuple %py-tuple-new %py-tuple-is %py-tuple-elems
   %py-class %py-class-new %py-class-is %py-class-name %py-class-base
-  %py-class-methods %py-instantiate %py-obj-write
+  %py-class-methods %py-class-qualname %py-instantiate %py-obj-write
   %py-obj %py-obj-new %py-obj-is %py-obj-class %py-obj-attrs %py-obj-set-attrs!
   %py-super-t %py-super-new %py-super-is %py-super-from %py-super-self)
 
@@ -329,13 +329,19 @@
 ; exception, which is a Python rule and not a property of the type.
 (def %py-obj-write ())
 
-; A class is (name base methods) and never mutates, so it needs no cell.
+; A class is (name base methods qualname) and never mutates, so it needs no
+; cell.  The QUALNAME is the display form and nothing else: a user class prints
+; <class '__main__.Foo'> and a builtin prints <class 'int'>, and that prefix is
+; a fact about where the class came from -- the constructor's caller knows it,
+; the class itself cannot compute it, so it travels as a slot.
 (def %py-class-new
-  (fn (_ name base methods) (%make-instance %py-class (list name base methods))))
+  (fn (_ name base methods qualname)
+    (%make-instance %py-class (list name base methods qualname))))
 (def %py-class-is (fn (_ v) (%type? v %py-class)))
 (def %py-class-name (fn (_ c) (first (first c))))
 (def %py-class-base (fn (_ c) (first (rest (first c)))))
 (def %py-class-methods (fn (_ c) (first (rest (rest (first c))))))
+(def %py-class-qualname (fn (_ c) (List ref 3 (first c))))
 
 ; An instance is a cell: first is its class, rest is its attribute alist.  The
 ; attributes change -- `self.x = 1` is how Python objects get their fields at
@@ -351,7 +357,7 @@
     "PY-CLASS"
     (list
       (pair (lit write)
-        (fn (_ self) (display "<class '__main__." (first (first self)) "'>")))
+        (fn (_ self) (display "<class '" (%py-class-qualname self) "'>")))
       (pair (lit call)
         (fn (_ self . args) (%py-instantiate self args))))))
 
@@ -368,8 +374,7 @@
       (pair (lit write)
         (fn (_ self)
           (if (null? %py-obj-write)
-            (display "<__main__." (%py-class-name (first (first self)))
-                     " object>")
+            (display "<" (%py-class-qualname (first (first self))) " object>")
             (%py-obj-write self)))))))
 
 ; --- PY-TUPLE ----------------------------------------------------------------
