@@ -27,13 +27,24 @@ A module's first logical line is at column 0 and opens nothing.
 
 ## lines indentation
 
+An indented run is a region the way a bracket is, so it is READ the same way:
+PY-NL measures the column, asks the shared `Indent` stack what opened or closed,
+and on an open recurses through the engine's reader to collect the block. What
+comes back is a nested `(tok-block (tok ...))` rather than INDENT/DEDENT markers
+spliced into a flat stream afterwards.
+
+One read returns one token, and a single dedent can close several blocks — so
+the surplus is left in a counter that each enclosing block loop collects. That
+counter is the whole reason this works with a protocol that cannot return two
+things.
+
 ### an indented line opens a block
 
 ```python
 (%seq (write (python-lex "a\n  b")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-newline) ('tok-indent) ('tok-name "b") ('tok-dedent))
+    (('tok-name "a") ('tok-block (('tok-name "b"))))
 
 ### returning to the outer column closes it
 
@@ -41,7 +52,7 @@ A module's first logical line is at column 0 and opens nothing.
 (%seq (write (python-lex "a\n  b\nc")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-newline) ('tok-indent) ('tok-name "b") ('tok-newline) ('tok-dedent) ('tok-name "c"))
+    (('tok-name "a") ('tok-block (('tok-name "b"))) ('tok-name "c"))
 
 ### end of input closes what is still open
 
@@ -51,7 +62,7 @@ A block left open at end of input is closed by a DEDENT, as CPython does.
 (%seq (write (python-lex "a\n  b")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-newline) ('tok-indent) ('tok-name "b") ('tok-dedent))
+    (('tok-name "a") ('tok-block (('tok-name "b"))))
 
 ### one dedent can close several levels
 
@@ -59,7 +70,7 @@ A block left open at end of input is closed by a DEDENT, as CPython does.
 (%seq (write (python-lex "a\n  b\n    c\nd")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-newline) ('tok-indent) ('tok-name "b") ('tok-newline) ('tok-indent) ('tok-name "c") ('tok-newline) ('tok-dedent) ('tok-dedent) ('tok-name "d"))
+    (('tok-name "a") ('tok-block (('tok-name "b") ('tok-block (('tok-name "c"))))) ('tok-name "d"))
 
 ## lines blank and comment
 
@@ -89,15 +100,21 @@ treats it.
 (%seq (write (python-lex "a\n  b\n\n  c")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-newline) ('tok-indent) ('tok-name "b") ('tok-newline) ('tok-name "c") ('tok-dedent))
+    (('tok-name "a") ('tok-block (('tok-name "b") ('tok-newline) ('tok-name "c"))))
 
-### leading blank lines contribute nothing
+### leading blank lines contribute a newline, and nothing else
+
+The blank lines themselves are refused by the analyser and leave no trace. The
+one newline is the line-start of `a` itself, which the old pass suppressed
+because it emitted line structure only once a line had content. Nothing reads
+it — `%py-skip-nl` steps over leading newlines before the first statement — so
+what changed is the token stream, not the language.
 
 ```python
 (%seq (write (python-lex "\n\na")) (newline))
 ```
 ---
-    (('tok-name "a"))
+    (('tok-newline) ('tok-name "a"))
 
 ## lines brackets
 
@@ -135,7 +152,7 @@ reaches the indenter.
 (%seq (write (python-lex "f(\n1)\n  x")) (newline))
 ```
 ---
-    (('tok-name "f") ('tok-group "(" (('tok-number "1"))) ('tok-newline) ('tok-indent) ('tok-name "x") ('tok-dedent))
+    (('tok-name "f") ('tok-group "(" (('tok-number "1"))) ('tok-block (('tok-name "x"))))
 
 ## lines errors
 
@@ -159,7 +176,7 @@ and `(Indent make)`'s default is Python's answer.
 (%seq (write (python-lex "def f():\n    return 1\nf()")) (newline))
 ```
 ---
-    (('tok-name "def") ('tok-name "f") ('tok-group "(" ()) ('tok-op ":") ('tok-newline) ('tok-indent) ('tok-name "return") ('tok-number "1") ('tok-newline) ('tok-dedent) ('tok-name "f") ('tok-group "(" ()))
+    (('tok-name "def") ('tok-name "f") ('tok-group "(" ()) ('tok-op ":") ('tok-block (('tok-name "return") ('tok-number "1"))) ('tok-name "f") ('tok-group "(" ()))
 
 ## implicit line joining
 

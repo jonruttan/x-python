@@ -330,7 +330,7 @@
   (fn (self toks acc)
     (if (if (null? toks) #t
           (if (eq? (%py-tag (first toks)) (lit tok-newline)) #t
-            (eq? (%py-tag (first toks)) (lit tok-dedent))))
+            (%py-block? (first toks))))
       (pair (List reverse acc) toks)
       (let ((r (%py-comparison toks)))
         (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ",")
@@ -482,27 +482,43 @@
 (def %py-stmts ())
 (def %py-stmt ())
 
-; `: NEWLINE INDENT stmts DEDENT` -- the suite after a compound header.
+; `: BLOCK` -- the suite after a compound header.  The block arrives from the
+; reader ALREADY NESTED, as (tok-block (tok ...)), so there is no INDENT to
+; check for and no DEDENT to scan to: the block's contents are a complete token
+; list that ends where the block ended.
+; The contents of the block that follows a header, for the scans that need to
+; look inside one.
+(def %py-block-contents
+  (fn (self toks)
+    (if (null? toks)
+      ()
+      (if (%py-block? (first toks))
+        (first (rest (first toks)))
+        (self (rest toks))))))
+
+(def %py-block? (fn (_ t) (if (pair? t) (eq? (first t) (lit tok-block)) #f)))
+(def %py-block-toks (fn (_ t) (first (rest t))))
+
 (def %py-block
   (fn (_ toks)
     (if (not (%py-op-is? (if (null? toks) () (first toks)) ":"))
       (Err raise (lit syntax) "expected : after a compound statement header" ())
       (let ((t (%py-skip-nl (rest toks))))
-        (if (not (eq? (%py-tag (if (null? t) () (first t))) (lit tok-indent)))
+        (if (not (%py-block? (if (null? t) () (first t))))
           (Err raise (lit syntax) "expected an indented block" ())
-          (let ((r (%py-stmts (rest t) ())))
-            (pair (%py-seq-of (first r)) (rest r))))))))
+          (pair
+            (%py-seq-of (first (%py-stmts (%py-block-toks (first t)) ())))
+            (rest t)))))))
 
-; Statements until DEDENT (which is consumed) or end of input.
+; Statements until the token list runs out.  A block IS its token list now, so
+; running out is the only end there is.
 (set! %py-stmts
   (fn (self toks acc)
     (let ((t (%py-skip-nl toks)))
       (if (null? t)
         (pair (List reverse acc) t)
-        (if (eq? (%py-tag (first t)) (lit tok-dedent))
-          (pair (List reverse acc) (rest t))
-          (let ((r (%py-stmt t)))
-            (self (rest r) (pair (first r) acc))))))))
+        (let ((r (%py-stmt t)))
+          (self (rest r) (pair (first r) acc)))))))
 
 (set! %py-stmt
   (fn (_ toks)
@@ -549,7 +565,7 @@
               (let ((nxt (if (null? (rest toks)) () (first (rest toks)))))
                 (if (if (null? nxt) #t
                       (if (eq? (%py-tag nxt) (lit tok-newline)) #t
-                        (eq? (%py-tag nxt) (lit tok-dedent))))
+                        (%py-block? nxt)))
                   (pair (list (lit %py-return) ()) (rest toks))
                   (let ((r (%py-exprlist (rest toks))))
                     (pair (list (lit %py-return) (first r)) (rest r)))))
@@ -809,8 +825,8 @@
     (let ((t (%py-skip-nl toks)))
       (if (null? t)
         (pair (List reverse acc) t)
-        (if (eq? (%py-tag (first t)) (lit tok-dedent))
-          (pair (List reverse acc) (rest t))
+        (if #f
+          ()
           (if (%py-name-is? (first t) "pass")
             (self (rest t) acc)
             (if (not (%py-name-is? (first t) "def"))
@@ -830,9 +846,11 @@
     (if (not (%py-op-is? (if (null? toks) () (first toks)) ":"))
       (Err raise (lit syntax) "expected : after a class header" ())
       (let ((t (%py-skip-nl (rest toks))))
-        (if (not (eq? (%py-tag (if (null? t) () (first t))) (lit tok-indent)))
+        (if (not (%py-block? (if (null? t) () (first t))))
           (Err raise (lit syntax) "expected an indented class body" ())
-          (%py-class-methods-of (rest t) ()))))))
+          (pair
+            (first (%py-class-methods-of (%py-block-toks (first t)) ()))
+            (rest t)))))))
 
 (def %py-class-stmt
   (fn (_ toks)
@@ -967,9 +985,11 @@
               ; inside the fn, where x's `def` binds locally because the frame
               ; is the function's.  Parameters are already bound and are not
               ; re-declared; shadowing them with a nil would break every call.
-              (let ((span (%py-take
-                            (- (%py-count (rest p)) (%py-count (rest b)))
-                            (rest p))))
+              ; THE BODY IS ONE TOKEN, so the span is its contents rather than
+              ; a length subtraction between two positions.  This used to walk
+              ; the remaining token list TWICE per def to find where the body
+              ; ended -- the block knows where it ends.
+              (let ((span (%py-block-contents (rest p))))
                 (let ((locals (%py-minus
                                 (%py-dedupe () (%py-assign-targets span ()) ())
                                 (first p))))
@@ -1035,16 +1055,15 @@
 ; function body are that function's, not the module's.  Depth is tracked because
 ; a def body can contain further indented blocks, and only the dedent that
 ; returns to the def's own level ends it.
+; A def's body is ONE token now, so skipping past it is finding that token
+; rather than counting INDENT/DEDENT pairs.
 (def %py-skip-def
   (fn (self toks depth)
     (if (null? toks)
       toks
-      (let ((g (%py-tag (first toks))))
-        (if (eq? g (lit tok-indent))
-          (self (rest toks) (+ depth 1))
-          (if (eq? g (lit tok-dedent))
-            (if (<= depth 1) (rest toks) (self (rest toks) (- depth 1)))
-            (self (rest toks) depth)))))))
+      (if (%py-block? (first toks))
+        (rest toks)
+        (self (rest toks) depth)))))
 
 ; Names the grammar owns.  They reach the tokenizer as tok-name -- `if` is a
 ; name there and a keyword to the parser -- so the undefined-name scan has to
@@ -1078,7 +1097,9 @@
           (self (rest toks) (pair (%py-val t) acc))
           (if (eq? (%py-tag t) (lit tok-group))
             (self (rest toks) (%py-append (List reverse (self (%py-group-of t) ())) acc))
-            (self (rest toks) acc)))))))
+          (if (%py-block? t)
+            (self (rest toks) (%py-append (List reverse (self (%py-block-toks t) ())) acc))
+            (self (rest toks) acc))))))))
 
 ; Every name the program BINDS: assignment targets, def names, parameters.
 (def %py-bound-names
@@ -1112,9 +1133,17 @@
     (if (null? toks)
       (List reverse acc)
       (let ((t (first toks)))
+        ; DESCEND INTO BLOCKS.  `if x:` then `y = 1` binds y at MODULE level in
+        ; Python, and the body is a nested token now -- a scan that stayed at
+        ; the top level would hoist nothing from any compound statement.  Def
+        ; bodies are still skipped below: those targets are the function's own.
+        (if (%py-block? t)
+          (self (rest toks) (%py-append (List reverse (self (%py-block-toks t) ())) acc))
         (if (%py-for-target? toks)
           (let ((u (%py-for-names (rest toks) ())))
             (self (rest u) (%py-append (List reverse (%py-syms-of (first u) ())) acc)))
+        (if (%py-block? t)
+          (self (rest toks) (%py-append (List reverse (self (%py-block-toks t) ())) acc))
         (if (%py-unpack-stmt? toks)
           ; every name on the left of `a, b = ...` is bound by it
           (let ((u (%py-unpack-names toks ())))
@@ -1137,7 +1166,7 @@
                 (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
             (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
-            (self (rest toks) acc)))))))))))
+            (self (rest toks) acc)))))))))))))
 
 ; The name after `as` in an except clause.
 (def %py-as-target?
