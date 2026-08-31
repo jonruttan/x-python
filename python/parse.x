@@ -333,7 +333,21 @@
         (list "False" #f)
         (list "None"  ())
         (list "len"   (lit %py-len))
-        (list "range" (lit %py-range))))
+        (list "range" (lit %py-range))
+        ; The builtin exceptions are ordinary names bound to ordinary class
+        ; values, so `except ValueError` and `except MyError` take one path.
+        (list "Exception"         (lit %py-exc-Exception))
+        (list "ArithmeticError"   (lit %py-exc-ArithmeticError))
+        (list "LookupError"       (lit %py-exc-LookupError))
+        (list "ZeroDivisionError" (lit %py-exc-ZeroDivisionError))
+        (list "IndexError"        (lit %py-exc-IndexError))
+        (list "KeyError"          (lit %py-exc-KeyError))
+        (list "AttributeError"    (lit %py-exc-AttributeError))
+        (list "NameError"         (lit %py-exc-NameError))
+        (list "TypeError"         (lit %py-exc-TypeError))
+        (list "ValueError"        (lit %py-exc-ValueError))
+        (list "RuntimeError"      (lit %py-exc-RuntimeError))
+        (list "SyntaxError"       (lit %py-exc-SyntaxError))))
 
 ; PYTHON'S NAMESPACE IS NOT x's, AND KEEPING THEM APART IS NOT TIDINESS.
 ;
@@ -595,7 +609,9 @@
             (if (null? name)
               handler
               (list (lit if)
-                (list (lit %py-exc-match) (lit %py-exc) name)
+                ; the class VALUE, not its spelling -- which is what lets a
+                ; user-defined exception class be caught by the same code
+                (list (lit %py-exc-match) (lit %py-exc) (%py-name->sym name))
                 handler
                 (self (rest clauses))))))))))
 
@@ -643,13 +659,27 @@
       (let ((n (first toks)))
         (if (not (eq? (%py-tag n) (lit tok-name)))
           (Err raise (lit syntax) "expected an exception name after raise" ())
+          ; `raise X(...)` CALLS X and raises the result, which is what Python
+          ; does -- and is why an undefined name still answers NameError with no
+          ; special case: it is bound to a shim that raises when called.
+          ; `raise X` with no parens instantiates it too, as Python does.
           (if (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "(")
+            ; `raise X()` -- no argument, so no expression to parse
+            (if (%py-op-is?
+                  (if (null? (rest (rest toks))) () (first (rest (rest toks)))) ")")
+              (pair
+                (list (lit %py-raise) (list (%py-name->sym (%py-val n))))
+                (rest (rest (rest toks))))
             (let ((r (%py-comparison (rest (rest toks)))))
               (if (not (%py-op-is? (if (null? (rest r)) () (first (rest r))) ")"))
                 (Err raise (lit syntax) "expected )" ())
-                (pair (list (lit %py-raise) (%py-val n) (first r))
-                      (rest (rest r)))))
-            (pair (list (lit %py-raise) (%py-val n) "") (rest toks))))))))
+                (pair
+                  (list (lit %py-raise)
+                    (list (%py-name->sym (%py-val n)) (first r)))
+                  (rest (rest r))))))
+            (pair
+              (list (lit %py-raise) (list (%py-name->sym (%py-val n))))
+              (rest toks))))))))
 
 ; --- class -------------------------------------------------------------------
 ;
