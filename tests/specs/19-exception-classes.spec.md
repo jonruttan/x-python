@@ -67,11 +67,16 @@ differently when nothing catches them. Python shows one form for both.
 
 ### an exception class is a value like any other
 
+The qualname is the bare name: CPython prints `<class 'ValueError'>` — the
+builtins live in no module the program wrote. This case asserted
+`<class '__main__.ValueError'>` when it was written, a recorded divergence the
+qualname slot in 23-types fixed.
+
 ```python
 (python-run "print(ValueError)")
 ```
 ---
-    <class '__main__.ValueError'>
+    <class 'ValueError'>
 
 ## user-defined exceptions
 

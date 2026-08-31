@@ -414,10 +414,19 @@
         (list "None"  ())
         (list "len"   (lit %py-len))
         (list "range" (lit %py-range))
-        (list "str"     (lit %py-str))
+        ; str and list are now the CLASS OBJECTS -- calling one still converts,
+        ; through the %ctor entry, and `type(x) == str` is an identity compare.
+        (list "str"     (lit %py-cls-str))
         (list "repr"    (lit %py-repr-of))
-        (list "list"    (lit %py-mklist-of))
+        (list "list"    (lit %py-cls-list))
         (list "hasattr" (lit %py-hasattr))
+        (list "type"    (lit %py-cls-type))
+        (list "int"     (lit %py-cls-int))
+        (list "float"   (lit %py-cls-float))
+        (list "bool"    (lit %py-cls-bool))
+        (list "dict"    (lit %py-cls-dict))
+        (list "tuple"   (lit %py-cls-tuple))
+        (list "isinstance" (lit %py-isinstance))
         ; The builtin exceptions are ordinary names bound to ordinary class
         ; values, so `except ValueError` and `except MyError` take one path.
         (list "Exception"         (lit %py-exc-Exception))

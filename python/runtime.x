@@ -37,6 +37,9 @@
   %py-raise %py-exc-match %py-exc-match-any
   %py-mkclass %py-setattr %py-super
   %py-str %py-repr-of %py-mklist-of %py-hasattr
+  %py-cls-type %py-cls-int %py-cls-float %py-cls-bool %py-cls-str
+  %py-cls-list %py-cls-dict %py-cls-tuple %py-cls-NoneType
+  %py-type-of %py-isinstance %py-truthy
   %py-exc-Exception %py-exc-ArithmeticError %py-exc-LookupError
   %py-exc-ZeroDivisionError %py-exc-IndexError %py-exc-KeyError
   %py-exc-AttributeError %py-exc-NameError %py-exc-TypeError
@@ -123,7 +126,17 @@
 (def %py-neg (fn (_ a) (- 0 a)))
 
 ; --- Comparison --------------------------------------------------------------
-(def %py-eq (fn (_ a b) (if (str? a) (if (str? b) (Str8 =? a b) #f) (= a b))))
+; Class equality is IDENTITY: the builtin type objects are singletons, so
+; `type(1) == type(2)` is eq? on the same object, and two distinct classes are
+; never equal whatever their names.  And a string never equals a non-string --
+; `1 == 'a'` is False in Python, where handing the pair to x's `=` was an error.
+(def %py-eq
+  (fn (_ a b)
+    (if (str? a) (if (str? b) (Str8 =? a b) #f)
+    (if (str? b) #f
+    (if (%py-class-is a) (eq? a b)
+    (if (%py-class-is b) #f
+      (= a b)))))))
 (def %py-ne (fn (_ a b) (not (%py-eq a b))))
 (def %py-lt (fn (_ a b) (< a b)))
 (def %py-gt (fn (_ a b) (> a b)))
@@ -509,9 +522,13 @@
     (list
       (pair "__init__"
         (fn (_ self . args)
-          (%py-setattr self "__msg__" (if (null? args) "" (first args))))))))
+          (%py-setattr self "__msg__" (if (null? args) "" (first args))))))
+    "Exception"))
 
-(def %py-exc-new (fn (_ name base) (%py-class-new name base ())))
+; Exceptions print <class 'ValueError'> in Python, not <class '__main__....'>
+; -- the builtins live in no module the program wrote, so the qualname is the
+; bare name.  This fixes a recorded divergence in 19-exception-classes.
+(def %py-exc-new (fn (_ name base) (%py-class-new name base () name)))
 
 (def %py-exc-ArithmeticError (%py-exc-new "ArithmeticError" %py-exc-Exception))
 (def %py-exc-LookupError     (%py-exc-new "LookupError"     %py-exc-Exception))
@@ -601,7 +618,7 @@
   (fn (_ o)
     (if (%py-subclass? (%py-obj-class o) %py-exc-Exception)
       (display (%py-class-name (%py-obj-class o)) ": " (%py-exc-msg o))
-      (display "<__main__." (%py-class-name (%py-obj-class o)) " object>"))))
+      (display "<" (%py-class-qualname (%py-obj-class o)) " object>"))))
 
 ; The message an exception carries, for print(e) and str(e).
 (def %py-exc-msg
@@ -674,18 +691,27 @@
       (%py-obj-set-attrs! obj (%py-attr-put (%py-obj-attrs obj) name v)))))
 
 (def %py-mkclass
-  (fn (_ name base methods) (%py-class-new name base methods)))
+  (fn (_ name base methods)
+    (%py-class-new name base methods (Str8 append "__main__." name))))
 
 ; Construction: make the instance, then run __init__ if the class chain has one.
 ; Its return value is discarded -- Python returns the INSTANCE from a call to a
 ; class, whatever __init__ answers.
+; A CLASS WITH A %ctor ENTRY IS ITS OWN CONSTRUCTOR.  `int('5')` must convert,
+; not allocate an instance -- so the builtin type objects carry a constructor
+; function under the key "%ctor", which no Python identifier can spell (method
+; names come from tok-name, and % is not a name character), so a class body can
+; never shadow it by accident.
 (set! %py-instantiate
   (fn (_ cls args)
-    (let ((o (%py-obj-new cls)))
-      (let ((init (%py-method-find cls "__init__")))
-        (if (null? init)
-          o
-          (%seq (apply init (pair o args)) o))))))
+    (let ((ctor (%py-alist-find "%ctor" (%py-class-methods cls))))
+      (if (not (null? ctor))
+        (apply (rest ctor) args)
+        (let ((o (%py-obj-new cls)))
+          (let ((init (%py-method-find cls "__init__")))
+            (if (null? init)
+              o
+              (%seq (apply init (pair o args)) o))))))))
 
 ; --- Tuples ------------------------------------------------------------------
 
@@ -787,3 +813,239 @@
 ; reachable here and the two can never disagree.
 (def %py-hasattr
   (fn (_ o name) (guard (_ #f) (%seq (%py-getattr o name) #t))))
+
+; --- Type objects ------------------------------------------------------------
+;
+; `type(x)` answers a CLASS, and the builtin types get real class objects --
+; ordinary PY-CLASS values, so `type(1) == int` is the same identity compare
+; user classes already get, and print(int) goes through the same write handler.
+;
+; TWO x TYPES ARE ONE PYTHON TYPE.  A small integer and a bigint are different
+; types to x's tower and both are `int` to Python, so the dispatch below maps
+; both handles to one class -- measured with eq? on the handles, which is how
+; the handles compare.  bool's base is int, which is Python's own arrangement
+; and the reason isinstance(True, int) is True while isinstance(1, bool) is not.
+
+(def %py-typeof-prim (prim-ref (lit type) (lit of)))
+(def %py-th-int (%py-typeof-prim 1))
+(def %py-th-big (%py-typeof-prim 99999999999999999999))
+(def %py-th-float (%py-typeof-prim 1.5))
+(def %py-char-code (prim-ref (lit char) (lit ->int)))
+
+; --- constructors ------------------------------------------------------------
+; int('abc') is a ValueError with Python's own message, and the parse is walked
+; BY HAND: the reader-base shortcut accepts prefixes ("12ab" would answer 12),
+; and `Float from` answers 0.0 for garbage -- both silent wrong numbers, the
+; failure mode this bundle keeps finding, so neither is trusted with input the
+; program supplied.
+
+(def %py-int-of-str
+  (fn (_ s)
+    (def n (Str8 length s))
+    (def bad
+      (fn (_)
+        (Err raise (lit value)
+          (Str8 append
+            (Str8 append "invalid literal for int() with base 10: '" s) "'")
+          ())))
+    (def code (fn (_ i) (%py-char-code (%str-ref s i))))
+    (def digits
+      (fn (self i acc seen)
+        (if (>= i n)
+          (if seen acc (bad))
+          (let ((c (code i)))
+            (if (if (>= c 48) (<= c 57) #f)
+              (self (+ i 1) (+ (* acc 10) (- c 48)) #t)
+              (bad))))))
+    (if (= n 0)
+      (bad)
+      (let ((c0 (code 0)))
+        (if (= c0 45)
+          (- 0 (digits 1 0 #f))
+          (if (= c0 43)
+            (digits 1 0 #f)
+            (digits 0 0 #f)))))))
+
+; float('...') is shape-checked before Float from sees it: sign, digits, one
+; dot, one exponent.  Stricter than CPython (no inf/nan, no surrounding
+; spaces), and strictness fails LOUDLY where the alternative answered 0.0.
+(def %py-float-str-ok?
+  (fn (_ s)
+    (def n (Str8 length s))
+    (def code (fn (_ i) (%py-char-code (%str-ref s i))))
+    (def walk
+      (fn (self i seen-digit seen-dot seen-e)
+        (if (>= i n)
+          seen-digit
+          (let ((c (code i)))
+            (if (if (>= c 48) (<= c 57) #f)
+              (self (+ i 1) #t seen-dot seen-e)
+              (if (= c 46)
+                (if (if seen-dot #t seen-e) #f (self (+ i 1) seen-digit #t seen-e))
+                (if (if (= c 101) #t (= c 69))
+                  (if seen-e #f
+                    (if (not seen-digit) #f
+                      (let ((j (if (< (+ i 1) n)
+                                 (if (if (= (code (+ i 1)) 43) #t (= (code (+ i 1)) 45))
+                                   (+ i 2) (+ i 1))
+                                 (+ i 1))))
+                        (self j #f seen-dot #t))))
+                  #f)))))))
+    (if (= n 0)
+      #f
+      (let ((c0 (code 0)))
+        (if (if (= c0 45) #t (= c0 43))
+          (if (= n 1) #f (walk 1 #f #f #f))
+          (walk 0 #f #f #f))))))
+
+(def %py-float-of-str
+  (fn (_ s)
+    (if (%py-float-str-ok? s)
+      (Float from s)
+      (Err raise (lit value)
+        (Str8 append
+          (Str8 append "could not convert string to float: '" s) "'")
+        ()))))
+
+(def %py-num-kind
+  (fn (_ v)
+    (let ((h (%py-typeof-prim v)))
+      (if (eq? h %py-th-int) (lit int)
+      (if (eq? h %py-th-big) (lit int)
+      (if (eq? h %py-th-float) (lit float)
+        ()))))))
+
+(def %py-int-ctor
+  (fn (_ . a)
+    (if (null? a)
+      0
+      (let ((v (first a)))
+        (if (eq? v #t) 1
+        (if (eq? v #f) 0
+        (if (str? v) (%py-int-of-str v)
+          (let ((k (%py-num-kind v)))
+            (if (eq? k (lit int)) v
+            (if (eq? k (lit float))
+              ; toward zero, which is Python's int() and what Float ->int does
+              (Float ->int v)
+              (Err raise (lit type) "int() argument must be a number or string" ())))))))))))
+
+(def %py-float-ctor
+  (fn (_ . a)
+    (if (null? a)
+      0.0
+      (let ((v (first a)))
+        (if (eq? v #t) 1.0
+        (if (eq? v #f) 0.0
+        (if (str? v) (%py-float-of-str v)
+          (let ((k (%py-num-kind v)))
+            (if (eq? k (lit float)) v
+            (if (eq? k (lit int)) (* v 1.0)
+              (Err raise (lit type) "float() argument must be a number or string" ())))))))))))
+
+; Python's truthiness, stated once: the empties and the zeros are false and
+; everything else is true.  Objects and classes are unconditionally true.
+(def %py-truthy
+  (fn (_ v)
+    (if (eq? v #f) #f
+    (if (eq? v #t) #t
+    (if (null? v) #f
+    (if (str? v) (> (Str8 length v) 0)
+    (if (%py-list-is v) (not (null? (%py-list-elems v)))
+    (if (%py-dict-is v) (not (null? (%py-dict-entries v)))
+    (if (%py-tuple-is v) (not (null? (%py-tuple-elems v)))
+    (if (%py-obj-is v) #t
+    (if (%py-class-is v) #t
+      (not (= v 0)))))))))))))
+
+(def %py-bool-ctor
+  (fn (_ . a) (if (null? a) #f (%py-truthy (first a)))))
+
+(def %py-str-ctor
+  (fn (_ . a) (if (null? a) "" (%py-str (first a)))))
+
+(def %py-list-ctor
+  (fn (_ . a) (if (null? a) (%py-list-new ()) (%py-mklist-of (first a)))))
+
+(def %py-dict-copy
+  (fn (self es)
+    (if (null? es)
+      ()
+      (pair (pair (first (first es)) (rest (first es))) (self (rest es))))))
+
+(def %py-dict-ctor
+  (fn (_ . a)
+    (if (null? a)
+      (%py-dict-new ())
+      (if (%py-dict-is (first a))
+        ; a COPY, with fresh entry pairs: dict(d) in Python is a new dict, and
+        ; sharing the pairs would make a store into one visible in the other
+        (%py-dict-new (%py-dict-copy (%py-dict-entries (first a))))
+        (Err raise (lit type) "dict() takes a dict here" ())))))
+
+(def %py-tuple-ctor
+  (fn (_ . a)
+    (if (null? a) (%py-tuple-new ()) (%py-tuple-new (%py-iter-elems (first a))))))
+
+(def %py-type-ctor
+  (fn (_ . a)
+    (if (if (null? a) #t (not (null? (rest a))))
+      (Err raise (lit type) "type() takes 1 argument here" ())
+      (%py-type-of (first a)))))
+
+; --- the class objects -------------------------------------------------------
+; int before bool, because bool derives from it.
+
+(def %py-cls-int
+  (%py-class-new "int" () (list (pair "%ctor" %py-int-ctor)) "int"))
+(def %py-cls-bool
+  (%py-class-new "bool" %py-cls-int (list (pair "%ctor" %py-bool-ctor)) "bool"))
+(def %py-cls-float
+  (%py-class-new "float" () (list (pair "%ctor" %py-float-ctor)) "float"))
+(def %py-cls-str
+  (%py-class-new "str" () (list (pair "%ctor" %py-str-ctor)) "str"))
+(def %py-cls-list
+  (%py-class-new "list" () (list (pair "%ctor" %py-list-ctor)) "list"))
+(def %py-cls-dict
+  (%py-class-new "dict" () (list (pair "%ctor" %py-dict-ctor)) "dict"))
+(def %py-cls-tuple
+  (%py-class-new "tuple" () (list (pair "%ctor" %py-tuple-ctor)) "tuple"))
+(def %py-cls-type
+  (%py-class-new "type" () (list (pair "%ctor" %py-type-ctor)) "type"))
+(def %py-cls-NoneType
+  (%py-class-new "NoneType" () () "NoneType"))
+
+(def %py-type-of
+  (fn (_ v)
+    (if (eq? v #t) %py-cls-bool
+    (if (eq? v #f) %py-cls-bool
+    (if (null? v) %py-cls-NoneType
+    (if (str? v) %py-cls-str
+    (if (%py-list-is v) %py-cls-list
+    (if (%py-dict-is v) %py-cls-dict
+    (if (%py-tuple-is v) %py-cls-tuple
+    (if (%py-obj-is v) (%py-obj-class v)
+    (if (%py-class-is v) %py-cls-type
+      (let ((k (%py-num-kind v)))
+        (if (eq? k (lit int)) %py-cls-int
+        (if (eq? k (lit float)) %py-cls-float
+          (Err raise (lit type) "type: unsupported value" ())))))))))))))))
+
+; isinstance walks the base chain with the same %py-subclass? the exception
+; matcher uses, so user classes, user exceptions and builtins all answer from
+; one definition.  The tuple form is Python's "any of these".
+(def %py-isinstance-any ())
+(set! %py-isinstance-any
+  (fn (self v clss)
+    (if (null? clss)
+      #f
+      (if (%py-isinstance v (first clss)) #t (self v (rest clss))))))
+
+(def %py-isinstance
+  (fn (_ v cls)
+    (if (%py-tuple-is cls)
+      (%py-isinstance-any v (%py-tuple-elems cls))
+      (if (not (%py-class-is cls))
+        (Err raise (lit type)
+          "isinstance() arg 2 must be a type or tuple of types" ())
+        (%py-subclass? (%py-type-of v) cls)))))
