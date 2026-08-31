@@ -183,6 +183,59 @@
     (%go (first %first) (rest %first))))
 
 (set! %py-comparison (fn (_ toks) (%py-left toks %py-cmp-ops %py-sum)))
+
+; --- or / and / not ----------------------------------------------------------
+;
+; PYTHON'S and/or RETURN AN OPERAND, NOT A BOOLEAN.  `[] or 5` is 5 and
+; `0 and x` is 0 -- the truth TEST picks which operand, and the operand itself
+; is the answer.  So each emits a let binding the left side once (it must not
+; evaluate twice) and an if over (%py-truthy ...) choosing between the bound
+; value and the right side -- which also gives short-circuit for free, because
+; the right side sits in an if branch that may never run.
+;
+; The temp is %py-lhs, which cannot collide: every Python name is emitted with
+; a py- prefix, and nesting shadows it correctly because the inner form's only
+; reference to it is within the inner let.
+;
+; Precedence, loosest first: or, then and, then not, then comparison -- so
+; `not a == b` is not(a == b), Python's reading.
+
+(def %py-not-e ())
+(def %py-and-e ())
+(def %py-or-e ())
+
+(set! %py-not-e
+  (fn (_ toks)
+    (if (%py-name-is? (if (null? toks) () (first toks)) "not")
+      (let ((r (%py-not-e (rest toks))))
+        (pair (list (lit not) (list (lit %py-truthy) (first r))) (rest r)))
+      (%py-comparison toks))))
+
+(def %py-bool-fold
+  (fn (self kw emit next toks)
+    (def %go
+      (fn (go2 acc more)
+        (if (%py-name-is? (if (null? more) () (first more)) kw)
+          (let ((r (next (rest more))))
+            (go2 (emit acc (first r)) (rest r)))
+          (pair acc more))))
+    (let ((f (next toks)))
+      (%go (first f) (rest f)))))
+
+(def %py-emit-and
+  (fn (_ l r)
+    (list (lit let) (list (list (lit %py-lhs) l))
+      (list (lit if) (list (lit %py-truthy) (lit %py-lhs)) r (lit %py-lhs)))))
+
+(def %py-emit-or
+  (fn (_ l r)
+    (list (lit let) (list (list (lit %py-lhs) l))
+      (list (lit if) (list (lit %py-truthy) (lit %py-lhs)) (lit %py-lhs) r))))
+
+(set! %py-and-e
+  (fn (_ toks) (%py-bool-fold "and" %py-emit-and %py-not-e toks)))
+(set! %py-or-e
+  (fn (_ toks) (%py-bool-fold "or" %py-emit-or %py-and-e toks)))
 (set! %py-sum        (fn (_ toks) (%py-left toks %py-sum-ops %py-product)))
 (set! %py-product    (fn (_ toks) (%py-left toks %py-product-ops %py-unary)))
 
@@ -295,7 +348,7 @@
   (fn (_ toks)
     (if (null? toks)
       (Err raise (lit syntax) "expected an expression" ())
-      (let ((r (%py-comparison toks)))
+      (let ((r (%py-or-e toks)))
         (if (null? (rest r))
           (first r)
           (Err raise (lit syntax) "unexpected token after an expression" ()))))))
@@ -338,14 +391,14 @@
           (if (eq? (%py-tag (first toks)) (lit tok-newline)) #t
             (%py-block? (first toks))))
       (pair (List reverse acc) toks)
-      (let ((r (%py-comparison toks)))
+      (let ((r (%py-or-e toks)))
         (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ",")
           (self (rest (rest r)) (pair (first r) acc))
           (pair (List reverse (pair (first r) acc)) (rest r)))))))
 
 (def %py-exprlist
   (fn (_ toks)
-    (let ((r (%py-comparison toks)))
+    (let ((r (%py-or-e toks)))
       (if (not (%py-op-is? (if (null? (rest r)) () (first (rest r))) ","))
         r
         (let ((m (%py-exprlist-rest (rest (rest r)) (list (first r)))))
@@ -481,7 +534,7 @@
     (let ((r (%look %py-builtins)))
       (if (pair? r) (first r) r))))
 
-(def python-parse-expr (fn (_ toks) (%py-comparison toks)))
+(def python-parse-expr (fn (_ toks) (%py-or-e toks)))
 
 ; --- Statements --------------------------------------------------------------
 ;
@@ -570,20 +623,27 @@
         (%py-try (rest toks))
       (if (%py-name-is? t "raise")
         (%py-raise-stmt (rest toks))
+      ; THE CONDITION IS PYTHON'S TRUTH, NOT x's.  `if []:` must not run its
+      ; body: an empty list is falsy in Python and a PY-LIST instance is a
+      ; non-nil value to x, so the bare value in an x `if` was silently wrong.
+      ; bool() stated the rule once in %py-truthy; conditions now ask it.
       (if (%py-name-is? t "if")
-        (let ((c (%py-comparison (rest toks))))
+        (let ((c (%py-or-e (rest toks))))
           (let ((b (%py-block (rest c))))
             (let ((e (%py-else (rest b))))
-              (pair (list (lit if) (first c) (first b) (first e)) (rest e)))))
+              (pair
+                (list (lit if) (list (lit %py-truthy) (first c))
+                  (first b) (first e))
+                (rest e)))))
         (if (%py-name-is? t "for")
           (%py-for (rest toks))
         (if (%py-name-is? t "while")
-          (let ((c (%py-comparison (rest toks))))
+          (let ((c (%py-or-e (rest toks))))
             (let ((b (%py-block (rest c))))
               (pair
                 (list
                   (list (lit fn) (list (lit self))
-                    (list (lit if) (first c)
+                    (list (lit if) (list (lit %py-truthy) (first c))
                       (list (lit %seq) (first b) (list (lit self)))
                       ())))
                 (rest b))))
@@ -625,12 +685,12 @@
                         (pair (%py-store (first tgt) (first r)) (rest r)))
                       (let ((aug (%py-op-sym nxt %py-aug-ops)))
                         (if (null? aug)
-                          (%py-comparison toks)
+                          (%py-or-e toks)
                           ; `t op= v` is `t = t op v`.  The target is evaluated
                           ; twice for a subscript, which is wrong for an
                           ; expression with side effects and right for every
                           ; case this handles today.
-                          (let ((r (%py-comparison (rest (rest tgt)))))
+                          (let ((r (%py-or-e (rest (rest tgt)))))
                             (pair
                               (%py-store (first tgt)
                                 (list aug (first tgt) (first r)))
@@ -683,7 +743,7 @@
       (Err raise (lit syntax) "expected a name after for" ())
       (let ((n (%py-for-names toks ())))
         (let ((syms (%py-syms-of (first n) ())))
-          (let ((it (%py-comparison (rest n))))
+          (let ((it (%py-or-e (rest n))))
             (let ((b (%py-block (rest it))))
               (pair
                 (list
@@ -1005,10 +1065,13 @@
           (let ((b (%py-block (rest t))))
             (pair (first b) (rest b)))
           (if (%py-name-is? (first t) "elif")
-            (let ((c (%py-comparison (rest t))))
+            (let ((c (%py-or-e (rest t))))
               (let ((b (%py-block (rest c))))
                 (let ((e (%py-else (rest b))))
-                  (pair (list (lit if) (first c) (first b) (first e)) (rest e)))))
+                  (pair
+                    (list (lit if) (list (lit %py-truthy) (first c))
+                      (first b) (first e))
+                    (rest e)))))
             (pair () t)))))))
 
 ; `def NAME ( params ) : BLOCK`
