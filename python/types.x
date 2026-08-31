@@ -48,7 +48,7 @@
   %py-dict %py-dict-new %py-dict-is %py-dict-entries %py-dict-set! %py-dict-get
   %py-repr %py-equal %py-repeat
   %py-class %py-class-new %py-class-is %py-class-name %py-class-base
-  %py-class-methods %py-instantiate
+  %py-class-methods %py-instantiate %py-obj-write
   %py-obj %py-obj-new %py-obj-is %py-obj-class %py-obj-attrs %py-obj-set-attrs!)
 
 ; Fetch the type prims from the catalog (ns `type` is de-registered, R5).
@@ -323,6 +323,10 @@
 ; Python's rule, so it lives with the other Python rules.
 (def %py-instantiate ())
 
+; Set by runtime.x: how an instance renders depends on whether it is an
+; exception, which is a Python rule and not a property of the type.
+(def %py-obj-write ())
+
 ; A class is (name base methods) and never mutates, so it needs no cell.
 (def %py-class-new
   (fn (_ name base methods) (%make-instance %py-class (list name base methods))))
@@ -357,7 +361,11 @@
       ; The address is the object's identity and is different on every run, so
       ; reproducing it would make every spec that prints an object unassertable.
       ; The name is kept and the address is dropped.
+      ; runtime.x replaces this once it can tell an exception from an ordinary
+      ; object -- that distinction is Python's, and it lives with Python's rules.
       (pair (lit write)
         (fn (_ self)
-          (display "<__main__." (%py-class-name (first (first self)))
-                   " object>"))))))
+          (if (null? %py-obj-write)
+            (display "<__main__." (%py-class-name (first (first self)))
+                     " object>")
+            (%py-obj-write self)))))))

@@ -36,6 +36,10 @@
   %py-range %py-iter-elems %py-callcc
   %py-raise %py-exc-match
   %py-mkclass %py-setattr
+  %py-exc-Exception %py-exc-ArithmeticError %py-exc-LookupError
+  %py-exc-ZeroDivisionError %py-exc-IndexError %py-exc-KeyError
+  %py-exc-AttributeError %py-exc-NameError %py-exc-TypeError
+  %py-exc-ValueError %py-exc-RuntimeError %py-exc-SyntaxError
   %py-mkdict %py-dict? %py-dget %py-dset)
 
 ; --- Arithmetic --------------------------------------------------------------
@@ -82,21 +86,25 @@
 ; and None for `1 % 0` -- three more silent wrong answers, and the three
 ; Python spells ZeroDivisionError.  The messages are Python's own, which
 ; differ between true and floor division.
+;
+; These raise an Err rather than building an instance, like every other raise
+; this runtime makes.  The kind is what `except ZeroDivisionError` matches on;
+; see the exception section for why both shapes are caught the same way.
 (def %py-div
   (fn (_ a b)
     (if (= b 0)
-      (%py-raise "ZeroDivisionError" "division by zero")
+      (Err raise (lit zero-division) "division by zero" ())
       (/ (* a 1.0) b))))
 
 (def %py-floordiv
   (fn (_ a b)
     (if (= b 0)
-      (%py-raise "ZeroDivisionError" "integer division or modulo by zero")
+      (Err raise (lit zero-division) "integer division or modulo by zero" ())
       (Num quotient a b))))
 (def %py-mod
   (fn (_ a b)
     (if (= b 0)
-      (%py-raise "ZeroDivisionError" "integer modulo by zero")
+      (Err raise (lit zero-division) "integer modulo by zero" ())
       (Num modulo a b))))
 ; NEVER HAND Num expt A NEGATIVE EXPONENT.  Its parameter is documented
 ; "Non-negative integer exponent" and nothing enforces it: with exp < 0 the
@@ -416,7 +424,14 @@
                 ; "#<err:zero-division division by zero>".
                 (if (Err err? v)
                   (display (v msg))
-                  (display v))))))))))
+                ; An exception INSTANCE prints as its message too -- print(e)
+                ; has to read the same whether the raise came from Python source
+                ; or from this runtime.
+                (if (%py-obj-is v)
+                  (if (%py-subclass? (%py-obj-class v) %py-exc-Exception)
+                    (display (%py-exc-msg v))
+                    (display v))
+                  (display v)))))))))))
 
 ; Close the loop: python/types.x forward-declares %py-repr and its PY-LIST write
 ; handler calls it per element, so that a string inside a list shows its quotes.
@@ -454,60 +469,124 @@
 
 ; --- Exceptions --------------------------------------------------------------
 ;
-; PYTHON'S EXCEPTION TYPES ARE x's ERROR KINDS.  Err already carries a kind
-; symbol, a message and a data alist, and every raise in this runtime already
-; picked a kind: `(lit index)` for a bad subscript, `(lit key)` for a missing
-; dict key, `(lit type)` for a bad operand.  Those kinds were chosen before
-; there was any way to catch them, and they turn out to be exactly the
-; discrimination `except` needs -- so the table below is a NAMING, not a
-; mechanism, and every error this runtime already raised became catchable the
-; moment `try` could parse.
+; PYTHON'S EXCEPTION TYPES ARE CLASSES, AND THE HIERARCHY IS THE POINT.
 ;
-; `Exception` matches ANY kind.  It is Python's base class for everything a
-; program is expected to catch, and there is no class hierarchy here to derive
-; that from -- so it is stated, not computed.  When classes arrive, this is the
-; table that has to grow a parent link.
+; The first version of this file mapped exception NAMES to x error KINDS with a
+; string table, and `Exception` matched everything by a special case written
+; into the matcher.  That worked and could not grow: `except LookupError`
+; catching both IndexError and KeyError is not a special case, it is what
+; deriving from a common base MEANS, and a flat table has no way to say it.
+;
+; So the builtin exceptions are real PY-CLASS values, in Python's own shape, and
+; matching walks the base chain.  `Exception` is no longer special -- it is just
+; the root every other one reaches.
+;
+; TWO KINDS OF RAISED VALUE ARRIVE HERE.  A `raise` in Python source produces a
+; PY-OBJ instance.  Everything this runtime raises itself -- a bad subscript, a
+; missing key -- produces an Err carrying a kind symbol, because those raises
+; predate classes by a long way and rewriting them would gain nothing.  The
+; kind table below is the bridge: an Err's kind names the class it would have
+; been, and from there both kinds of value match identically.
 
-(def %py-exc-kinds
+(def %py-exc-Exception
+  (%py-class-new "Exception" ()
+    ; Every exception gets a message, and this is where it is stored.  A user
+    ; class that defines its own __init__ overrides this and gets no message
+    ; unless it sets one -- Python would have it call super().__init__, which
+    ; does not exist here.
+    (list
+      (pair "__init__"
+        (fn (_ self . args)
+          (%py-setattr self "__msg__" (if (null? args) "" (first args))))))))
+
+(def %py-exc-new (fn (_ name base) (%py-class-new name base ())))
+
+(def %py-exc-ArithmeticError (%py-exc-new "ArithmeticError" %py-exc-Exception))
+(def %py-exc-LookupError     (%py-exc-new "LookupError"     %py-exc-Exception))
+(def %py-exc-ZeroDivisionError
+  (%py-exc-new "ZeroDivisionError" %py-exc-ArithmeticError))
+(def %py-exc-IndexError      (%py-exc-new "IndexError"      %py-exc-LookupError))
+(def %py-exc-KeyError        (%py-exc-new "KeyError"        %py-exc-LookupError))
+(def %py-exc-AttributeError  (%py-exc-new "AttributeError"  %py-exc-Exception))
+(def %py-exc-NameError       (%py-exc-new "NameError"       %py-exc-Exception))
+(def %py-exc-TypeError       (%py-exc-new "TypeError"       %py-exc-Exception))
+(def %py-exc-ValueError      (%py-exc-new "ValueError"      %py-exc-Exception))
+(def %py-exc-RuntimeError    (%py-exc-new "RuntimeError"    %py-exc-Exception))
+(def %py-exc-SyntaxError     (%py-exc-new "SyntaxError"     %py-exc-Exception))
+
+; An Err's kind names the class it would have been.  A kind with no row -- one
+; raised by the platform rather than by this runtime -- answers Exception, so
+; `except Exception` still catches it rather than letting it through a handler
+; that looks like it should have caught it.
+(def %py-kind-classes
   (list
-    (pair "TypeError"         (lit type))
-    (pair "ValueError"        (lit value))
-    (pair "IndexError"        (lit index))
-    (pair "KeyError"          (lit key))
-    (pair "NameError"         (lit name))
-    (pair "AttributeError"    (lit attribute))
-    (pair "ZeroDivisionError" (lit zero-division))
-    (pair "SyntaxError"       (lit syntax))
-    (pair "RuntimeError"      (lit state))))
+    (pair (lit type)          %py-exc-TypeError)
+    (pair (lit value)         %py-exc-ValueError)
+    (pair (lit index)         %py-exc-IndexError)
+    (pair (lit key)           %py-exc-KeyError)
+    (pair (lit name)          %py-exc-NameError)
+    (pair (lit attribute)     %py-exc-AttributeError)
+    (pair (lit zero-division) %py-exc-ZeroDivisionError)
+    (pair (lit syntax)        %py-exc-SyntaxError)
+    (pair (lit state)         %py-exc-RuntimeError)))
 
-(def %py-exc-lookup
-  (fn (self name rows)
+(def %py-kind-class
+  (fn (self k rows)
     (if (null? rows)
-      ()
-      (if (Str8 =? name (first (first rows)))
+      %py-exc-Exception
+      (if (eq? k (first (first rows)))
         (rest (first rows))
-        (self name (rest rows))))))
+        (self k (rest rows))))))
 
-(def %py-exc-kind (fn (_ name) (%py-exc-lookup name %py-exc-kinds)))
+; The class of whatever was raised, whichever of the two shapes it is.
+(def %py-exc-class-of
+  (fn (_ e)
+    (if (%py-obj-is e)
+      (%py-obj-class e)
+      (%py-kind-class (Err kind-of e) %py-kind-classes))))
 
-; An unknown exception name is a NameError, as it is in Python -- `raise Foo`
-; where Foo was never defined does not raise Foo.
-(def %py-raise
-  (fn (_ name msg)
-    (let ((k (%py-exc-kind name)))
-      (if (null? k)
-        (Err raise (lit name)
-          (Str8 append (Str8 append "name '" name) "' is not defined") ())
-        (Err raise k msg ())))))
+(def %py-subclass?
+  (fn (self c target)
+    (if (null? c)
+      #f
+      (if (eq? c target) #t (self (%py-class-base c) target)))))
 
-; Err kind-of is TOTAL -- a legacy bare string or a C error atom answers 'user
-; -- so this never has to ask whether the caught thing is an Err first.
 (def %py-exc-match
-  (fn (_ e name)
-    (if (Str8 =? name "Exception")
-      #t
-      (let ((k (%py-exc-kind name)))
-        (if (null? k) #f (eq? (Err kind-of e) k))))))
+  (fn (_ e cls)
+    (if (not (%py-class-is cls))
+      (Err raise (lit type)
+        "catching classes that do not inherit from BaseException is not allowed"
+        ())
+      (%py-subclass? (%py-exc-class-of e) cls))))
+
+; `raise X(...)` CALLS X and raises the result, which is what Python does -- and
+; is why an undefined name answers NameError here without any special case: the
+; parser emits a call, and an undefined name is bound to a shim that raises when
+; called.
+(def %py-raise
+  (fn (_ inst)
+    (if (if (%py-obj-is inst)
+          (%py-subclass? (%py-obj-class inst) %py-exc-Exception)
+          #f)
+      (error inst)
+      ; An ordinary object is not raisable, and neither is a number or a string.
+      (Err raise (lit type) "exceptions must derive from BaseException" ()))))
+
+; UNCAUGHT, AN INSTANCE RENDERS AS `Name: message`.  Without this it printed
+; `<__main__.KeyError object>` -- the object form is right for an ordinary
+; object and useless for the one case where a human is reading it because the
+; program just died.  Python's traceback ends in exactly this line.
+(set! %py-obj-write
+  (fn (_ o)
+    (if (%py-subclass? (%py-obj-class o) %py-exc-Exception)
+      (display (%py-class-name (%py-obj-class o)) ": " (%py-exc-msg o))
+      (display "<__main__." (%py-class-name (%py-obj-class o)) " object>"))))
+
+; The message an exception carries, for print(e) and str(e).
+(def %py-exc-msg
+  (fn (_ e)
+    (let ((a (%py-alist-find "__msg__" (%py-obj-attrs e))))
+      (if (null? a) "" (rest a)))))
 
 ; --- Classes -----------------------------------------------------------------
 ;
