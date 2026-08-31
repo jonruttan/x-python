@@ -11,11 +11,28 @@ raises Python's own message with Python's own spelling.
 
 ### an undefined name raises with the name the programmer wrote
 
+This case's original example was `int` — chosen when `int` was deliberately
+unbound, to pin that the interpreter said `int` and not `py-int`. Then #18 made
+`int` a real builtin and the example stopped being an example: `int(1)` answers
+1. The point of the case is the SPELLING of the error, so it keeps making that
+point with a name that has not graduated.
+
+```python
+(python-run "print(frob(1))")
+```
+---
+    Error: #<err:name name 'frob' is not defined>
+
+### int graduated from this file
+
+The old expected output of the case above, kept as its own case because the
+change of answer IS the feature: the name stopped raising because it now works.
+
 ```python
 (python-run "print(int(1))")
 ```
 ---
-    Error: #<err:name name 'int' is not defined>
+    1
 
 ### and a different one names itself
 
