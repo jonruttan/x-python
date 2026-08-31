@@ -160,3 +160,54 @@ and `(Indent make)`'s default is Python's answer.
 ```
 ---
     (('tok-name "def") ('tok-name "f") ('tok-group "(" ()) ('tok-op ":") ('tok-newline) ('tok-indent) ('tok-name "return") ('tok-number "1") ('tok-newline) ('tok-dedent) ('tok-name "f") ('tok-group "(" ()))
+
+## implicit line joining
+
+**This is new behaviour, not a refactor**, and it needs saying because it
+arrived on a change whose commit message is about DELETING a hand-written pass.
+
+Python joins lines implicitly inside brackets: an expression may span lines with
+no backslash, and the newlines are not line structure. The old flat token stream
+emitted a newline token in the middle of a list literal, and the element scanner
+rejected it. Now a bracketed run is read through the engine's reader loop as one
+token and the newlines inside it never reach the line-structure pass, so this
+works — for free, which is exactly why it is pinned here rather than left as
+untested behaviour nobody remembers adding.
+
+### a list literal spanning two lines
+
+```python
+(python-run "x = [1,\n 2]\nprint(x)")
+```
+---
+    [1, 2]
+
+### a call spanning two lines
+
+```python
+(python-run "def f(a, b):\n    return a + b\nprint(f(1,\n  2))")
+```
+---
+    3
+
+### a dict spanning two lines
+
+```python
+(python-run "d = {'a': 1,\n 'b': 2}\nprint(d)")
+```
+---
+    {'a': 1, 'b': 2}
+
+### a bracket inside a string is not a delimiter
+
+The group reader never sees these characters as brackets: a string is read as an
+ordinary token by PY-SQ/PY-DQ before the group handler asks for the next one. A
+reader that scanned characters to a matching closer would need its own quote
+tracking to get this right, and would have to keep it in step with the string
+types forever.
+
+```python
+(python-run "print([']'])")
+```
+---
+    [']']
