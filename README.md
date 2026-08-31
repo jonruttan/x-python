@@ -13,7 +13,9 @@ $ x -l python
 ```
 
 x-python is a **lang**: a different surface language loaded over an x-lang
-dialect, free to re-mean shared spellings. The terms are in x-lang's
+dialect. Where x-lang and Python spell something the same way, Python is free
+to mean something different by it — `#` opens a comment here, and `'` opens a
+string. The terms are in x-lang's
 [lang contract](https://github.com/jonruttan/x-lang/blob/main/docs/lang-contract.md).
 
 ## Status
