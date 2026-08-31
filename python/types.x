@@ -47,6 +47,7 @@
   %py-list %py-list-new %py-list-is %py-list-elems %py-list-set!
   %py-dict %py-dict-new %py-dict-is %py-dict-entries %py-dict-set! %py-dict-get
   %py-repr %py-equal %py-repeat
+  %py-tuple %py-tuple-new %py-tuple-is %py-tuple-elems
   %py-class %py-class-new %py-class-is %py-class-name %py-class-base
   %py-class-methods %py-instantiate %py-obj-write
   %py-obj %py-obj-new %py-obj-is %py-obj-class %py-obj-attrs %py-obj-set-attrs!)
@@ -369,3 +370,99 @@
             (display "<__main__." (%py-class-name (first (first self)))
                      " object>")
             (%py-obj-write self)))))))
+
+; --- PY-TUPLE ----------------------------------------------------------------
+;
+; IMMUTABLE, SO NO CELL.  A list needed a cell because `append` has to be
+; visible through every reference to it; a tuple has no operation that changes
+; it, so the elements sit directly in the payload and the instance IS the value.
+;
+; An empty tuple is an instance whose payload is nil -- which is exactly why it
+; is a type rather than a bare x list.  `()` and None are different values in
+; Python and would be the same nil here.
+
+(def %py-tuple ())
+
+(def %py-tuple-new (fn (_ elems) (%make-instance %py-tuple elems)))
+(def %py-tuple-is (fn (_ v) (%type? v %py-tuple)))
+(def %py-tuple-elems (fn (_ v) (first v)))
+
+(def %py-tuple-step
+  (fn (_ st) (if (null? st) () (pair (first st) (rest st)))))
+
+(set! %py-tuple
+  (%make-type
+    "PY-TUPLE"
+    (list
+      ; A ONE-ELEMENT TUPLE PRINTS ITS TRAILING COMMA.  `(1,)` is not
+      ; decoration: `(1)` is the number 1 in Python, so the comma is the only
+      ; thing that makes the value a tuple, and a repr without it would print
+      ; something that reads back as a different value.
+      (pair
+        (lit write)
+        (fn (_ self)
+          (display "(")
+          (def go
+            (fn (recur l sep)
+              (if (not (null? l))
+                (do
+                  (if sep (display ", "))
+                  (%py-repr (first l))
+                  (recur (rest l) #t)))))
+          (go (first self) #f)
+          ; The trailing comma goes on a ONE-element tuple only.  `rest` is
+          ; reached only when the payload is non-nil: (rest ()) on an empty
+          ; tuple is a read of a non-pair, which segfaults rather than raising
+          ; (x-engine-c#16), and `()` is the commonest tuple there is.
+          (if (null? (first self))
+            ()
+            (if (null? (rest (first self))) (display ",") ()))
+          (display ")")))
+      (pair (lit length) (fn (_ self) (List length (first self))))
+      (pair
+        (lit call)
+        (fn (_ self . args)
+          (def l (first self))
+          (def n (List length l))
+          (def i (first args))
+          (def k (if (< i 0) (+ n i) i))
+          (if (if (< k 0) #t (>= k n))
+            (Err raise (lit index) "tuple index out of range" ())
+            (List ref k l))))
+      (pair (lit iter) (fn (_ self) (%i-make %py-tuple-step (first self)))))))
+
+(def %py-tuple-type (%type-by-atom %py-tuple))
+
+(%type-push-op %py-tuple-type (lit +)
+  (fn (_ a b)
+    (if (if (%py-tuple-is a) (%py-tuple-is b) #f)
+      (%py-tuple-new (%py-concat (first a) (first b)))
+      (Err raise (lit type) "can only concatenate tuple to tuple" ()))))
+
+(%type-push-op %py-tuple-type (lit *)
+  (fn (_ a b)
+    (let ((t (if (%py-tuple-is a) a b))
+          (n (if (%py-tuple-is a) b a)))
+      (if (%py-not-a-count n)
+        (Err raise (lit type) "can't multiply sequence by non-int" ())
+        (%py-tuple-new (%py-repeat (first t) n))))))
+
+; A tuple is equal only to a tuple.  `(1, 2) == [1, 2]` is False in Python --
+; the sequences are the same and the types are not.
+(%type-push-op %py-tuple-type (lit =)
+  (fn (_ a b)
+    (if (if (%py-tuple-is a) (%py-tuple-is b) #f)
+      (%py-seq-eq (first a) (first b))
+      #f)))
+
+(%type-push-op %py-tuple-type (lit <)
+  (fn (_ a b)
+    (if (if (%py-tuple-is a) (%py-tuple-is b) #f)
+      (%py-seq-lt (first a) (first b))
+      (Err raise (lit type) "unorderable types" ()))))
+
+(%type-push-op %py-tuple-type (lit >)
+  (fn (_ a b)
+    (if (if (%py-tuple-is a) (%py-tuple-is b) #f)
+      (%py-seq-lt (first b) (first a))
+      (Err raise (lit type) "unorderable types" ()))))

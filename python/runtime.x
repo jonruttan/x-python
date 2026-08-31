@@ -34,13 +34,14 @@
   %py-print %py-display
   %py-mklist %py-index %py-len %py-list? %py-write %py-getattr %py-setindex
   %py-range %py-iter-elems %py-callcc
-  %py-raise %py-exc-match
+  %py-raise %py-exc-match %py-exc-match-any
   %py-mkclass %py-setattr
   %py-exc-Exception %py-exc-ArithmeticError %py-exc-LookupError
   %py-exc-ZeroDivisionError %py-exc-IndexError %py-exc-KeyError
   %py-exc-AttributeError %py-exc-NameError %py-exc-TypeError
   %py-exc-ValueError %py-exc-RuntimeError %py-exc-SyntaxError
-  %py-mkdict %py-dict? %py-dget %py-dset)
+  %py-mkdict %py-dict? %py-dget %py-dset
+  %py-mktuple %py-tuple? %py-unpack)
 
 ; --- Arithmetic --------------------------------------------------------------
 ; `+` dispatches on the operands, and the string case is not an extra: Python
@@ -142,11 +143,13 @@
   (fn (_ v)
     (if (%py-dict? v)
       (List length (%py-dict-entries v))
+    (if (%py-tuple-is v)
+      (List length (%py-tuple-elems v))
     (if (%py-list? v)
       (List length (%py-list-elems v))
       (if (str? v)
         (Str8 length v)
-        (Err raise (lit type) "object of this type has no len()" ()))))))
+        (Err raise (lit type) "object of this type has no len()" ())))))))
 
 ; NEGATIVE INDICES COUNT FROM THE END, which is Python and not x.  -1 is the
 ; last element, and an index past either end raises IndexError rather than
@@ -162,7 +165,9 @@
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "string index out of range" ())
             (Str8 sub k 1 v))))
-    ; Subscripting a dict is a call too -- see the list branch below.
+    ; Subscripting a tuple and a dict are calls too -- see the list branch.
+    (if (%py-tuple-is v)
+      (v i)
     (if (%py-dict? v)
       (v i)
     (if (not (%py-list? v))
@@ -170,7 +175,7 @@
       ; SUBSCRIPTING A LIST IS A CALL.  x dispatches `(v i)` through the type's
       ; `call` handler, so negative indices and IndexError are stated once in
       ; python/types.x rather than copied here.
-      (v i))))))
+      (v i)))))))
 
 ; Store into a list at an index.  Rebuilds the element list and hangs it back on
 ; the SAME tag pair, so every reference sees the store -- the identity argument
@@ -211,11 +216,13 @@
     ; Iterating a dict yields its KEYS, as in Python.
     (if (%py-dict? v)
       (%py-dkeys (%py-dict-entries v))
+    (if (%py-tuple-is v)
+      (%py-tuple-elems v)
     (if (%py-list? v)
       (%py-list-elems v)
       (if (str? v)
         (%py-str-chars v 0 (Str8 length v))
-        (Err raise (lit type) "object is not iterable" ()))))))
+        (Err raise (lit type) "object is not iterable" ())))))))
 
 ; range(stop) / range(start, stop) / range(start, stop, step)
 ;
@@ -414,6 +421,8 @@
           (display "False")
           (if (null? v)
             (display "None")
+            (if (%py-tuple-is v)
+              (write v)
             (if (%py-list? v)
               ; The type's `write` handler renders it, calling back here per element.
               (write v)
@@ -431,7 +440,7 @@
                   (if (%py-subclass? (%py-obj-class v) %py-exc-Exception)
                     (display (%py-exc-msg v))
                     (display v))
-                  (display v)))))))))))
+                  (display v))))))))))))
 
 ; Close the loop: python/types.x forward-declares %py-repr and its PY-LIST write
 ; handler calls it per element, so that a string inside a list shows its quotes.
@@ -559,6 +568,15 @@
         ())
       (%py-subclass? (%py-exc-class-of e) cls))))
 
+; `except (A, B):` -- any of a tuple of classes.  Python spells this with a
+; tuple and means "or"; nothing about it needs the tuple TYPE, only the list of
+; classes the parser already has.
+(def %py-exc-match-any
+  (fn (self e clss)
+    (if (null? clss)
+      #f
+      (if (%py-exc-match e (first clss)) #t (self e (rest clss))))))
+
 ; `raise X(...)` CALLS X and raises the result, which is what Python does -- and
 ; is why an undefined name answers NameError here without any special case: the
 ; parser emits a call, and an undefined name is bound to a shim that raises when
@@ -665,3 +683,29 @@
         (if (null? init)
           o
           (%seq (apply init (pair o args)) o))))))
+
+; --- Tuples ------------------------------------------------------------------
+
+(def %py-mktuple (fn (_ . elems) (%py-tuple-new elems)))
+(def %py-tuple? (fn (_ v) (%py-tuple-is v)))
+
+; UNPACKING IS A LENGTH CHECK AND A WALK.  `a, b = f()` is the reason tuples
+; earn their keep -- it is how a Python function returns two things -- and
+; Python is strict about the count, because a silent short walk would bind a
+; name to None and fail somewhere else entirely.
+(def %py-unpack-count
+  (fn (self v)
+    (if (%py-tuple-is v)
+      (List length (%py-tuple-elems v))
+      (if (%py-list? v)
+        (List length (%py-list-elems v))
+        (Err raise (lit type) "cannot unpack non-sequence" ())))))
+
+(def %py-unpack
+  (fn (_ v n)
+    (let ((got (%py-unpack-count v)))
+      (if (< got n)
+        (Err raise (lit value) "not enough values to unpack" ())
+        (if (> got n)
+          (Err raise (lit value) "too many values to unpack" ())
+          (if (%py-tuple-is v) (%py-tuple-elems v) (%py-list-elems v)))))))
