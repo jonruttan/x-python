@@ -37,6 +37,7 @@
   %py-raise %py-exc-match %py-exc-match-any
   %py-mkclass %py-setattr %py-super
   %py-str %py-repr-of %py-mklist-of %py-hasattr
+  %py-decimal %py-decimal?
   %py-exc-Exception %py-exc-ArithmeticError %py-exc-LookupError
   %py-exc-ZeroDivisionError %py-exc-IndexError %py-exc-KeyError
   %py-exc-AttributeError %py-exc-NameError %py-exc-TypeError
@@ -434,6 +435,12 @@
                 ; str(e) in Python is the MESSAGE, not the repr -- `print(e)`
                 ; inside an except block shows "division by zero", not
                 ; "#<err:zero-division division by zero>".
+                (if (%py-decimal? v)
+                  ; repr(Decimal('0.1')) is Decimal('0.1') in Python, and a
+                  ; container shows repr of its elements -- so this is the
+                  ; container form too.  x writes it as 0.1d, and that `d` is
+                  ; x's literal syntax rather than anything Python prints.
+                  (display "Decimal('" (Decimal ->str v) "')")
                 (if (Err err? v)
                   (display (v msg))
                 ; An exception INSTANCE prints as its message too -- print(e)
@@ -443,7 +450,7 @@
                   (if (%py-subclass? (%py-obj-class v) %py-exc-Exception)
                     (display (%py-exc-msg v))
                     (display v))
-                  (display v))))))))))))
+                  (display v)))))))))))))
 
 ; Close the loop: python/types.x forward-declares %py-repr and its PY-LIST write
 ; handler calls it per element, so that a string inside a list shows its quotes.
@@ -465,7 +472,9 @@
 ; was added to write and not to its copy here.
 (def %py-display
   (fn (_ v)
-    (if (str? v) (display v) (%py-write v))))
+    (if (str? v)
+      (display v)
+      (if (%py-decimal? v) (display (Decimal ->str v)) (%py-write v)))))
 
 (def %py-print
   (fn (_ . args)
@@ -769,13 +778,18 @@
 (def %py-write-to-str (prim-ref (lit io) (lit write-to-str)))
 
 (def %py-str
-  (fn (_ v) (if (str? v) v (%py-write-to-str v))))
+  (fn (_ v)
+    (if (str? v)
+      v
+      (if (%py-decimal? v) (Decimal ->str v) (%py-write-to-str v)))))
 
 (def %py-repr-of
   (fn (_ v)
     (if (str? v)
       (Str8 append (Str8 append "'" v) "'")
-      (%py-write-to-str v))))
+      (if (%py-decimal? v)
+        (Str8 append (Str8 append "Decimal('" (Decimal ->str v)) "')")
+        (%py-write-to-str v)))))
 
 ; `list(x)` takes anything iterable, which is exactly what `for` already asks
 ; for -- so it is the same function, wrapped.
@@ -787,3 +801,28 @@
 ; reachable here and the two can never disagree.
 (def %py-hasattr
   (fn (_ o name) (guard (_ #f) (%seq (%py-getattr o name) #t))))
+
+; --- decimal.Decimal ---------------------------------------------------------
+;
+; PYTHON'S `float` IS NOT THIS, and must not become it.  CPython's float is IEEE
+; 754 binary: `0.1 + 0.2` is 0.30000000000000004, and the conformance corpus has
+; a whole float/ suite checking exactly that.  x/num/decimal is EXACT for + - *
+; -- `0.1d + 0.2d` is 0.3d -- so mapping it onto `float` would move this bundle
+; FURTHER from CPython while looking like an improvement.
+;
+; It is Python's `decimal.Decimal`, which has the same contract: exact + - *,
+; division rounding to a context precision, half-even.  So it is bound to that
+; name and nothing else changes -- arithmetic already dispatches through the
+; tower, so `+` on two decimals needed no code here at all.
+;
+; DIVERGENCE, STATED: Python spells this `from decimal import Decimal`, and this
+; bundle has no import yet, so the name is a builtin.  When modules land it
+; moves behind the import and this note goes away.
+;
+; The precision is set to 28 -- CPython's default context -- rather than left at
+; x's 34: `Decimal(1) / Decimal(3)` is a printed answer and the digit count is
+; part of it.
+(Decimal precision! 28)
+
+(def %py-decimal? (fn (_ v) (Decimal decimal? v)))
+(def %py-decimal (fn (_ x) (Decimal from x)))
