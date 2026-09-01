@@ -9,7 +9,3 @@ deps/
 # embeds the output of whichever CPython happened to be the oracle.
 tests/lib/
 tests/conformance/
-# The engine link is a MACHINE FACT: tests/spec-runner.sh points it at the
-# engine it is already using, so the platform's boot finds the C headers and
-# compiles its reader analysers (23.6s -> 7.8s per spec file, measured).
-/engine

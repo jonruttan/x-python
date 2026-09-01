@@ -52,24 +52,6 @@ X_BIN="${X_BIN:-$("$X" --engine-path)}"
 SPEC_RUNNER_DIR="$X_ROOT/tests"
 export SPEC_RUNNER_DIR
 
-# HOSTED BOOT, AND IT IS WORTH 3x THE SUITE'S WALL CLOCK.  The platform's
-# boot compiles its reader analysers through the cc lane, gated by
-# %compile-hosted? -- which probes engine/include RELATIVE TO CWD (compile.x's
-# design assumes `engine` points at the engine wherever x runs).  A bundle
-# checkout has no such entry, so every spec here booted with INTERPRETED
-# analysers: 23.6s per file against 7.8s hosted, measured on the same tree.
-# The engine release dir ships include/ for exactly this purpose, so the
-# runner points `engine` at the engine it is already using.  The link is a
-# machine fact (gitignored, never committed), refreshed when the engine moves,
-# and left alone if the user placed their own.
-X_ENGINE_ROOT="$(dirname "$X_BIN")"
-if [ -d "$X_ENGINE_ROOT/include" ]; then
-	if [ -L "$BUNDLE/engine" ] && [ "$(readlink "$BUNDLE/engine")" != "$X_ENGINE_ROOT" ]; then
-		rm -f "$BUNDLE/engine"
-	fi
-	[ -e "$BUNDLE/engine" ] || ln -s "$X_ENGINE_ROOT" "$BUNDLE/engine"
-fi
-
 # The harness is GENERATED, never committed: it embeds two absolute paths that
 # are facts of this machine, not of the bundle.
 sh "$BUNDLE/tests/gen-harness.sh" "$X_ROOT" "$BUNDLE"
