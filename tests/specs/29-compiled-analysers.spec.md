@@ -43,7 +43,7 @@ true, and the attempt has pinned itself out of the way.
 ```python
 (%seq
   (do
-    (def %src "abc de_2 12 3.5 0.25 # comment\n\nif x_1:\n    y = 'str' + \"str\"\n")
+    (def %src "abc de_2 12 3.5 0.25 1e10 2.5E-3 .5 1_000.1_8 # comment\n\nif x_1:\n    y = 'str' + \"str\"\n")
     (def %before (python-tokenize %src))
     (%set-first! %py-jit-threshold 0)
     (def %after (python-tokenize %src))

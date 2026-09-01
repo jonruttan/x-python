@@ -329,22 +329,68 @@
 ; its float is IEEE 754, and which one a literal denotes is a question with a
 ; right answer that belongs to the evaluator -- a tokenizer that converts early
 ; has to know the tower, and gets `1_000` and `0x10` wrong quietly.
+; AN EXPONENT IS PART OF THE LITERAL.  `1e10` is one number in Python, and a
+; tokenizer without an exponent state hands the parser `1` followed by the
+; name `e10` -- a silent wrong number when the parser copes and a confusing
+; syntax error when it does not.  The path never sets a score until a digit
+; follows the `e`, so `1e`, `1e+` and `12ea` reject the WHOLE number candidacy
+; -- which is Python's answer too: `1e` is a SyntaxError, not `1` and a name.
+;
+; UNDERSCORES CONTINUE A NUMBER (`1_000.1_8`), loosely: the lexer accepts them
+; anywhere between the digits and the value parser strips them.  Python is
+; stricter (`1_` is an error); the looseness costs an accepted-then-mis-parsed
+; literal nothing today because the parse strips exactly what this accepted.
 (def %py-number-frac ())
 (def %py-number-body ())
+(def %py-number-exp-digits ())
+
+(set! %py-number-exp-digits
+  (fn (_ buffer score chr)
+    (if (%py-digit? chr)
+      %py-number-exp-digits
+      (if (= chr 95)
+        %py-number-exp-digits
+        (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+
+; After the `e`: an optional sign, then at least one digit.
+(def %py-number-exp-first
+  (fn (_ buffer score chr)
+    (if (%py-digit? chr) %py-number-exp-digits ())))
+
+(def %py-number-exp-sign
+  (fn (_ buffer score chr)
+    (if (%py-digit? chr)
+      %py-number-exp-digits
+      (if (if (= chr 43) #t (= chr 45)) %py-number-exp-first ()))))
 
 (set! %py-number-frac
   (fn (_ buffer score chr)
     (if (%py-digit? chr)
       %py-number-frac
-      (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
+      (if (= chr 95)
+        %py-number-frac
+        (if (if (= chr 101) #t (= chr 69))
+          %py-number-exp-sign
+          (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))
 
 (set! %py-number-body
   (fn (_ buffer score chr)
     (if (%py-digit? chr)
       %py-number-body
-      (if (= chr 46)
-        %py-number-frac
-        (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+      (if (= chr 95)
+        %py-number-body
+        (if (= chr 46)
+          %py-number-frac
+          (if (if (= chr 101) #t (= chr 69))
+            %py-number-exp-sign
+            (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))))
+
+; A LEADING DOT STARTS A FLOAT (`.1`), but only when a digit follows: the
+; entry moves through this state without setting a score, so a bare `.` or
+; `.method` rejects the number candidacy and PY-OP's one-character match wins.
+(def %py-number-dot-first
+  (fn (_ buffer score chr)
+    (if (%py-digit? chr) %py-number-frac ())))
 
 ; A SIGNED LITERAL IS CLAIMED HERE, AND THAT IS NOT WHAT PYTHON MEANS BY IT.
 ;
@@ -372,7 +418,9 @@
       (fn (_ buffer score chr)
         (if (%py-digit? chr)
           %py-number-body
-          (if (if (= chr 43) #t (= chr 45)) %py-number-signed ()))))
+          (if (= chr 46)
+            %py-number-dot-first
+            (if (if (= chr 43) #t (= chr 45)) %py-number-signed ())))))
     (pair (lit read)
       (fn (_ . args) (mk-tok-number (%buffer-token (first args)))))))
 (Base make-type %py-base "PY-NUMBER" %py-t-number)
@@ -625,21 +673,49 @@
             me
             (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
         (list (pair (lit u) 1))))
-    (def nfrac
+    (def nexpd
       (compile-asm
         (lit (fn (me buffer score chr)
-          (if (and (>= chr 48) (<= chr 57))
+          (if (or (and (>= chr 48) (<= chr 57)) (= chr 95))
             me
             (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
         (list (pair (lit u) 1))))
+    (def nexpf
+      (compile-asm
+        (lit (fn (_ buffer score chr)
+          (if (and (>= chr 48) (<= chr 57)) k ())))
+        (list (pair (lit k) nexpd))))
+    (def nexps
+      (compile-asm
+        (lit (fn (_ buffer score chr)
+          (if (and (>= chr 48) (<= chr 57))
+            k
+            (if (or (= chr 43) (= chr 45)) f ()))))
+        (list (pair (lit k) nexpd) (pair (lit f) nexpf))))
+    (def nfrac
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (or (and (>= chr 48) (<= chr 57)) (= chr 95))
+            me
+            (if (or (= chr 101) (= chr 69))
+              es
+              (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+        (list (pair (lit es) nexps))))
     (def nbody
       (compile-asm
         (lit (fn (me buffer score chr)
-          (if (and (>= chr 48) (<= chr 57))
+          (if (or (and (>= chr 48) (<= chr 57)) (= chr 95))
             me
             (if (= chr 46)
               frac
-              (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+              (if (or (= chr 101) (= chr 69))
+                es
+                (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))
+        (list (pair (lit frac) nfrac) (pair (lit es) nexps))))
+    (def ndotf
+      (compile-asm
+        (lit (fn (_ buffer score chr)
+          (if (and (>= chr 48) (<= chr 57)) frac ())))
         (list (pair (lit frac) nfrac))))
     (def nsigned
       (compile-asm
@@ -702,8 +778,11 @@
         (lit (fn (_ buffer score chr)
           (if (and (>= chr 48) (<= chr 57))
             body
-            (if (or (= chr 43) (= chr 45)) signed ()))))
-        (list (pair (lit body) nbody) (pair (lit signed) nsigned))))
+            (if (= chr 46)
+              dotf
+              (if (or (= chr 43) (= chr 45)) signed ())))))
+        (list (pair (lit body) nbody) (pair (lit dotf) ndotf)
+          (pair (lit signed) nsigned))))
     (def e-sq
       (compile-asm
         (lit (fn (_ buffer score chr)

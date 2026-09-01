@@ -425,9 +425,178 @@
 ; would need a number->string conversion this layer does not have; writing it
 ; needs only `display`, which already knows how.  So repr is a procedure that
 ; emits, and the container cases emit their punctuation around it.
+; --- Float repr: shortest round-trip -----------------------------------------
+;
+; THE ENGINE'S WRITER IS %.15g AND PYTHON'S IS SHORTEST-ROUND-TRIP, and the
+; difference is not cosmetic: 1/3 prints 0.333333333333333 there and
+; 0.3333333333333333 in Python -- fifteen digits is one too few for a third
+; (x-lang#577).  Python's rule: the shortest decimal string that parses back
+; to exactly the same double.
+;
+; THE EXACT DIGITS ARE FREE, so the search is honest rather than heuristic.  A
+; float IS m * 2^e for integers m, e; for e >= 0 that is the integer m << e,
+; and for e < 0 it is (m * 5^-e) / 10^-e -- an integer over a power of ten.
+; Bigint renders the integer's every digit, and rounding to p significant
+; digits is then string work against a tail that is exactly known (round half
+; to even, Python's rule).  Each candidate is parsed back through strtod
+; ((Float str->bits), correctly rounded) and compared BIT FOR BIT; the first
+; precision that survives is the answer.  Seventeen always survives, so the
+; loop terminates.
+;
+; A float value's payload IS its IEEE 754 bit pattern -- (first v), the
+; representation lib/x/num/float.x states -- and the sign, exponent and
+; mantissa fields come out with div/mod against powers of two, through the
+; tower ops so nothing wraps (the sign bit makes the raw pattern negative as
+; a machine int).
+(def %py-f-2p52 4503599627370496)
+(def %py-f-2p64 (%py-mul (%py-mul 4503599627370496 2048) 2))
+
+(def %py-f-pow
+  (fn (self b k)
+    (if (= k 0)
+      1
+      (let ((h (self b (%py-floordiv k 2))))
+        (let ((hh (%py-mul h h)))
+          (if (= (%py-mod k 2) 0) hh (%py-mul hh b)))))))
+
+(def %py-f-zeros
+  (fn (self k) (if (<= k 0) "" (Str8 append "0" (self (- k 1))))))
+
+(def %py-f-code
+  (fn (_ s i) (%py-char-code (%str-ref s i))))
+
+; Any nonzero digit at or after index i?
+(def %py-f-nonzero-from?
+  (fn (self t i)
+    (if (>= i (Str8 length t))
+      #f
+      (if (= (%py-f-code t i) 48) (self t (+ i 1)) #t))))
+
+; Increment a decimal digit string by one, with carry; "999" -> "1000".
+(def %py-f-inc
+  (fn (_ h)
+    (def go
+      (fn (self i)
+        (if (< i 0)
+          "carry"
+          (let ((c (%py-f-code h i)))
+            (if (= c 57)
+              (self (- i 1))
+              (Str8 append
+                (Str8 append (Str8 sub 0 i h)
+                  (Str8 sub (+ (- c 48) 1) 1 "0123456789"))
+                (%py-f-zeros (- (- (Str8 length h) i) 1))))))))
+    (let ((r (go (- (Str8 length h) 1))))
+      (if (Str8 =? r "carry")
+        (Str8 append "1" (%py-f-zeros (Str8 length h)))
+        r))))
+
+; Round the exact digit string D to p significant digits, half to even.
+; Returns the rounded digits; a carry that grows the string ("99" -> "100")
+; grows the decimal exponent by the length difference, which the caller reads.
+(def %py-f-round
+  (fn (_ D p)
+    (def n (Str8 length D))
+    (if (<= n p)
+      D
+      (do
+        (def h (Str8 sub 0 p D))
+        (def c (%py-f-code D p))
+        (def up
+          (if (> c 53) #t
+            (if (< c 53) #f
+              (if (%py-f-nonzero-from? D (+ p 1)) #t
+                (= (%py-mod (- (%py-f-code h (- p 1)) 48) 2) 1)))))
+        (if up (%py-f-inc h) h)))))
+
+(def %py-f-strip0
+  (fn (self h)
+    (def L (Str8 length h))
+    (if (<= L 1)
+      h
+      (if (= (%py-f-code h (- L 1)) 48)
+        (self (Str8 sub 0 (- L 1) h))
+        h))))
+
+(def %py-f-2d
+  (fn (_ k)
+    (let ((s (%py-write-to-str k)))
+      (if (< k 10) (Str8 append "0" s) s))))
+
+; Python's own spelling: fixed for -4 <= x < 16, scientific outside, ".0" kept
+; on integral fixed floats, exponents signed and two digits wide.
+(def %py-f-format
+  (fn (_ digits xa sgn)
+    (def h (%py-f-strip0 digits))
+    (def L (Str8 length h))
+    (Str8 append sgn
+      (if (if (>= xa (- 0 4)) (< xa 16) #f)
+        (if (>= xa (- L 1))
+          (Str8 append (Str8 append h (%py-f-zeros (- xa (- L 1)))) ".0")
+          (if (>= xa 0)
+            (Str8 append (Str8 append (Str8 sub 0 (+ xa 1) h) ".")
+              (Str8 sub (+ xa 1) (- L (+ xa 1)) h))
+            (Str8 append (Str8 append "0." (%py-f-zeros (- 0 (+ xa 1)))) h)))
+        (Str8 append
+          (if (= L 1)
+            h
+            (Str8 append (Str8 append (Str8 sub 0 1 h) ".")
+              (Str8 sub 1 (- L 1) h)))
+          (Str8 append (if (< xa 0) "e-" "e+")
+            (%py-f-2d (if (< xa 0) (- 0 xa) xa))))))))
+
+(def %py-frepr
+  (fn (_ v)
+    (def bits (first v))
+    (def u (if (< bits 0) (%py-add bits %py-f-2p64) bits))
+    (def hi (%py-floordiv u %py-f-2p52))
+    (def E (%py-mod hi 2048))
+    (def M (%py-mod u %py-f-2p52))
+    (def sgn (if (< bits 0) "-" ""))
+    (if (= E 2047)
+      (if (= M 0) (Str8 append sgn "inf") "nan")
+      (if (if (= E 0) (= M 0) #f)
+        (Str8 append sgn "0.0")
+        (do
+          (def m (if (= E 0) M (%py-add M %py-f-2p52)))
+          (def e (if (= E 0) (- 0 1074) (- E 1075)))
+          (def N
+            (if (>= e 0)
+              (%py-mul m (%py-f-pow 2 e))
+              (%py-mul m (%py-f-pow 5 (- 0 e)))))
+          (def D (%py-write-to-str N))
+          (def x10
+            (if (>= e 0)
+              (- (Str8 length D) 1)
+              (- (- (Str8 length D) 1) (- 0 e))))
+          (def try
+            (fn (self p)
+              (if (> p 17)
+                ()
+                (do
+                  (def digits (%py-f-round D p))
+                  (def cand
+                    (%py-f-format digits
+                      (%py-add x10 (- (Str8 length digits)
+                                      (if (< (Str8 length D) p)
+                                        (Str8 length D) p)))
+                      sgn))
+                  (if (= (Float str->bits cand) bits)
+                    cand
+                    (self (+ p 1)))))))
+          (let ((r (try 1)))
+            (if (null? r) (Str8 append sgn (%py-write-to-str v)) r)))))))
+
+; Is v a machine float?  The type-handle compare %py-num-kind uses, taken
+; directly so the writer below can ask cheaply.
+(def %py-float-is
+  (fn (_ v) (eq? (%py-typeof-prim v) %py-th-float)))
+
 (def %py-write ())
 (set! %py-write
   (fn (_ v)
+    (if (%py-float-is v)
+      (display (%py-frepr v))
     (if (str? v)
       ; A string inside a container shows its quotes; on its own it does not.
       (%seq (display "'") (%seq (display v) (display "'")))
@@ -456,7 +625,7 @@
                   (if (%py-subclass? (%py-obj-class v) %py-exc-Exception)
                     (display (%py-exc-msg v))
                     (display v))
-                  (display v))))))))))))
+                  (display v)))))))))))))
 
 ; Close the loop: python/types.x forward-declares %py-repr and its PY-LIST write
 ; handler calls it per element, so that a string inside a list shows its quotes.
@@ -795,13 +964,25 @@
 (def %py-write-to-str (prim-ref (lit io) (lit write-to-str)))
 
 (def %py-str
-  (fn (_ v) (if (str? v) v (%py-write-to-str v))))
+  (fn (_ v)
+    (if (str? v)
+      v
+      (if (%py-float-is v)
+        (%py-frepr v)
+        ; str(e) is the MESSAGE, the same rule %py-write states for print(e)
+        (if (Err err? v)
+          (v msg)
+          (if (if (%py-obj-is v)
+                (%py-subclass? (%py-obj-class v) %py-exc-Exception)
+                #f)
+            (%py-exc-msg v)
+            (%py-write-to-str v)))))))
 
 (def %py-repr-of
   (fn (_ v)
     (if (str? v)
       (Str8 append (Str8 append "'" v) "'")
-      (%py-write-to-str v))))
+      (if (%py-float-is v) (%py-frepr v) (%py-write-to-str v)))))
 
 ; `list(x)` takes anything iterable, which is exactly what `for` already asks
 ; for -- so it is the same function, wrapped.
@@ -856,7 +1037,11 @@
           (let ((c (code i)))
             (if (if (>= c 48) (<= c 57) #f)
               (self (+ i 1) (+ (* acc 10) (- c 48)) #t)
-              (bad))))))
+              ; underscores are spelling (`1_2_3`), skipped the way the
+              ; float path strips them
+              (if (= c 95)
+                (self (+ i 1) acc seen)
+                (bad)))))))
     (if (= n 0)
       (bad)
       (let ((c0 (code 0)))
@@ -898,14 +1083,81 @@
           (if (= n 1) #f (walk 1 #f #f #f))
           (walk 0 #f #f #f))))))
 
-(def %py-float-of-str
+; Python's float() also takes "inf", "infinity" and "nan" in any case, with an
+; optional sign and surrounding whitespace, and underscores between digits.
+; The specials are matched HERE and handed to strtod by their canonical
+; spelling; everything else is underscore-stripped and shape-checked as before.
+(def %py-f-trim
   (fn (_ s)
-    (if (%py-float-str-ok? s)
-      (Float from s)
-      (Err raise (lit value)
-        (Str8 append
-          (Str8 append "could not convert string to float: '" s) "'")
-        ()))))
+    (def n (Str8 length s))
+    (def ws? (fn (_ c) (if (= c 32) #t (if (= c 9) #t (if (= c 10) #t (= c 13))))))
+    (def a
+      (fn (self i)
+        (if (>= i n) i (if (ws? (%py-f-code s i)) (self (+ i 1)) i))))
+    (def b
+      (fn (self i)
+        (if (< i 0) i (if (ws? (%py-f-code s i)) (self (- i 1)) i))))
+    (let ((lo (a 0)))
+      (let ((hi (b (- n 1))))
+        (if (> lo hi) "" (Str8 sub lo (+ (- hi lo) 1) s))))))
+
+(def %py-f-lower
+  (fn (_ s)
+    (def n (Str8 length s))
+    (def go
+      (fn (self i acc)
+        (if (>= i n)
+          acc
+          (let ((c (%py-f-code s i)))
+            (self (+ i 1)
+              (Str8 append acc
+                (if (if (>= c 65) (<= c 90) #f)
+                  (Str8 sub (- c 65) 1 "abcdefghijklmnopqrstuvwxyz")
+                  (Str8 sub i 1 s))))))))
+    (go 0 "")))
+
+(def %py-f-strip-us
+  (fn (_ s)
+    (if (null? (Str8 index-of "_" s))
+      s
+      (do
+        (def n (Str8 length s))
+        (def go
+          (fn (self i acc)
+            (if (>= i n)
+              acc
+              (let ((c (Str8 sub i 1 s)))
+                (self (+ i 1)
+                  (if (Str8 =? c "_") acc (Str8 append acc c)))))))
+        (go 0 "")))))
+
+(def %py-float-of-str
+  (fn (_ s0)
+    (def s (%py-f-trim s0))
+    (def bad
+      (fn (_)
+        (Err raise (lit value)
+          (Str8 append
+            (Str8 append "could not convert string to float: '" s0) "'")
+          ())))
+    (def signed
+      (fn (_)
+        (if (= (Str8 length s) 0)
+          (pair "" "")
+          (let ((c (%py-f-code s 0)))
+            (if (= c 45) (pair "-" (Str8 sub 1 (- (Str8 length s) 1) s))
+              (if (= c 43) (pair "" (Str8 sub 1 (- (Str8 length s) 1) s))
+                (pair "" s)))))))
+    (let ((sp (signed)))
+      (let ((low (%py-f-lower (rest sp))))
+        (if (if (Str8 =? low "inf") #t (Str8 =? low "infinity"))
+          (Float from (Str8 append (first sp) "inf"))
+          (if (Str8 =? low "nan")
+            (Float from "nan")
+            (let ((t (%py-f-strip-us s)))
+              (if (%py-float-str-ok? t)
+                (Float from t)
+                (bad)))))))))
 
 (def %py-num-kind
   (fn (_ v)
