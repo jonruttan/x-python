@@ -39,7 +39,7 @@
   %py-str %py-repr-of %py-mklist-of %py-hasattr
   %py-cls-type %py-cls-int %py-cls-float %py-cls-bool %py-cls-str
   %py-cls-list %py-cls-dict %py-cls-tuple %py-cls-NoneType
-  %py-type-of %py-isinstance %py-truthy
+  %py-type-of %py-isinstance %py-truthy %py-slice
   %py-exc-Exception %py-exc-ArithmeticError %py-exc-LookupError
   %py-exc-ZeroDivisionError %py-exc-IndexError %py-exc-KeyError
   %py-exc-AttributeError %py-exc-NameError %py-exc-TypeError
@@ -1049,3 +1049,76 @@
         (Err raise (lit type)
           "isinstance() arg 2 must be a type or tuple of types" ())
         (%py-subclass? (%py-type-of v) cls)))))
+
+; --- Slicing -----------------------------------------------------------------
+;
+; Python's slice rules, stated once and used by str, list and tuple:
+;
+;   - a missing step is 1, and step 0 is a ValueError
+;   - negative indices count from the end, AFTER which anything still out of
+;     range CLAMPS rather than raising -- `lst[1:100]` answers what is there,
+;     which is the deliberate difference between slicing and indexing
+;   - a negative step defaults start to the last element and stop to "before
+;     the first", which is how 'hello'[::-1] reverses
+;
+; The walk collects INDICES, then each type maps them its own way: a sequence
+; through List ref over its element list, a string through one-character subs
+; joined at the end.
+
+(def %py-sl-adj
+  (fn (_ v len step lo hi)
+    (let ((a (if (< v 0) (+ v len) v)))
+      (if (< a lo) lo (if (> a hi) hi a)))))
+
+(def %py-sl-bounds
+  (fn (_ len start stop step)
+    (if (> step 0)
+      (pair
+        (if (null? start) 0 (%py-sl-adj start len step 0 len))
+        (if (null? stop) len (%py-sl-adj stop len step 0 len)))
+      (pair
+        (if (null? start) (- len 1) (%py-sl-adj start len step (- 0 1) (- len 1)))
+        (if (null? stop) (- 0 1) (%py-sl-adj stop len step (- 0 1) (- len 1)))))))
+
+(def %py-sl-idxs
+  (fn (self i stop step acc)
+    (if (if (> step 0) (>= i stop) (<= i stop))
+      (List reverse acc)
+      (self (+ i step) stop step (pair i acc)))))
+
+(def %py-slice-idxs
+  (fn (_ len start stop step)
+    (let ((b (%py-sl-bounds len start stop step)))
+      (%py-sl-idxs (first b) (rest b) step ()))))
+
+(def %py-sl-pick
+  (fn (self elems idxs acc)
+    (if (null? idxs)
+      (List reverse acc)
+      (self elems (rest idxs) (pair (List ref (first idxs) elems) acc)))))
+
+(def %py-sl-chars
+  (fn (self str idxs acc)
+    (if (null? idxs)
+      (List reverse acc)
+      (self str (rest idxs) (pair (Str8 sub (first idxs) 1 str) acc)))))
+
+(def %py-slice
+  (fn (_ obj start stop step)
+    (let ((st (if (null? step) 1 step)))
+      (if (= st 0)
+        (Err raise (lit value) "slice step cannot be zero" ())
+        (if (str? obj)
+          (Str8 join ""
+            (%py-sl-chars obj
+              (%py-slice-idxs (Str8 length obj) start stop st) ()))
+          (if (%py-list-is obj)
+            (%py-list-new
+              (%py-sl-pick (%py-list-elems obj)
+                (%py-slice-idxs (List length (%py-list-elems obj)) start stop st) ()))
+            (if (%py-tuple-is obj)
+              (%py-tuple-new
+                (%py-sl-pick (%py-tuple-elems obj)
+                  (%py-slice-idxs (List length (%py-tuple-elems obj)) start stop st) ()))
+              ; a dict gets Python's own complaint: a slice is not a key
+              (Err raise (lit type) "unhashable type: 'slice'" ()))))))))
