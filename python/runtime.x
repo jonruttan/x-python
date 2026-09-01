@@ -39,7 +39,7 @@
   %py-str %py-repr-of %py-mklist-of %py-hasattr
   %py-cls-type %py-cls-int %py-cls-float %py-cls-bool %py-cls-str
   %py-cls-list %py-cls-dict %py-cls-tuple %py-cls-NoneType
-  %py-type-of %py-isinstance %py-truthy %py-slice
+  %py-type-of %py-isinstance %py-truthy %py-slice %py-defg
   %py-exc-Exception %py-exc-ArithmeticError %py-exc-LookupError
   %py-exc-ZeroDivisionError %py-exc-IndexError %py-exc-KeyError
   %py-exc-AttributeError %py-exc-NameError %py-exc-TypeError
@@ -1122,3 +1122,12 @@
                   (%py-slice-idxs (List length (%py-tuple-elems obj)) start stop st) ()))
               ; a dict gets Python's own complaint: a slice is not a key
               (Err raise (lit type) "unhashable type: 'slice'" ()))))))))
+
+; --- def, whatever the frame depth -------------------------------------------
+;
+; The REPL's conditional hoists run inside a guard HANDLER, where a plain def
+; binds in the handler's frame and vanishes with it.  base/def-global is the
+; engine door that defines for the CALLER at any depth; the symbol comes
+; quoted, the value evaluated.
+(def %py-defg-prim (prim-ref (lit base) (lit def-global)))
+(def %py-defg (fn (_ sym v) (%py-defg-prim sym v)))
