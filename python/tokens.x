@@ -47,7 +47,7 @@
 (provide python/tokens
   python-tokenize %py-base
   mk-tok-name mk-tok-number mk-tok-string mk-tok-op mk-tok-newline
-  mk-tok-group mk-tok-block)
+  mk-tok-bytes mk-tok-group mk-tok-block)
 
 ; (Base make-tok) is the isolated, type-free base -- 2024's make-token-base.
 (import x/reader/indent)
@@ -73,6 +73,7 @@
 (def mk-tok-number  (fn (_ s) (list (lit tok-number) s)))
 (def mk-tok-string  (fn (_ s) (list (lit tok-string) s)))
 (def mk-tok-op      (fn (_ s) (list (lit tok-op) s)))
+(def mk-tok-bytes   (fn (_ s) (list (lit tok-bytes) s)))
 ; A bracketed run, already nested by the reader: (tok-group "[" (tok ...)).
 (def mk-tok-group   (fn (_ open elems) (list (lit tok-group) open elems)))
 ; An indented run, already nested by the reader: (tok-block (tok ...)).
@@ -498,6 +499,36 @@
     (pair (lit read) %py-string-read)))
 (Base make-type %py-base "PY-DQ" %py-t-dq)
 
+; --- PY-BSQ / PY-BDQ: bytes literals, b'...' and b"..." ---------------------
+; The b and the quote are matched here; the BODY is the string types' own
+; states, reused as-is -- so escapes, terminators and scoring stay one
+; implementation.  A bare b followed by anything else rejects, and PY-NAME's
+; one-character match wins, which is how `b = 1` still parses.
+(def %py-bsq-start
+  (fn (_ buffer score chr) (if (= chr 39) %py-sq-body ())))
+(def %py-bdq-start
+  (fn (_ buffer score chr) (if (= chr 34) %py-dq-body ())))
+
+(def %py-bytes-read
+  (fn (_ . args)
+    (def raw (%buffer-token (first args)))
+    (def len (Str8 length raw))
+    ; Drop the b and both quotes.
+    (mk-tok-bytes (%py-unescape (Str8 sub 2 (- len 3) raw)))))
+
+(def %py-t-bsq
+  (list
+    (pair (lit analyse)
+      (fn (_ buffer score chr) (if (= chr 98) %py-bsq-start ())))
+    (pair (lit read) %py-bytes-read)))
+(def %py-t-bdq
+  (list
+    (pair (lit analyse)
+      (fn (_ buffer score chr) (if (= chr 98) %py-bdq-start ())))
+    (pair (lit read) %py-bytes-read)))
+(Base make-type %py-base "PY-BSQ" %py-t-bsq)
+(Base make-type %py-base "PY-BDQ" %py-t-bdq)
+
 ; --- PY-OP: operators and delimiters -----------------------------------------
 ; LONGEST MATCH MATTERS AND IS EASY TO GET WRONG.  `//` is floor division and
 ; `/` is true division; `**` is power; `==` `!=` `<=` `>=` are comparisons and
@@ -523,8 +554,9 @@
     (if (= c 43) #t (if (= c 45) #t (if (= c 42) #t (if (= c 47) #t
       (if (= c 37) #t (if (= c 61) #t (if (= c 60) #t (if (= c 62) #t
         (if (= c 33) #t
+          (if (= c 126) #t (if (= c 124) #t (if (= c 94) #t (if (= c 38) #t
             (if (= c 44) #t (if (= c 58) #t (if (= c 46) #t
-              (= c 59)))))))))))))))
+              (= c 59)))))))))))))))))))
 
 ; Which pairs extend: == != <= >= // ** and += -= *= /= %=
 (def %py-op-pair?
@@ -824,6 +856,11 @@
     (reg "PY-NUMBER" e-number %py-t-number)
     (reg "PY-SQ" e-sq %py-t-sq)
     (reg "PY-DQ" e-dq %py-t-dq)
+    ; bytes literals stay interpreted at entry: the b-prefix test runs once
+    ; per token start and the body states are the compiled string bodies'
+    ; interpreted twins, reached through the same globals either way
+    (Base make-type b "PY-BSQ" %py-t-bsq)
+    (Base make-type b "PY-BDQ" %py-t-bdq)
     (Base make-type b "PY-OP" %py-t-op)
     (reg "PY-CLOSE" e-close %py-t-close)
     (reg "PY-OPEN" e-open %py-t-open)

@@ -96,4 +96,14 @@ fi
 # file's batch, as before.  A runner without the knob (v0.9.0) ignores it.
 export SPEC_SEAM_COLLECT=0
 
+# SIZE THE CEILING FOR THE BATCH, as the platform runner's own comment
+# instructs a seam-collect opt-out to do.  With no per-snippet collect a
+# conformance file's 15-case batch accumulates every case's parse-time
+# garbage, and the float family's heaviest file crossed the 300M default
+# when the expression ladder grew its bitwise levels -- the interpreter
+# died mid-batch with three cases to go, which reads as a regression and
+# is a resource limit.  Still a runaway ceiling, just cleared over the
+# heaviest LEGIT batch again.
+export X_ALLOC_LIMIT_OBJS="${X_ALLOC_LIMIT_OBJS:-450000000}"
+
 . "$X_ROOT/tests/spec-runner.sh"
