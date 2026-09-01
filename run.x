@@ -24,7 +24,10 @@
 ; and it is the part the 2024 generation did not have.
 (import python/base)
 
-(set! %lang-name "Python")
-(set! %lang-version python-version)
-(set! %repl-prompt ">>> ")
-(set! %repl-print %python-repl-print)
+(import python/repl)
+
+; The launcher runs (%banner) then (repl).  Both are platform globals, and both
+; are REPLACED: the platform loop reads sexps through the ambient reader, and
+; no prompt string changes what a reader is.  python/repl.x reads Python.
+(set! %banner %python-banner)
+(set! repl %python-repl)

@@ -1511,18 +1511,30 @@
 (def %py-names-of
   (fn (self acc) (if (null? acc) () (pair (first acc) (self (rest acc))))))
 
+; CONDITIONAL, and the REPL is why.  Each interactive line is its own parse,
+; so an unconditional shim for a name this LINE does not bind would clobber a
+; binding an EARLIER line made -- `x = 5` then `x` re-shimmed py-x and the
+; session forgot everything.  The guard evaluates the name: bound answers
+; itself and the def never runs; unbound raises into the guard, which defs the
+; shim.  Batch semantics are unchanged -- a truly unbound name still shims.
+; The handler defines through the base/def-global door, because a plain def
+; inside a guard HANDLER binds in the handler's frame -- measured in the REPL:
+; the hoist "succeeded" and the very next form found the name unbound.
 (def %py-shims
   (fn (self names acc)
     (if (null? names)
       (List reverse acc)
       (self (rest names)
         (pair
-          (list (lit def) (%py-name->sym (first names))
-            (list (lit fn) (list (lit _))
-              (list (lit Err) (lit raise) (list (lit lit) (lit name))
-                (Str8 append (Str8 append "name '" (first names))
-                  "' is not defined")
-                ())))
+          (list (lit guard)
+            (list (lit %py-e)
+              (list (lit %py-defg) (list (lit lit) (%py-name->sym (first names)))
+                (list (lit fn) (list (lit _))
+                  (list (lit Err) (lit raise) (list (lit lit) (lit name))
+                    (Str8 append (Str8 append "name '" (first names))
+                      "' is not defined")
+                    ()))))
+            (%py-name->sym (first names)))
           acc)))))
 
 (def python-parse
@@ -1571,11 +1583,19 @@
         (self (rest toks) (pair (%py-val (first toks)) acc))
         (self (rest toks) acc)))))
 
+; Conditional for the same REPL reason as %py-shims: an unconditional
+; (def py-x ()) at the head of every line's program would reset x each line,
+; so `x = 5` then `x = x + 1` computed from nil.
 (def %py-decls
   (fn (self syms acc)
     (if (null? syms)
       (List reverse acc)
-      (self (rest syms) (pair (list (lit def) (first syms) ()) acc)))))
+      (self (rest syms)
+        (pair
+          (list (lit guard)
+            (list (lit %py-e) (list (lit %py-defg) (list (lit lit) (first syms)) ()))
+          (first syms))
+          acc)))))
 
 (def %py-append
   (fn (self a b)
