@@ -297,8 +297,10 @@
           ; Subscript binds like a call: left-associative, same level.
           (if (%py-group? (if (null? more) () (first more)) "[")
             (self
-              (list (lit %py-index) acc
-                (%py-expr-of (%py-group-of (first more))))
+              (if (%py-slice-group? (%py-group-of (first more)))
+                (%py-slice-form acc (%py-group-of (first more)))
+                (list (lit %py-index) acc
+                  (%py-expr-of (%py-group-of (first more)))))
               (rest more))
             (pair acc more))))))
     (%go (first %a) (rest %a))))
@@ -397,6 +399,43 @@
 ; accumulates through a cell and reverses once at the end.  A dict builds
 ; through %py-dset, so a duplicate key OVERWRITES -- Python's rule, and it
 ; falls out of the store function rather than needing a dedup pass.
+
+; A subscript group with a top-level `:` is a SLICE -- flat scan, since a
+; nested group is one token, so `d[{'a': 1}]`'s inner colon cannot mislead it.
+(def %py-slice-group?
+  (fn (self toks)
+    (if (null? toks)
+      #f
+      (if (%py-op-is? (first toks) ":") #t (self (rest toks))))))
+
+; Split on top-level colons into up to three segments, empties kept: `[::2]` is
+; (() () (2)).  A fourth segment is a syntax error, as it is in Python.
+(def %py-slice-segs ())
+(set! %py-slice-segs
+  (fn (self toks cur acc)
+    (if (null? toks)
+      (List reverse (pair (List reverse cur) acc))
+      (if (%py-op-is? (first toks) ":")
+        (if (>= (%py-count acc) 2)
+          (Err raise (lit syntax) "too many colons in a subscript" ())
+          (self (rest toks) () (pair (List reverse cur) acc)))
+        (self (rest toks) (pair (first toks) cur) acc)))))
+
+; An empty segment is the default, spelled () in the emission; a present one is
+; a full expression.
+(def %py-slice-part
+  (fn (_ seg) (if (null? seg) () (%py-expr-of seg))))
+
+(def %py-slice-form
+  (fn (_ acc elems)
+    (let ((segs (%py-slice-segs elems () ())))
+      (list (lit %py-slice) acc
+        (%py-slice-part (first segs))
+        (%py-slice-part (if (null? (rest segs)) () (first (rest segs))))
+        (%py-slice-part
+          (if (null? (rest segs)) ()
+            (if (null? (rest (rest segs))) ()
+              (first (rest (rest segs))))))))))
 
 (def %py-comp?
   (fn (self toks)

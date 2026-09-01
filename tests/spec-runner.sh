@@ -85,4 +85,15 @@ if [ "$#" -eq 0 ]; then
 	set -- "$SPEC_PATH"/*.spec.md
 fi
 
+# NO COLLECT AT SNIPPET SEAMS.  python-run builds an isolated tokenizer base,
+# which is C-held state the collector's mark cannot see (the x-lang#283 rooting
+# family) -- so the platform runner's per-seam collect (x-lang#568) frees it
+# LIVE, and the third eval in a process walks freed memory and segfaults.
+# x-lang#572 added this run-level door out; this suite opts out wholesale,
+# which is the right granularity because every generated conformance case
+# shares the one python-run eval path.  This restores the accumulate-then-exit
+# regime the suite was calibrated under; the alloc ceiling still bounds a
+# file's batch, as before.  A runner without the knob (v0.9.0) ignores it.
+export SPEC_SEAM_COLLECT=0
+
 . "$X_ROOT/tests/spec-runner.sh"
