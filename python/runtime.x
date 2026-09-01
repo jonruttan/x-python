@@ -27,6 +27,7 @@
 ; they are named seams, not indirection for its own sake.
 
 (import python/types)
+(import python/format)
 
 (provide python/runtime
   %py-add %py-sub %py-mul %py-div %py-floordiv %py-mod %py-pow %py-neg
@@ -106,11 +107,16 @@
     (if (= b 0)
       (Err raise (lit zero-division) "integer division or modulo by zero" ())
       (Num quotient a b))))
+; A STRING ON THE LEFT OF % IS FORMATTING, not arithmetic -- str.__mod__ --
+; and the check comes before the zero test because the right operand of a
+; format is a tuple as often as a number.
 (def %py-mod
   (fn (_ a b)
-    (if (= b 0)
-      (Err raise (lit zero-division) "integer modulo by zero" ())
-      (Num modulo a b))))
+    (if (str? a)
+      (%py-format a b)
+      (if (= b 0)
+        (Err raise (lit zero-division) "integer modulo by zero" ())
+        (Num modulo a b)))))
 ; NEVER HAND Num expt A NEGATIVE EXPONENT.  Its parameter is documented
 ; "Non-negative integer exponent" and nothing enforces it: with exp < 0 the
 ; recursion never reaches 0 and SQUARES THE BASE on every even step, so it
@@ -545,7 +551,11 @@
           (Str8 append (if (< xa 0) "e-" "e+")
             (%py-f-2d (if (< xa 0) (- 0 xa) xa))))))))
 
-(def %py-frepr
+; The exact decimal expansion, shared with %-formatting (python/format.x):
+; (kind sign digits exp10) where kind is 'num / 'inf / 'nan, digits is every
+; digit of m*2^e (no leading zeros; "0" for zero), and the value is
+; digits[0].digits[1:] * 10^exp10.
+(def %py-f-exact
   (fn (_ v)
     (def bits (first v))
     (def u (if (< bits 0) (%py-add bits %py-f-2p64) bits))
@@ -554,9 +564,9 @@
     (def M (%py-mod u %py-f-2p52))
     (def sgn (if (< bits 0) "-" ""))
     (if (= E 2047)
-      (if (= M 0) (Str8 append sgn "inf") "nan")
+      (if (= M 0) (list (lit inf) sgn "" 0) (list (lit nan) "" "" 0))
       (if (if (= E 0) (= M 0) #f)
-        (Str8 append sgn "0.0")
+        (list (lit num) sgn "0" 0)
         (do
           (def m (if (= E 0) M (%py-add M %py-f-2p52)))
           (def e (if (= E 0) (- 0 1074) (- E 1075)))
@@ -565,10 +575,23 @@
               (%py-mul m (%py-f-pow 2 e))
               (%py-mul m (%py-f-pow 5 (- 0 e)))))
           (def D (%py-write-to-str N))
-          (def x10
+          (list (lit num) sgn D
             (if (>= e 0)
               (- (Str8 length D) 1)
-              (- (- (Str8 length D) 1) (- 0 e))))
+              (- (- (Str8 length D) 1) (- 0 e)))))))))
+
+(def %py-frepr
+  (fn (_ v)
+    (def bits (first v))
+    (def ex (%py-f-exact v))
+    (def sgn (first (rest ex)))
+    (def D (first (rest (rest ex))))
+    (def x10 (first (rest (rest (rest ex)))))
+    (if (eq? (first ex) (lit inf))
+      (Str8 append sgn "inf")
+      (if (eq? (first ex) (lit nan))
+        "nan"
+        (do
           (def try
             (fn (self p)
               (if (> p 17)

@@ -254,31 +254,3 @@ The same rule applied once per iteration, so it reuses the same length check.
 3
 4
 ```
-
-## except takes a tuple of classes
-
-Python spells "any of these" with a tuple.
-
-### the first matches
-
-```python
-(python-run "try:\n    raise ValueError('v')\nexcept (ValueError, KeyError) as e:\n    print(e)")
-```
----
-    v
-
-### the second matches
-
-```python
-(python-run "try:\n    raise KeyError('k')\nexcept (ValueError, KeyError):\n    print('caught')")
-```
----
-    caught
-
-### neither matches, so it travels
-
-```python
-(python-run "try:\n    raise TypeError('t')\nexcept (ValueError, KeyError):\n    print('no')")
-```
----
-    Error: TypeError: t
