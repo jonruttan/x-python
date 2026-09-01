@@ -105,13 +105,14 @@
       %py-ws-continue
       (%seq (%buffer-unread buffer) (%score-set score (- 0 1) buffer)))))
 
-(Base make-type %py-base "PY-WS"
+(def %py-t-ws
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
         (if (if (= chr #\space) #t (= chr #\tab))
           (%seq (%score-set score (- 0 1) buffer) %py-ws-continue)
           ())))))
+(Base make-type %py-base "PY-WS" %py-t-ws)
 
 ; --- PY-COMMENT: # to end of line, discarded ---------------------------------
 ; The newline is given back, because it is a NEWLINE token and a comment must
@@ -123,13 +124,14 @@
       (%seq (%buffer-unread buffer) (%score-set score (- 0 1) buffer))
       %py-comment-body)))
 
-(Base make-type %py-base "PY-COMMENT"
+(def %py-t-comment
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
         (if (= chr 35)
           (%seq (%score-set score (- 0 1) buffer) %py-comment-body)
           ())))))
+(Base make-type %py-base "PY-COMMENT" %py-t-comment)
 
 ; --- PY-NL: the newline AND the indentation that follows it ------------------
 ;
@@ -265,13 +267,14 @@
         (%seq (%buffer-unread buffer) (%score-set score (- 0 1) buffer))
         ()))))
 
-(Base make-type %py-base "PY-BLANK"
+(def %py-t-blank
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
         (if (= chr #\newline) %py-blank-ws ())))))
+(Base make-type %py-base "PY-BLANK" %py-t-blank)
 
-(Base make-type %py-base "PY-NL"
+(def %py-t-nl
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
@@ -298,6 +301,7 @@
               ; to consume it; the block structure now says everything the
               ; column said, so emitting it would be dead data.
               (mk-tok-newline))))))))))
+(Base make-type %py-base "PY-NL" %py-t-nl)
 
 ; --- PY-NAME: identifiers and keywords ---------------------------------------
 ; Keywords are NOT distinguished here.  `if` is a name to the tokenizer and a
@@ -311,13 +315,14 @@
       %py-name-body
       (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
 
-(Base make-type %py-base "PY-NAME"
+(def %py-t-name
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
         (if (%py-name-start? chr) %py-name-body ())))
     (pair (lit read)
       (fn (_ . args) (mk-tok-name (%buffer-token (first args)))))))
+(Base make-type %py-base "PY-NAME" %py-t-name)
 
 ; --- PY-NUMBER: integers and floats ------------------------------------------
 ; The value is kept as its SOURCE TEXT.  Python's int is arbitrary-precision and
@@ -361,7 +366,7 @@
   (fn (_ buffer score chr)
     (if (%py-digit? chr) %py-number-body ())))
 
-(Base make-type %py-base "PY-NUMBER"
+(def %py-t-number
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
@@ -370,6 +375,7 @@
           (if (if (= chr 43) #t (= chr 45)) %py-number-signed ()))))
     (pair (lit read)
       (fn (_ . args) (mk-tok-number (%buffer-token (first args)))))))
+(Base make-type %py-base "PY-NUMBER" %py-t-number)
 
 ; --- PY-STRING: 'single' and "double" ----------------------------------------
 ; TWO FIXED STATES, one per quote, rather than one state closed over the quote
@@ -430,17 +436,19 @@
     ; here, because its state never accepted.
     (mk-tok-string (%py-unescape (Str8 sub 1 (- len 2) raw)))))
 
-(Base make-type %py-base "PY-SQ"
+(def %py-t-sq
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr) (if (= chr 39) %py-sq-body ())))
     (pair (lit read) %py-string-read)))
+(Base make-type %py-base "PY-SQ" %py-t-sq)
 
-(Base make-type %py-base "PY-DQ"
+(def %py-t-dq
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr) (if (= chr 34) %py-dq-body ())))
     (pair (lit read) %py-string-read)))
+(Base make-type %py-base "PY-DQ" %py-t-dq)
 
 ; --- PY-OP: operators and delimiters -----------------------------------------
 ; LONGEST MATCH MATTERS AND IS EASY TO GET WRONG.  `//` is floor division and
@@ -508,7 +516,7 @@
         (%score-set score 1 buffer)
         (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
 
-(Base make-type %py-base "PY-OP"
+(def %py-t-op
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
@@ -519,6 +527,241 @@
           ())))
     (pair (lit read)
       (fn (_ . args) (mk-tok-op (%buffer-token (first args)))))))
+(Base make-type %py-base "PY-OP" %py-t-op)
+
+; --- Compiled analysers ------------------------------------------------------
+;
+; THE ANALYSERS RUN PER CHARACTER and they are the whole cost of lexing: at
+; every token start each registered type's entry runs, and every character of
+; every token runs the winning type's body state -- each call crossing the C/x
+; boundary into an interpreted closure.  x/tool/compile's assembler lane
+; (compile-asm) compiles an analyser to native code -- no toolchain -- so the
+; hot path stops re-entering the interpreter.
+;
+; ADOPTION IS LAZY AND GUARDED, lib/x/hash/sha256.x's pattern.  Compiling the
+; states costs seconds, so nothing happens until %py-jit-threshold bytes of
+; source have passed through python-tokenize in this process; then ONE attempt,
+; under a guard.  Any refusal -- a platform whose compile-asm predates fvar
+; forwarding or the self-param rule, a host without native/jit -- pins `failed`
+; and the interpreted base carries on.  THE INTERPRETER IS THE CONTRACT; the
+; JIT is a cache of it.
+;
+; THE SWAP IS A SECOND BASE, because registration is write-once: re-registering
+; a type name does not replace it (measured -- the first registration keeps
+; winning).  So the attempt builds a fresh base with compiled entries and
+; bodies, registered in the same order as the interpreted one, sharing the
+; read handlers -- read runs once per token and stays interpreted -- and
+; python-tokenize reads whichever base %py-active-raw holds.  The interpreted
+; base is never touched, so a raise mid-way leaves it whole.
+;
+; A COMPILED STATE CAN HAND OFF TO AN INTERPRETED ONE: an fvar carries any
+; object, including an interpreted closure (measured).  That is how the
+; compiled string entries reach the interpreted escape states, and how the
+; compiled PY-NL entry reaches the interpreted indentation machinery -- the
+; rare paths stay interpreted, the per-character paths do not.  Only PY-OP's
+; entry stays interpreted entirely: it builds a per-token lookahead closure,
+; which is not the JIT's vocabulary.
+;
+; COMPILED SOURCES ARE INTEGER-ONLY.  Raw codepoints (32, not #\space); LITERAL
+; signs (-1, never the house-style (- 0 1)) -- a compiled %score-set sign must
+; be a literal integer.  A looping state returns its own self param (me ...),
+; resolved as arg slot 0; a platform too old for that also refuses the
+; fvar-forwarding gate below, which is the property the gate actually tests.
+; The unused fvar `u` forces analyser mode on states with no real free
+; variable.
+(import x/tool/compile)
+
+(def %py-jit (pair (lit off) ()))        ; off | active | failed
+(def %py-jit-bytes (pair 0 ()))
+(def %py-jit-threshold (pair 51200 ()))  ; bytes of source before one attempt
+(def %py-active-raw (pair (Base raw-of %py-base) ()))  ; what python-tokenize reads
+(def %py-cbase (pair () ()))             ; roots the compiled base's wrapper
+
+(def %py-hdl-of
+  (fn (self hs k)
+    (if (null? hs) ()
+      (if (eq? (first (first hs)) k)
+        (rest (first hs))
+        (self (rest hs) k)))))
+
+(def %py-jit-compile!
+  (fn (_)
+    ; THE GATE.  On a platform that cannot forward fvars this compile itself
+    ; raises, and the guard in %py-jit-tick! pins `failed` before anything is
+    ; built.  The result is never called -- a direct call to an fvar-compiled
+    ; function is outside the contract.
+    (compile-asm (lit (fn (_ x) (+ x k))) (list (pair (lit k) 1)))
+    ; -- body states --
+    (def wsc
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (or (= chr 32) (= chr 9))
+            me
+            (%seq (%buffer-unread buffer) (%score-set score -1 buffer)))))
+        (list (pair (lit u) 1))))
+    (def cb
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (= chr 10)
+            (%seq (%buffer-unread buffer) (%score-set score -1 buffer))
+            me)))
+        (list (pair (lit u) 1))))
+    (def bws
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (or (= chr 32) (= chr 9))
+            me
+            (if (or (= chr 10) (= chr 35))
+              (%seq (%buffer-unread buffer) (%score-set score -1 buffer))
+              ()))))
+        (list (pair (lit u) 1))))
+    (def nb
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (or (and (>= chr 97) (<= chr 122))
+                  (and (>= chr 65) (<= chr 90))
+                  (= chr 95)
+                  (and (>= chr 48) (<= chr 57)))
+            me
+            (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
+        (list (pair (lit u) 1))))
+    (def nfrac
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (and (>= chr 48) (<= chr 57))
+            me
+            (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
+        (list (pair (lit u) 1))))
+    (def nbody
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (and (>= chr 48) (<= chr 57))
+            me
+            (if (= chr 46)
+              frac
+              (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+        (list (pair (lit frac) nfrac))))
+    (def nsigned
+      (compile-asm
+        (lit (fn (_ buffer score chr)
+          (if (and (>= chr 48) (<= chr 57)) body ())))
+        (list (pair (lit body) nbody))))
+    ; The escape states are interpreted and rare; each hands control back to
+    ; the compiled body by evaluating its own global, which after adoption is
+    ; only ever reached from here -- so the handoff is fvar out, global back.
+    (def sqb
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (= chr 39)
+            (%score-set score 1 buffer)
+            (if (= chr 92) esc me))))
+        (list (pair (lit esc) %py-sq-esc))))
+    (def dqb
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (= chr 34)
+            (%score-set score 1 buffer)
+            (if (= chr 92) esc me))))
+        (list (pair (lit esc) %py-dq-esc))))
+    ; -- entry states: one per type, run at every token start --
+    (def e-ws
+      (compile-asm
+        (lit (fn (_ buffer score chr)
+          (if (or (= chr 32) (= chr 9))
+            (%seq (%score-set score -1 buffer) k)
+            ())))
+        (list (pair (lit k) wsc))))
+    (def e-comment
+      (compile-asm
+        (lit (fn (_ buffer score chr)
+          (if (= chr 35)
+            (%seq (%score-set score -1 buffer) k)
+            ())))
+        (list (pair (lit k) cb))))
+    (def e-blank
+      (compile-asm
+        (lit (fn (_ buffer score chr)
+          (if (= chr 10) k ())))
+        (list (pair (lit k) bws))))
+    (def e-nl
+      (compile-asm
+        (lit (fn (_ buffer score chr)
+          (if (= chr 10) k ())))
+        (list (pair (lit k) %py-nl-ws))))
+    (def e-name
+      (compile-asm
+        (lit (fn (_ buffer score chr)
+          (if (or (and (>= chr 97) (<= chr 122))
+                  (and (>= chr 65) (<= chr 90))
+                  (= chr 95))
+            k
+            ())))
+        (list (pair (lit k) nb))))
+    (def e-number
+      (compile-asm
+        (lit (fn (_ buffer score chr)
+          (if (and (>= chr 48) (<= chr 57))
+            body
+            (if (or (= chr 43) (= chr 45)) signed ()))))
+        (list (pair (lit body) nbody) (pair (lit signed) nsigned))))
+    (def e-sq
+      (compile-asm
+        (lit (fn (_ buffer score chr)
+          (if (= chr 39) k ())))
+        (list (pair (lit k) sqb))))
+    (def e-dq
+      (compile-asm
+        (lit (fn (_ buffer score chr)
+          (if (= chr 34) k ())))
+        (list (pair (lit k) dqb))))
+    (def e-close
+      (compile-asm
+        (lit (fn (_ buffer score chr)
+          (if (or (= chr 41) (= chr 93) (= chr 125))
+            (%score-set score 1 buffer)
+            ())))
+        (list (pair (lit u) 1))))
+    (def e-open
+      (compile-asm
+        (lit (fn (_ buffer score chr)
+          (if (or (= chr 40) (= chr 91) (= chr 123))
+            (%score-set score 1 buffer)
+            ())))
+        (list (pair (lit u) 1))))
+    ; -- the second base, same registration order as the interpreted one --
+    (def b (Base make-tok))
+    (def reg
+      (fn (_ nm e hs)
+        (let ((r (%py-hdl-of hs (lit read))))
+          (Base make-type b nm
+            (if (null? r)
+              (list (pair (lit analyse) e))
+              (list (pair (lit analyse) e) (pair (lit read) r)))))))
+    (reg "PY-WS" e-ws %py-t-ws)
+    (reg "PY-COMMENT" e-comment %py-t-comment)
+    (reg "PY-BLANK" e-blank %py-t-blank)
+    (reg "PY-NL" e-nl %py-t-nl)
+    (reg "PY-NAME" e-name %py-t-name)
+    (reg "PY-NUMBER" e-number %py-t-number)
+    (reg "PY-SQ" e-sq %py-t-sq)
+    (reg "PY-DQ" e-dq %py-t-dq)
+    (Base make-type b "PY-OP" %py-t-op)
+    (reg "PY-CLOSE" e-close %py-t-close)
+    (reg "PY-OPEN" e-open %py-t-open)
+    (%set-first! %py-cbase b)
+    (%set-first! %py-active-raw (Base raw-of b))))
+
+(def %py-jit-tick!
+  (fn (_ n)
+    (if (eq? (first %py-jit) (lit off))
+      (do
+        (%set-first! %py-jit-bytes (+ (first %py-jit-bytes) n))
+        (if (>= (first %py-jit-bytes) (first %py-jit-threshold))
+          (%set-first! %py-jit
+            (guard (_ (lit failed))
+              (%seq (%py-jit-compile!) (lit active))))
+          ()))
+      ())))
 
 ; --- The driver --------------------------------------------------------------
 ; (Base raw-of ...) IS NOT OPTIONAL, and omitting it is a SEGFAULT rather than
@@ -536,8 +779,9 @@
 ; load: two tokenize calls in one process must not share a stack.
 (def python-tokenize
   (fn (_ input)
+    (%py-jit-tick! (Str8 length input))
     (%py-ind-reset!)
-    (let ((toks (%py-token-read-string (Base raw-of %py-base)
+    (let ((toks (%py-token-read-string (first %py-active-raw)
                   (Str8 append input " "))))
       ; Reading is over and x is driving again, so this is where an indentation
       ; error can finally be raised.
@@ -566,18 +810,19 @@
 (def %py-open? (fn (_ c) (if (= c 40) #t (if (= c 91) #t (= c 123)))))
 (def %py-close? (fn (_ c) (if (= c 41) #t (if (= c 93) #t (= c 125)))))
 
-(Base make-type %py-base "PY-CLOSE"
+(def %py-t-close
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
         (if (%py-close? chr) (%score-set score 1 buffer) ())))
     (pair (lit read)
       (fn (_ . args) (list (lit tok-close) (%buffer-token (first args)))))))
+(Base make-type %py-base "PY-CLOSE" %py-t-close)
 
 (def %py-group-close? (fn (_ t) (if (pair? t) (eq? (first t) (lit tok-close)) #f)))
 (def %py-group-nl? (fn (_ t) (if (pair? t) (eq? (first t) (lit tok-newline)) #f)))
 
-(Base make-type %py-base "PY-OPEN"
+(def %py-t-open
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
@@ -604,3 +849,4 @@
         (let ((elems (go ())))
           (%set-first! %py-in-group (- (first %py-in-group) 1))
           (mk-tok-group open elems))))))
+(Base make-type %py-base "PY-OPEN" %py-t-open)
