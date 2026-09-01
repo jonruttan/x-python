@@ -96,6 +96,19 @@ fi
 # file's batch, as before.  A runner without the knob (v0.9.0) ignores it.
 export SPEC_SEAM_COLLECT=0
 
+# SIZE THE UNIT TIMEOUT FOR THE SLOWEST LANE.  On the pinned v0.9.0
+# platform the boot runs interpreted (its analyser burst needs a cwd only
+# a checkout has), so a spec file on CI's runners costs ~25-30s of boot
+# before its first case -- and as the bundle grew, every file crept toward
+# the 60-second default until whichever was heaviest that week tipped over
+# (exit 124), each time reading as a regression that was not one.  Three
+# file splits later the honest fix is the knob the platform runner
+# documents: the guard still bounds a runaway, at a ceiling sized for a
+# boot the slow lane actually pays.  A timeout kill here also strands an
+# orphan engine at full spin -- observed taking a CI host down (exit 143)
+# -- so a ceiling nothing legitimate hits is safer than a tight one.
+export TIMEOUT_UNIT_SECS="${TIMEOUT_UNIT_SECS:-120}"
+
 # SIZE THE CEILING FOR THE CONFORMANCE BATCHES ONLY, as the platform
 # runner's own comment instructs a seam-collect opt-out to do.  With no
 # per-snippet collect a conformance file's 15-case batch accumulates every
