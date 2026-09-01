@@ -520,6 +520,119 @@
     (pair (lit read)
       (fn (_ . args) (mk-tok-op (%buffer-token (first args)))))))
 
+; --- Compiled analysers ------------------------------------------------------
+;
+; THE BODY STATES RUN PER CHARACTER and they are the whole cost of lexing:
+; every character of every name crosses the C/x boundary into an interpreted
+; closure.  x/tool/compile's assembler lane (compile-asm) compiles an analyser
+; to native code -- no toolchain, about a second per state -- so the hot loop
+; stops re-entering the interpreter at all.
+;
+; ADOPTION IS LAZY AND GUARDED, lib/x/hash/sha256.x's pattern.  Compiling six
+; states costs seconds, so nothing happens until %py-jit-threshold bytes of
+; source have passed through python-tokenize in this process; then ONE attempt,
+; under a guard.  Any refusal -- a platform whose compile-asm predates fvar
+; forwarding or the self-param rule, a host without native/jit -- pins `failed`
+; and the interpreted states carry on.  THE INTERPRETER IS THE CONTRACT; the
+; JIT is a cache of it.
+;
+; THE SWAP IS set! OF THE STATE GLOBALS.  A registered entry analyser returns
+; `%py-name-body` by evaluating the symbol on every call, so one set! changes
+; what every future return hands the C loop.  The entries themselves stay
+; interpreted: they run once per token, not once per character.  Nothing is
+; swapped until every compile has succeeded, so a raise mid-way leaves the
+; interpreted set whole.
+;
+; COMPILED SOURCES ARE INTEGER-ONLY.  Raw codepoints (32, not #\space); LITERAL
+; signs (-1, never the house-style (- 0 1)) -- a compiled %score-set sign must
+; be a literal integer.  The self param is named (me ...), and RETURNING it is
+; the loop; that needs the platform to resolve a self-name as arg slot 0.  A
+; platform too old for that also refuses the fvar-forwarding gate below, which
+; is the property the gate actually tests.
+(import x/tool/compile)
+
+(def %py-jit (pair (lit off) ()))        ; off | active | failed
+(def %py-jit-bytes (pair 0 ()))
+(def %py-jit-threshold (pair 51200 ()))  ; bytes of source before one attempt
+
+(def %py-jit-compile!
+  (fn (_)
+    ; THE GATE.  On a platform that cannot forward fvars this compile itself
+    ; raises, and the guard in %py-jit-tick! pins `failed` before any state is
+    ; touched.  The result is never called -- a direct call to an
+    ; fvar-compiled function is outside the contract.
+    (compile-asm (lit (fn (_ x) (+ x k))) (list (pair (lit k) 1)))
+    ; Each state below is the interpreted one, re-said in the JIT's integer
+    ; vocabulary.  The unused fvar `u` forces analyser mode on the
+    ; self-looping states that have no real free variable.
+    (def ws
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (or (= chr 32) (= chr 9))
+            me
+            (%seq (%buffer-unread buffer) (%score-set score -1 buffer)))))
+        (list (pair (lit u) 1))))
+    (def comment
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (= chr 10)
+            (%seq (%buffer-unread buffer) (%score-set score -1 buffer))
+            me)))
+        (list (pair (lit u) 1))))
+    (def blank
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (or (= chr 32) (= chr 9))
+            me
+            (if (or (= chr 10) (= chr 35))
+              (%seq (%buffer-unread buffer) (%score-set score -1 buffer))
+              ()))))
+        (list (pair (lit u) 1))))
+    (def name
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (or (and (>= chr 97) (<= chr 122))
+                  (and (>= chr 65) (<= chr 90))
+                  (= chr 95)
+                  (and (>= chr 48) (<= chr 57)))
+            me
+            (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
+        (list (pair (lit u) 1))))
+    (def frac
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (and (>= chr 48) (<= chr 57))
+            me
+            (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
+        (list (pair (lit u) 1))))
+    (def body
+      (compile-asm
+        (lit (fn (me buffer score chr)
+          (if (and (>= chr 48) (<= chr 57))
+            me
+            (if (= chr 46)
+              frac
+              (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+        (list (pair (lit frac) frac))))
+    (set! %py-ws-continue ws)
+    (set! %py-comment-body comment)
+    (set! %py-blank-ws blank)
+    (set! %py-name-body name)
+    (set! %py-number-frac frac)
+    (set! %py-number-body body)))
+
+(def %py-jit-tick!
+  (fn (_ n)
+    (if (eq? (first %py-jit) (lit off))
+      (do
+        (%set-first! %py-jit-bytes (+ (first %py-jit-bytes) n))
+        (if (>= (first %py-jit-bytes) (first %py-jit-threshold))
+          (%set-first! %py-jit
+            (guard (_ (lit failed))
+              (%seq (%py-jit-compile!) (lit active))))
+          ()))
+      ())))
+
 ; --- The driver --------------------------------------------------------------
 ; (Base raw-of ...) IS NOT OPTIONAL, and omitting it is a SEGFAULT rather than
 ; an error.  `make-type` takes the wrapped base object; `read-str` takes the raw
@@ -536,6 +649,7 @@
 ; load: two tokenize calls in one process must not share a stack.
 (def python-tokenize
   (fn (_ input)
+    (%py-jit-tick! (Str8 length input))
     (%py-ind-reset!)
     (let ((toks (%py-token-read-string (Base raw-of %py-base)
                   (Str8 append input " "))))
