@@ -85,6 +85,12 @@
 
 ; --- The element cell --------------------------------------------------------
 
+; A float index is a TypeError, so the subscript handler needs to recognise a
+; machine float; the type handle compare is the same shape runtime.x uses.
+(def %py-t-typeof (prim-ref (lit type) (lit of)))
+(def %py-t-th-float (%py-t-typeof 1.5))
+(def %py-t-float? (fn (_ v) (eq? (%py-t-typeof v) %py-t-th-float)))
+
 (def %py-list-elems (fn (_ v) (rest (first v))))
 (def %py-list-set! (fn (_ v new) (%seq (%set-rest! (first v) new) ())))
 (def %py-list-new (fn (_ elems) (%make-instance %py-list (pair () elems))))
@@ -125,10 +131,17 @@
           (def l (rest (first self)))
           (def n (List length l))
           (def i (first args))
-          (def k (if (< i 0) (+ n i) i))
-          (if (if (< k 0) #t (>= k n))
-            (Err raise (lit index) "list index out of range" ())
-            (List ref k l))))
+          ; `x[1.0]` is a TypeError in Python, not an index -- and without
+          ; this check the float silently truncates to a working index, the
+          ; wrong-number failure mode again (conformance float/list).
+          (if (%py-t-float? i)
+            (Err raise (lit type)
+              "list indices must be integers or slices, not float" ())
+            (do
+              (def k (if (< i 0) (+ n i) i))
+              (if (if (< k 0) #t (>= k n))
+                (Err raise (lit index) "list index out of range" ())
+                (List ref k l))))))
       (pair
         (lit iter)
         (fn (_ self) (%i-make %py-list-step (rest (first self))))))))

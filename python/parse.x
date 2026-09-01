@@ -66,11 +66,39 @@
 ;
 ; This is the same constraint that decided python/types.x, in a smaller place:
 ; work in the base that already has what you need.
+; UNDERSCORES ARE SPELLING, NOT VALUE.  The tokenizer accepts `1_000.1_8`
+; loosely and this is the strip that makes the pair honest: everything the
+; lexer let through is removed before either number path parses.
+(def %py-num-strip
+  (fn (_ s)
+    (if (null? (Str8 index-of "_" s))
+      s
+      (do
+        (def n (Str8 length s))
+        (def go
+          (fn (self i acc)
+            (if (>= i n)
+              acc
+              (let ((c (Str8 sub i 1 s)))
+                (self (+ i 1)
+                  (if (Str8 =? c "_") acc (Str8 append acc c)))))))
+        (go 0 "")))))
+
+; A dot OR an exponent makes it a float: `1e10` has no dot and is not an int,
+; and the sexp reader would silently answer 1 for it (the reader drops
+; exponents, x-lang#577) -- so the routing must look for both spellings.
+(def %py-num-float-text?
+  (fn (_ t)
+    (if (not (null? (Str8 index-of "." t))) #t
+      (if (not (null? (Str8 index-of "e" t))) #t
+        (not (null? (Str8 index-of "E" t)))))))
+
 (def %py-num
   (fn (_ text)
-    (if (null? (Str8 index-of "." text))
-      (first (%py-read-str (Base raw-of %py-sexp-base) (Str8 append text " ")))
-      (Float from text))))
+    (let ((t (%py-num-strip text)))
+      (if (%py-num-float-text? t)
+        (Float from t)
+        (first (%py-read-str (Base raw-of %py-sexp-base) (Str8 append t " ")))))))
 
 ; --- Token helpers -----------------------------------------------------------
 ; Guarded for the same reason as python/indent.x's %py-tok-type: (first 2)
