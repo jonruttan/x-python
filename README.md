@@ -286,6 +286,19 @@ out what it costs to move them onto x's type system instead. `basics/class`
 scoring 0 with a green local class suite is the first real evidence that the
 question is not academic.
 
+## Background
+
+Python is Guido van Rossum's language, first released in 1991; Python 3 (2008)
+is the only target here, and it is the version that made the choices this
+bundle's dialect note leans on — one unbounded integer type, true division,
+text as Unicode. Python has a reference manual rather than a standard, and its
+behaviour is ultimately defined by what CPython does — which is why the
+scoreboard above treats CPython as the oracle rather than any document.
+
+- [The Python Language Reference](https://docs.python.org/3/reference/) — as close to a specification as exists
+- [Data model](https://docs.python.org/3/reference/datamodel.html) — the chapter an implementer actually lives in
+- [MicroPython](https://micropython.org/) — the subset implementation whose test corpus this bundle scores against
+
 ## Licence
 
 MIT No Attribution (MIT-0). See [LICENSE](LICENSE).
