@@ -1,5 +1,7 @@
 # x-python — Python on x-lang
 
+<p align="center"><img src="docs/bitwise-banner.svg" alt="x-python, with Bitwise the owl" width="100%"></p>
+
 A Python 3 surface for [x-lang](https://github.com/jonruttan/x-lang):
 indentation is grouping, statements are not expressions, and there is one
 integer type that goes all the way up.
@@ -306,3 +308,5 @@ MIT No Attribution (MIT-0). See [LICENSE](LICENSE).
 The MicroPython corpus this bundle scores against is MIT and is **not** vendored
 here — it is fetched and verified from the pin in
 `tools/conformance/upstream.pin.xon`.
+
+<p align="center"><img src="docs/bitwise-mark.svg" alt="Bitwise" width="96"></p>
