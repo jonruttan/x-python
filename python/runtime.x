@@ -312,60 +312,55 @@
 ; never equal whatever their names.  And a string never equals a non-string --
 ; `1 == 'a'` is False in Python, where handing the pair to x's `=` was an error.
 ; Bools are ints in every comparison: 0.0 == False and True == 1.0 are both
-; True in Python, so the operands normalize before the numeric compare.
+; True in Python, so bool operands normalize before the numeric compare --
+; INLINE, with no helper call and no frame: these run once per dict entry
+; on every subscript's linear walk, and a per-call allocation here is a
+; batch-memory multiplier the CI host measured the hard way.
 (def %py-eq
-  (fn (_ a0 b0)
-    (def a (%py-boolnorm a0))
-    (def b (%py-boolnorm b0))
+  (fn (_ a b)
     (if (str? a) (if (str? b) (Str8 =? a b) #f)
     (if (str? b) #f
     (if (%py-class-is a) (eq? a b)
     (if (%py-class-is b) #f
-      (= a b)))))))
+      (= (if (eq? a #t) 1 (if (eq? a #f) 0 a))
+         (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))))
 (def %py-ne (fn (_ a b) (not (%py-eq a b))))
+
 ; Strings order lexicographically by code point; the engine's numeric `<`
-; has no answer for them.
+; has no answer for them.  Self-recursive at top level -- no closure built
+; per comparison.
 (def %py-strcmp
-  (fn (_ a b)
-    (def la (Str8 length a))
-    (def lb (Str8 length b))
-    (def go
-      (fn (self i)
-        (if (>= i la)
-          (if (>= i lb) 0 (- 0 1))
-          (if (>= i lb)
-            1
-            (let ((ca (%py-char-code (%str-ref a i)))
-                  (cb (%py-char-code (%str-ref b i))))
-              (if (< ca cb) (- 0 1) (if (> ca cb) 1 (self (+ i 1)))))))))
-    (go 0)))
+  (fn (self a b i)
+    (if (>= i (Str8 length a))
+      (if (>= i (Str8 length b)) 0 (- 0 1))
+      (if (>= i (Str8 length b))
+        1
+        (let ((ca (%py-char-code (%str-ref a i)))
+              (cb (%py-char-code (%str-ref b i))))
+          (if (< ca cb) (- 0 1) (if (> ca cb) 1 (self a b (+ i 1)))))))))
 
 (def %py-lt
   (fn (_ a b)
     (if (if (str? a) (str? b) #f)
-      (< (%py-strcmp a b) 0)
-      (< (%py-boolnorm a) (%py-boolnorm b)))))
+      (< (%py-strcmp a b 0) 0)
+      (< (if (eq? a #t) 1 (if (eq? a #f) 0 a))
+         (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
 (def %py-gt
   (fn (_ a b)
     (if (if (str? a) (str? b) #f)
-      (> (%py-strcmp a b) 0)
-      (> (%py-boolnorm a) (%py-boolnorm b)))))
+      (> (%py-strcmp a b 0) 0)
+      (> (if (eq? a #t) 1 (if (eq? a #f) 0 a))
+         (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
 (def %py-le
-  (fn (_ a0 b0)
-    (if (if (str? a0) (str? b0) #f)
-      (<= (%py-strcmp a0 b0) 0)
-      (do
-        (def a (%py-boolnorm a0))
-        (def b (%py-boolnorm b0))
-        (if (< a b) #t (= a b))))))
+  (fn (_ a b)
+    (if (if (str? a) (str? b) #f)
+      (<= (%py-strcmp a b 0) 0)
+      (if (%py-lt a b) #t (%py-eq a b)))))
 (def %py-ge
-  (fn (_ a0 b0)
-    (if (if (str? a0) (str? b0) #f)
-      (>= (%py-strcmp a0 b0) 0)
-      (do
-        (def a (%py-boolnorm a0))
-        (def b (%py-boolnorm b0))
-        (if (> a b) #t (= a b))))))
+  (fn (_ a b)
+    (if (if (str? a) (str? b) #f)
+      (>= (%py-strcmp a b 0) 0)
+      (if (%py-gt a b) #t (%py-eq a b)))))
 
 ; --- Lists ------------------------------------------------------------------
 ;
