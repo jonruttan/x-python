@@ -98,7 +98,11 @@
     (let ((t (%py-num-strip text)))
       (if (%py-num-float-text? t)
         (Float from t)
-        (first (%py-read-str (Base raw-of %py-sexp-base) (Str8 append t " ")))))))
+        ; THE HAND PARSER, NOT THE CHILD BASE.  %py-sexp-base is a (Base make)
+        ; child and bigint is a library type it does not carry, so a literal
+        ; past 2^63 WRAPPED silently -- the same trap the float comment above
+        ; records, one type over.  %py-int-of-str promotes through the tower.
+        (%py-int-of-str t)))))
 
 ; --- Token helpers -----------------------------------------------------------
 ; Guarded for the same reason as python/indent.x's %py-tok-type: (first 2)
@@ -169,12 +173,20 @@
         (list "<=" (lit %py-le)) (list ">=" (lit %py-ge))))
 (def %py-sum-ops
   (list (list "+" (lit %py-add)) (list "-" (lit %py-sub))))
+; The bitwise levels sit between comparison and arithmetic, loosest first:
+; | then ^ then &, Python's own order.
+(def %py-bor-ops  (list (list "|" (lit %py-bitor))))
+(def %py-bxor-ops (list (list "^" (lit %py-bitxor))))
+(def %py-band-ops (list (list "&" (lit %py-bitand))))
 (def %py-product-ops
   (list (list "*" (lit %py-mul)) (list "/" (lit %py-div))
         (list "//" (lit %py-floordiv)) (list "%" (lit %py-mod))))
 
 ; --- The ladder --------------------------------------------------------------
 (def %py-comparison ())
+(def %py-bor ())
+(def %py-bxor ())
+(def %py-band ())
 (def %py-sum ())
 (def %py-product ())
 (def %py-unary ())
@@ -210,7 +222,28 @@
             (self (list %sym acc (first r)) (rest r))))))
     (%go (first %first) (rest %first))))
 
-(set! %py-comparison (fn (_ toks) (%py-left toks %py-cmp-ops %py-sum)))
+; `in` and `not in` are comparison-level operators spelled as NAMES, so the
+; table walk cannot see them; a wrapper reads them after the ordinary
+; comparison parse.  The for-statement and comprehension `in`s are consumed
+; POSITIONALLY by their own parsers before any expression parse begins, so
+; this never collides with them.
+(set! %py-comparison
+  (fn (_ toks)
+    (let ((r (%py-left toks %py-cmp-ops %py-bor)))
+      (def more (rest r))
+      (if (%py-name-is? (if (null? more) () (first more)) "in")
+        (let ((rhs (%py-left (rest more) %py-cmp-ops %py-bor)))
+          (pair (list (lit %py-in) (first r) (first rhs)) (rest rhs)))
+        (if (if (%py-name-is? (if (null? more) () (first more)) "not")
+              (%py-name-is? (if (null? (rest more)) () (first (rest more))) "in")
+              #f)
+          (let ((rhs (%py-left (rest (rest more)) %py-cmp-ops %py-bor)))
+            (pair (list (lit not) (list (lit %py-in) (first r) (first rhs)))
+              (rest rhs)))
+          r)))))
+(set! %py-bor  (fn (_ toks) (%py-left toks %py-bor-ops %py-bxor)))
+(set! %py-bxor (fn (_ toks) (%py-left toks %py-bxor-ops %py-band)))
+(set! %py-band (fn (_ toks) (%py-left toks %py-band-ops %py-sum)))
 
 ; --- or / and / not ----------------------------------------------------------
 ;
@@ -269,10 +302,17 @@
 
 (set! %py-unary
   (fn (_ toks)
-    (if (%py-op-is? (if (null? toks) () (first toks)) "-")
+    (def t (if (null? toks) () (first toks)))
+    (if (%py-op-is? t "-")
       (let ((r (%py-unary (rest toks))))
         (pair (list (lit %py-neg) (first r)) (rest r)))
-      (%py-power toks))))
+      (if (%py-op-is? t "+")
+        (let ((r (%py-unary (rest toks))))
+          (pair (list (lit %py-pos) (first r)) (rest r)))
+        (if (%py-op-is? t "~")
+          (let ((r (%py-unary (rest toks))))
+            (pair (list (lit %py-invert) (first r)) (rest r)))
+          (%py-power toks))))))
 
 ; RIGHT-ASSOCIATIVE, and it matters: 2**3**2 is 2**(3**2) = 512, not 64.  The
 ; recursion goes back to `unary` rather than to `power`, which is also how
@@ -608,6 +648,8 @@
             ; self-evaluating in x, but a form built here is handed to eval!,
             ; and an unquoted string in head position would be called.
             (pair (%py-val t) (rest toks))
+          (if (eq? (%py-tag t) (lit tok-bytes))
+            (pair (list (lit %py-mkbytes) (%py-val t)) (rest toks))
             (if (%py-super-call? toks)
               ; `super()` -- the group is consumed with the name
               (if (null? (first %py-current-class))
@@ -647,7 +689,7 @@
                         (pair (lit %py-mktuple) (%py-group-exprs elems))
                         (rest toks))
                       (pair (%py-expr-of elems) (rest toks)))))
-                (Err raise (lit syntax) "unexpected token in expression" t))))))))))))
+                (Err raise (lit syntax) "unexpected token in expression" t)))))))))))))
 
 ; A Python name becomes an x symbol, EXCEPT the builtins that have a runtime
 ; function -- `print` is the only one so far.  A name table rather than a
@@ -672,6 +714,12 @@
         (list "dict"    (lit %py-cls-dict))
         (list "tuple"   (lit %py-cls-tuple))
         (list "isinstance" (lit %py-isinstance))
+        (list "pow"       (lit %py-pow))
+        (list "abs"       (lit %py-abs))
+        (list "round"     (lit %py-round))
+        (list "min"       (lit %py-min))
+        (list "max"       (lit %py-max))
+        (list "bytearray" (lit %py-bytearray))
         ; The builtin exceptions are ordinary names bound to ordinary class
         ; values, so `except ValueError` and `except MyError` take one path.
         (list "Exception"         (lit %py-exc-Exception))
@@ -863,6 +911,13 @@
                 (pair () (rest toks))
               (if (%py-unpack-stmt? toks)
                 (%py-unpack-stmt toks)
+              ; A statement can BEGIN with a unary operator (`~x`, `-x` as an
+              ; expression statement); the postfix-target probe below would
+              ; refuse the op token, so these go straight to the expression
+              ; parser.
+              (if (if (%py-op-is? t "-") #t
+                    (if (%py-op-is? t "+") #t (%py-op-is? t "~")))
+                (%py-or-e toks)
                 ; ASSIGNMENT IS DECIDED BY WHAT FOLLOWS A TARGET, not by the
                 ; shape of the first token.  Parse a postfix expression -- a
                 ; name, a subscript, an attribute, a call -- and then look.
@@ -886,7 +941,7 @@
                             (pair
                               (%py-store (first tgt)
                                 (list aug (first tgt) (first r)))
-                              (rest r)))))))))))))))))))))
+                              (rest r))))))))))))))))))))))
 
 ; `else:` after an if.  `elif` is `else: if ...`, which is what Python's own
 ; grammar says it is, so it needs no separate shape.

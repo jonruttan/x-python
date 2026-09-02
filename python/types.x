@@ -44,6 +44,7 @@
 ; holds the same cell, so every reference sees the store.
 
 (provide python/types
+  %py-bytes %py-bytes-new %py-bytes-is %py-bytes-str
   %py-list %py-list-new %py-list-is %py-list-elems %py-list-set!
   %py-dict %py-dict-new %py-dict-is %py-dict-entries %py-dict-set! %py-dict-get
   %py-repr %py-equal %py-repeat
@@ -401,6 +402,25 @@
 ; Python and would be the same nil here.
 
 (def %py-tuple ())
+
+; --- PY-BYTES ----------------------------------------------------------------
+; MINIMAL, DELIBERATELY: enough that b'1.2' is a value float() can read and
+; print() can show.  The payload is the decoded string; indexing, slicing and
+; the bytes methods wait until a conformance case asks for them.
+(def %py-bytes ())
+(def %py-bytes-new (fn (_ s) (%make-instance %py-bytes s)))
+(def %py-bytes-is (fn (_ v) (%type? v %py-bytes)))
+(def %py-bytes-str (fn (_ v) (first v)))
+(set! %py-bytes
+  (%make-type
+    "PY-BYTES"
+    (list
+      (pair (lit write)
+        (fn (_ self)
+          (display "b'")
+          (display (first self))
+          (display "'")))
+      (pair (lit length) (fn (_ self) (Str8 length (first self)))))))
 
 (def %py-tuple-new (fn (_ elems) (%make-instance %py-tuple elems)))
 (def %py-tuple-is (fn (_ v) (%type? v %py-tuple)))

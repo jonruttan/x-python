@@ -46,7 +46,9 @@
   %py-exc-AttributeError %py-exc-NameError %py-exc-TypeError
   %py-exc-ValueError %py-exc-RuntimeError %py-exc-SyntaxError
   %py-mkdict %py-dict? %py-dget %py-dset
-  %py-mktuple %py-tuple? %py-unpack)
+  %py-mktuple %py-tuple? %py-unpack
+  %py-pos %py-invert %py-in %py-bitor %py-bitxor %py-bitand
+  %py-abs %py-round %py-min %py-max %py-bytearray %py-mkbytes)
 
 ; --- Arithmetic --------------------------------------------------------------
 ; `+` dispatches on the operands, and the string case is not an extra: Python
@@ -102,11 +104,15 @@
       (Err raise (lit zero-division) "division by zero" ())
       (/ (* a 1.0) b))))
 
+; FLOOR DIVISION OF FLOATS IS A FLOAT: 1.0 // 2 is 0.0 in Python, floor of
+; the true quotient, where Num quotient wants exact operands.
 (def %py-floordiv
   (fn (_ a b)
     (if (= b 0)
       (Err raise (lit zero-division) "integer division or modulo by zero" ())
-      (Num quotient a b))))
+      (if (if (%py-float-is a) #t (%py-float-is b))
+        (Float floor (/ (* a 1.0) b))
+        (Num quotient a b)))))
 ; A STRING ON THE LEFT OF % IS FORMATTING, not arithmetic -- str.__mod__ --
 ; and the check comes before the zero test because the right operand of a
 ; format is a tuple as often as a number.
@@ -124,30 +130,237 @@
 ; an unbounded-allocation bomb, and `2 ** -1` is ordinary Python.
 ;
 ; Python's answer is a float: 2 ** -1 is 0.5.
+; A FLOAT ANYWHERE MAKES IT libm's pow: Num expt squares its way through
+; integer exponents and has no answer for 2 ** 0.5, inf or nan.  Python's
+; one refusal on this path is 0.0 to a negative power.
 (def %py-pow
   (fn (_ a b)
-    (if (< b 0)
-      (/ 1.0 (Num expt a (- 0 b)))
-      (Num expt a b))))
+    (if (if (%py-float-is a) #t (%py-float-is b))
+      (do
+        (def fa (* (%py-boolnorm a) 1.0))
+        (def fb (* (%py-boolnorm b) 1.0))
+        (if (if (= fa 0.0) (< fb 0.0) #f)
+          (Err raise (lit zero-division)
+            "0.0 cannot be raised to a negative power" ())
+          (Float pow fa fb)))
+      (if (< b 0)
+        (/ 1.0 (Num expt a (- 0 b)))
+        (Num expt a b)))))
 (def %py-neg (fn (_ a) (- 0 a)))
+
+; Unary + is a no-op on numbers and a TypeError on everything else; unary ~
+; is exact two's complement on integers and a TypeError on floats -- both
+; measured refusals in the conformance corpus, not decorations.
+(def %py-pos
+  (fn (_ v)
+    (let ((w (%py-boolnorm v)))
+      (if (null? (%py-num-kind w))
+        (Err raise (lit type) "bad operand type for unary +" ())
+        w))))
+
+(def %py-invert
+  (fn (_ v)
+    (let ((w (%py-boolnorm v)))
+      (if (eq? (%py-num-kind w) (lit int))
+        (- (- 0 w) 1)
+        (Err raise (lit type) "bad operand type for unary ~" ())))))
+
+; True is 1 and False is 0 wherever a number is wanted: comparisons,
+; arithmetic seams, formatting.  Python's bool IS an int; x's is not.
+(def %py-boolnorm
+  (fn (_ v) (if (eq? v #t) 1 (if (eq? v #f) 0 v))))
+
+; --- Bitwise, exact two's complement -----------------------------------------
+; The loop walks both operands a bit at a time with FLOOR halving, so a
+; negative integer presents its two's-complement bits naturally and
+; terminates at the all-zeros or all-ones tail; the tail's contribution is
+; -2^k when its bit is set, which is exactly what two's complement says.
+; Bigints ride the tower ops.
+(def %py-half
+  (fn (_ v) (Num quotient (if (< v 0) (- v 1) v) 2)))
+
+(def %py-bit2
+  (fn (_ a0 b0 opname fbit)
+    (def a (%py-boolnorm a0))
+    (def b (%py-boolnorm b0))
+    (if (if (eq? (%py-num-kind a) (lit int)) (eq? (%py-num-kind b) (lit int)) #f)
+      (do
+        (def go
+          (fn (self a b pow acc)
+            (if (if (if (= a 0) #t (= a (- 0 1))) (if (= b 0) #t (= b (- 0 1))) #f)
+              (if (fbit (= a (- 0 1)) (= b (- 0 1))) (- acc pow) acc)
+              (self (%py-half a) (%py-half b) (* pow 2)
+                (if (fbit (= (- a (* 2 (%py-half a))) 1)
+                          (= (- b (* 2 (%py-half b))) 1))
+                  (+ acc pow)
+                  acc)))))
+        (go a b 1 0))
+      (Err raise (lit type)
+        (Str8 append "unsupported operand type(s) for " opname) ()))))
+
+(def %py-bitor
+  (fn (_ a b) (%py-bit2 a b "|" (fn (_ x y) (if x #t y)))))
+(def %py-bitxor
+  (fn (_ a b) (%py-bit2 a b "^" (fn (_ x y) (if x (not y) y)))))
+(def %py-bitand
+  (fn (_ a b) (%py-bit2 a b "&" (fn (_ x y) (if x y #f)))))
+
+; --- Membership --------------------------------------------------------------
+; `a in b`: substring for strings, element walk with Python's equality for
+; the containers, keys for a dict, and a TypeError for anything that cannot
+; be iterated -- 1.2 in 3.4 must refuse, not loop.
+(def %py-in-walk
+  (fn (self a l)
+    (if (null? l) #f (if (%py-eq a (first l)) #t (self a (rest l))))))
+
+(def %py-in
+  (fn (_ a b)
+    (if (str? b)
+      (if (str? a)
+        (Str8 includes? a b)
+        (Err raise (lit type)
+          "'in <string>' requires string as left operand" ()))
+      (if (%py-list? b)
+        (%py-in-walk a (%py-list-elems b))
+        (if (%py-tuple-is b)
+          (%py-in-walk a (%py-tuple-elems b))
+          (if (%py-dict? b)
+            (do
+              (def keys
+                (fn (self es acc)
+                  (if (null? es) acc (self (rest es) (pair (first (first es)) acc)))))
+              (%py-in-walk a (keys (%py-dict-entries b) ())))
+            (Err raise (lit type) "argument is not iterable" ())))))))
+
+; --- Numeric builtins --------------------------------------------------------
+; abs clears the SIGN BIT for floats (the arithmetic spelling turns -0.0
+; into itself); round is the exact-digit machinery at a decimal place, half
+; to even, int result without ndigits and float with.
+(def %py-abs
+  (fn (_ v0)
+    (def v (%py-boolnorm v0))
+    (if (%py-float-is v)
+      (if (< (first v) 0) (- 0.0 v) v)
+      (if (eq? (%py-num-kind v) (lit int))
+        (if (< v 0) (- 0 v) v)
+        (Err raise (lit type) "bad operand type for abs()" ())))))
+
+(def %py-round
+  (fn (_ . a)
+    (def v (%py-boolnorm (first a)))
+    (def nd (if (null? (rest a)) () (first (rest a))))
+    (if (not (%py-float-is v))
+      (if (eq? (%py-num-kind v) (lit int))
+        v
+        (Err raise (lit type) "type cannot be rounded" ()))
+      (do
+        (def ex (%py-f-exact v))
+        (if (not (eq? (first ex) (lit num)))
+          (Err raise (lit value) "cannot round a special float" ())
+          (do
+            (def sgn (first (rest ex)))
+            (def D (first (rest (rest ex))))
+            (def x10 (first (rest (rest (rest ex)))))
+            (def p (if (null? nd) 0 nd))
+            (if (< p 0)
+              (Err raise (lit value) "negative round ndigits unsupported" ())
+              (let ((f (%py-fmt-fixed D x10 p)))
+                (if (null? nd)
+                  (let ((n (%py-int-of-str (first f))))
+                    (if (Str8 =? sgn "-") (- 0 n) n)
+                  )
+                  (Float from
+                    (Str8 append sgn
+                      (if (= p 0)
+                        (first f)
+                        (Str8 append (first f)
+                          (Str8 append "." (rest f)))))))))))))))
+
+(def %py-minmax
+  (fn (_ vs pick which)
+    (if (null? vs)
+      (Err raise (lit value)
+        (Str8 append which "() arg is an empty sequence") ())
+      (do
+        (def go
+          (fn (self best l)
+            (if (null? l)
+              best
+              (self (if (pick (first l) best) (first l) best) (rest l)))))
+        (go (first vs) (rest vs))))))
+
+(def %py-min
+  (fn (_ . a)
+    (def vs (if (null? (rest a)) (%py-iter-elems (first a)) a))
+    (%py-minmax vs (fn (_ x y) (%py-lt x y)) "min")))
+(def %py-max
+  (fn (_ . a)
+    (def vs (if (null? (rest a)) (%py-iter-elems (first a)) a))
+    (%py-minmax vs (fn (_ x y) (%py-gt x y)) "max")))
+
+; --- Bytes seams -------------------------------------------------------------
+(def %py-mkbytes (fn (_ s) (%py-bytes-new s)))
+(def %py-bytearray
+  (fn (_ v)
+    (if (%py-bytes-is v)
+      v
+      (Err raise (lit type) "bytearray() argument unsupported here" ()))))
 
 ; --- Comparison --------------------------------------------------------------
 ; Class equality is IDENTITY: the builtin type objects are singletons, so
 ; `type(1) == type(2)` is eq? on the same object, and two distinct classes are
 ; never equal whatever their names.  And a string never equals a non-string --
 ; `1 == 'a'` is False in Python, where handing the pair to x's `=` was an error.
+; Bools are ints in every comparison: 0.0 == False and True == 1.0 are both
+; True in Python, so bool operands normalize before the numeric compare --
+; INLINE, with no helper call and no frame: these run once per dict entry
+; on every subscript's linear walk, and a per-call allocation here is a
+; batch-memory multiplier the CI host measured the hard way.
 (def %py-eq
   (fn (_ a b)
     (if (str? a) (if (str? b) (Str8 =? a b) #f)
     (if (str? b) #f
     (if (%py-class-is a) (eq? a b)
     (if (%py-class-is b) #f
-      (= a b)))))))
+      (= (if (eq? a #t) 1 (if (eq? a #f) 0 a))
+         (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))))
 (def %py-ne (fn (_ a b) (not (%py-eq a b))))
-(def %py-lt (fn (_ a b) (< a b)))
-(def %py-gt (fn (_ a b) (> a b)))
-(def %py-le (fn (_ a b) (if (< a b) #t (= a b))))
-(def %py-ge (fn (_ a b) (if (> a b) #t (= a b))))
+
+; Strings order lexicographically by code point; the engine's numeric `<`
+; has no answer for them.  Self-recursive at top level -- no closure built
+; per comparison.
+(def %py-strcmp
+  (fn (self a b i)
+    (if (>= i (Str8 length a))
+      (if (>= i (Str8 length b)) 0 (- 0 1))
+      (if (>= i (Str8 length b))
+        1
+        (let ((ca (%py-char-code (%str-ref a i)))
+              (cb (%py-char-code (%str-ref b i))))
+          (if (< ca cb) (- 0 1) (if (> ca cb) 1 (self a b (+ i 1)))))))))
+
+(def %py-lt
+  (fn (_ a b)
+    (if (if (str? a) (str? b) #f)
+      (< (%py-strcmp a b 0) 0)
+      (< (if (eq? a #t) 1 (if (eq? a #f) 0 a))
+         (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
+(def %py-gt
+  (fn (_ a b)
+    (if (if (str? a) (str? b) #f)
+      (> (%py-strcmp a b 0) 0)
+      (> (if (eq? a #t) 1 (if (eq? a #f) 0 a))
+         (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
+(def %py-le
+  (fn (_ a b)
+    (if (if (str? a) (str? b) #f)
+      (<= (%py-strcmp a b 0) 0)
+      (if (%py-lt a b) #t (%py-eq a b)))))
+(def %py-ge
+  (fn (_ a b)
+    (if (if (str? a) (str? b) #f)
+      (>= (%py-strcmp a b 0) 0)
+      (if (%py-gt a b) #t (%py-eq a b)))))
 
 ; --- Lists ------------------------------------------------------------------
 ;
@@ -1201,8 +1414,11 @@
           (let ((k (%py-num-kind v)))
             (if (eq? k (lit int)) v
             (if (eq? k (lit float))
-              ; toward zero, which is Python's int() and what Float ->int does
-              (Float ->int v)
+              ; toward zero through the EXACT DIGITS, so int(1e19) and
+              ; int(2.0 ** 100) answer bigints instead of a wrapped int64
+              (let ((m (%py-fmt-int-mag v)))
+                (let ((n (%py-int-of-str (rest m))))
+                  (if (first m) (- 0 n) n)))
               (Err raise (lit type) "int() argument must be a number or string" ())))))))))))
 
 (def %py-float-ctor
@@ -1213,10 +1429,11 @@
         (if (eq? v #t) 1.0
         (if (eq? v #f) 0.0
         (if (str? v) (%py-float-of-str v)
+        (if (%py-bytes-is v) (%py-float-of-str (%py-bytes-str v))
           (let ((k (%py-num-kind v)))
             (if (eq? k (lit float)) v
             (if (eq? k (lit int)) (* v 1.0)
-              (Err raise (lit type) "float() argument must be a number or string" ())))))))))))
+              (Err raise (lit type) "float() argument must be a number or string" ()))))))))))))
 
 ; Python's truthiness, stated once: the empties and the zeros are false and
 ; everything else is true.  Objects and classes are unconditionally true.
