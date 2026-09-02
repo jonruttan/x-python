@@ -176,16 +176,27 @@ def main():
             groups.setdefault(key, []).append((fn, src, want))
 
     total = 0
+    # ONE PROCESS PER FILE, AND A FILE IS AT MOST CHUNK CASES.  The runner
+    # batches a file's cases into one no-auto-GC process, and a 49-case
+    # group (basics/string) crossed the object ceiling around its eighth
+    # case, so the forty-one after it read as dead when they were never
+    # run.  Chunking keeps every case measurable; the heading is the same
+    # in every chunk so the scoreboard's per-group tally is unchanged.
+    CHUNK = 10
     for (suite, group), cases in sorted(groups.items()):
-        out = os.path.join(outdir, "%s-%s.spec.md" % (suite, group))
+      nchunks = (len(cases) + CHUNK - 1) // CHUNK
+      for ci in range(nchunks):
+        chunk = cases[ci * CHUNK:(ci + 1) * CHUNK]
+        suffix = "" if nchunks == 1 else "-%d" % (ci + 1)
+        out = os.path.join(outdir, "%s-%s%s.spec.md" % (suite, group, suffix))
         with open(out, "w", encoding="utf-8") as fh:
             fh.write(HEADER % (suite, group, len(cases)))
             fh.write("## %s/%s\n\n" % (suite, group))
-            for fn, src, want in cases:
+            for fn, src, want in chunk:
                 fh.write("### %s\n\n" % fn)
                 fh.write("```python\n(python-run %s)\n```\n" % xstr(src))
                 fh.write("---\n```output\n%s\n```\n\n" % "\n".join(want))
-        total += len(cases)
+        total += len(chunk)
 
     with open(os.path.join(outdir, "SKIPPED.md"), "w", encoding="utf-8") as fh:
         fh.write(SKIPPED_HEADER % (MAX_SRC, MAX_OUT_LINES, MAX_OUT_CHARS))
