@@ -68,7 +68,10 @@
         (if (null? forms)
           ()
           (%seq (eval! (first forms)) (self (rest forms))))))
-    (%go (python-parse src))))
+    ; raise SystemExit ends the program QUIETLY; anything else uncaught
+    ; travels on to whoever ran the program
+    (guard (e (if (%py-exc-match e %py-exc-SystemExit) () (error e)))
+      (%go (python-parse src)))))
 
 (def %python-repl-print
   (fn (_ result)

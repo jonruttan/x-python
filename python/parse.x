@@ -100,18 +100,36 @@
     (let ((c (%py-char->int (Str8 ref (- (Str8 length t) 1) t))))
       (if (= c 106) #t (= c 74)))))
 
+; 0x 0o 0b literals: the base from the second character, digits after it.
+(def %py-num-base-of
+  (fn (_ t)
+    (if (< (Str8 length t) 3) ()
+      (if (not (= (%py-char->int (Str8 ref 0 t)) 48)) ()
+        (let ((c (%py-char->int (Str8 ref 1 t))))
+          (if (if (= c 120) #t (= c 88)) 16
+            (if (if (= c 111) #t (= c 79)) 8
+              (if (if (= c 98) #t (= c 66)) 2 ()))))))))
+
 (def %py-num
-  (fn (_ text)
+  (fn (self text)
     (let ((t (%py-num-strip text)))
+      ; a signed based literal (-0x10 alone) is the sign applied to the rest
+      (if (if (if (= (%py-char->int (Str8 ref 0 t)) 45) #t (= (%py-char->int (Str8 ref 0 t)) 43))
+            (not (null? (%py-num-base-of (Str8 sub 1 (- (Str8 length t) 1) t))))
+            #f)
+        (let ((v (self (Str8 sub 1 (- (Str8 length t) 1) t))))
+          (if (= (%py-char->int (Str8 ref 0 t)) 45) (%py-neg v) v))
+      (if (not (null? (%py-num-base-of t)))
+        (%py-int-of-based (Str8 sub 2 (- (Str8 length t) 2) t) (%py-num-base-of t))
       (if (%py-num-imag? t)
         (Complex make 0.0 (Float from (Str8 sub 0 (- (Str8 length t) 1) t)))
       (if (%py-num-float-text? t)
         (Float from t)
-        ; THE HAND PARSER, NOT THE CHILD BASE.  %py-sexp-base is a (Base make)
+        ; THE HAND PARSER, NOT THE CHILD BASE: %py-sexp-base is a (Base make)
         ; child and bigint is a library type it does not carry, so a literal
-        ; past 2^63 WRAPPED silently -- the same trap the float comment above
-        ; records, one type over.  %py-int-of-str promotes through the tower.
-        (%py-int-of-str t))))))
+        ; past 2^63 WRAPPED silently.  %py-int-of-str promotes through the
+        ; tower.
+        (%py-int-of-str t))))))))
 
 ; --- Token helpers -----------------------------------------------------------
 ; Guarded for the same reason as python/indent.x's %py-tok-type: (first 2)
@@ -452,14 +470,24 @@
 (def %py-spread-part?
   (fn (_ part) (if (null? part) #f (%py-op-is? (first part) "*"))))
 
-(def %py-call-form
-  (fn (_ f elems)
-    (def parts (%py-comma-split elems () ()))
+; A keyword argument is NAME = EXPR as one comma-part.
+(def %py-kw-part?
+  (fn (_ part)
+    (if (null? part) #f
+      (if (null? (rest part)) #f
+        (if (eq? (%py-tag (first part)) (lit tok-name))
+          (%py-op-is? (first (rest part)) "=")
+          #f)))))
+
+; The positional arguments as one form: (list e1 e2) without a spread, or
+; (%py-splat ...) when there is one.
+(def %py-args-form
+  (fn (_ parts)
     (def any-spread
       (fn (self ps)
         (if (null? ps) #f (if (%py-spread-part? (first ps)) #t (self (rest ps))))))
     (if (not (any-spread parts))
-      (pair f (%py-exprs-of parts ()))
+      (pair (lit list) (%py-exprs-of parts ()))
       (do
         (def segs
           (fn (self ps run acc)
@@ -470,7 +498,36 @@
                   (pair (list (lit %py-iter-elems) (%py-expr-of (rest (first ps))))
                     (if (null? run) acc (pair (pair (lit list) (List reverse run)) acc))))
                 (self (rest ps) (pair (%py-expr-of (first ps)) run) acc)))))
-        (list (lit apply) f (pair (lit %py-splat) (segs parts () ())))))))
+        (pair (lit %py-splat) (segs parts () ()))))))
+
+; A CALL WITH KEYWORDS GOES THROUGH %py-kwcall, which needs the callee's
+; parameter names; a method call keeps the object and the name apart
+; (%py-kwcall-attr) so the method's own signature is reachable without the
+; bound closure in between.
+(def %py-call-form
+  (fn (_ f elems)
+    (def parts (%py-comma-split elems () ()))
+    (def kws
+      (fn (self ps)
+        (if (null? ps) ()
+          (if (%py-kw-part? (first ps))
+            (pair (list (lit pair) (%py-val (first (first ps)))
+                    (%py-expr-of (rest (rest (first ps)))))
+              (self (rest ps)))
+            (self (rest ps))))))
+    (def poss
+      (fn (self ps)
+        (if (null? ps) ()
+          (if (%py-kw-part? (first ps)) (self (rest ps)) (pair (first ps) (self (rest ps)))))))
+    (def kw-forms (kws parts))
+    (if (null? kw-forms)
+      (let ((a (%py-args-form parts)))
+        (if (eq? (first a) (lit list)) (pair f (rest a)) (list (lit apply) f a)))
+      (let ((pos (%py-args-form (poss parts))))
+        (if (if (pair? f) (eq? (first f) (lit %py-getattr)) #f)
+          (list (lit %py-kwcall-attr) (first (rest f)) (first (rest (rest f)))
+            pos (pair (lit list) kw-forms))
+          (list (lit %py-kwcall) f pos (pair (lit list) kw-forms)))))))
 
 ; A dict entry: KEY : VALUE, split at the first colon of one comma-part.
 (def %py-colon-split
@@ -762,33 +819,73 @@
       (let ((c (%py-fs-code s i)))
         (if (if (= c 40) #t (if (= c 91) #t (= c 123))) (self s (+ i 1) (+ depth 1))
           (if (if (= c 41) #t (if (= c 93) #t (= c 125))) (self s (+ i 1) (- depth 1))
-            (if (if (= depth 0) (if (= c 33) #t (= c 58)) #f)
+            (if (if (= depth 0)
+                  (if (= c 58) #t
+                    ; `!` opens a conversion only when `=` does not follow:
+                    ; {a!=b} is a comparison
+                    (if (= c 33)
+                      (if (< (+ i 1) (Str8 length s)) (not (= (%py-fs-code s (+ i 1)) 61)) #t)
+                      #f))
+                  #f)
               i
               (self s (+ i 1) depth))))))))
+
+; {x=} DEBUG FIELDS: an expression ending in `=` (not ==, !=, <=, >=) prints
+; its own text, `=` and any whitespace included, before its value -- and that
+; value is the repr unless a conversion or a spec says otherwise.  The index
+; of that `=`, or nil.
+(def %py-fs-debug-at
+  (fn (_ s)
+    (def last-non-ws
+      (fn (self i)
+        (if (< i 0) ()
+          (let ((c (%py-fs-code s i)))
+            (if (if (= c 32) #t (if (= c 9) #t (= c 10))) (self (- i 1)) i)))))
+    (let ((i (last-non-ws (- (Str8 length s) 1))))
+      (if (null? i) ()
+        (if (not (= (%py-fs-code s i) 61)) ()
+          (if (= i 0) ()
+            (let ((p (%py-fs-code s (- i 1))))
+              (if (if (= p 61) #t (if (= p 33) #t (if (= p 60) #t (= p 62)))) () i))))))))
+
+; A field holds an expression LIST: {x, y} is a tuple.
+(def %py-fs-expr-of
+  (fn (_ toks)
+    (let ((r (%py-exprlist toks)))
+      (if (null? (rest r))
+        (first r)
+        (Err raise (lit syntax) "f-string: unexpected token after an expression" ())))))
 
 (def %py-fstring-field
   (fn (_ field)
     (def n (Str8 length field))
     (def at (%py-fs-split field 0 0))
-    (def expr-s (if (null? at) field (Str8 sub 0 at field)))
+    (def expr-s0 (if (null? at) field (Str8 sub 0 at field)))
+    (def dbg (%py-fs-debug-at expr-s0))
+    (def expr-s (if (null? dbg) expr-s0 (Str8 sub 0 dbg expr-s0)))
     (def tail (if (null? at) "" (Str8 sub at (- n at) field)))
     ; !conv comes first if present, then :spec
-    (def conv
+    (def conv0
       (if (if (> (Str8 length tail) 1) (= (%py-fs-code tail 0) 33) #f)
         (Str8 sub 1 1 tail)
         ""))
     (def after-conv
-      (if (Str8 =? conv "") tail (Str8 sub 2 (- (Str8 length tail) 2) tail)))
+      (if (Str8 =? conv0 "") tail (Str8 sub 2 (- (Str8 length tail) 2) tail)))
     (def spec
       (if (if (> (Str8 length after-conv) 0) (= (%py-fs-code after-conv 0) 58) #f)
         (Str8 sub 1 (- (Str8 length after-conv) 1) after-conv)
         ""))
+    (def conv
+      (if (if (Str8 =? conv0 "") (if (null? dbg) #f (Str8 =? spec "")) #f) "r" conv0))
     (if (= (Str8 length (Str8 trim expr-s)) 0)
       (Err raise (lit syntax) "f-string: empty expression not allowed" ())
-      (list (lit %py-fmtfield)
-        (%py-expr-of (python-tokenize expr-s))
-        conv
-        (if (null? (Str8 index-of "{" spec)) spec (%py-fstring-form spec))))))
+      (let ((form (list (lit %py-fmtfield)
+                    (%py-fs-expr-of (python-tokenize expr-s))
+                    conv
+                    (if (null? (Str8 index-of "{" spec)) spec (%py-fstring-form spec)))))
+        (if (null? dbg)
+          form
+          (list (lit %py-fjoin) (list (lit list) expr-s0 form)))))))
 
 (def %py-fstring-form
   (fn (_ s)
@@ -848,6 +945,7 @@
         (list "chr"       (lit %py-chr))
         (list "ord"       (lit %py-ord))
         (list "StopIteration"  (lit %py-exc-StopIteration))
+        (list "SystemExit"     (lit %py-exc-SystemExit))
         ; The builtin exceptions are ordinary names bound to ordinary class
         ; values, so `except ValueError` and `except MyError` take one path.
         (list "Exception"         (lit %py-exc-Exception))
@@ -1191,6 +1289,70 @@
         rest-sym
         (pair (first names) (self (rest names) rest-sym))))))
 
+; --- Parameters with defaults and a *rest ------------------------------------
+; (names defaults rest-name): names are strings in declaration order, required
+; first; defaults is ((sym . EXPR) ...) for the optional tail; rest-name is the
+; *name string or nil.
+(def %py-params-of
+  (fn (_ toks)
+    (def go
+      (fn (self parts names dflts rest-name)
+        (if (null? parts)
+          (list (List reverse names) (List reverse dflts) rest-name)
+          (let ((p (first parts)))
+            (let ((t (first p)))
+              (if (%py-op-is? t "**")
+                (Err raise (lit syntax) "**kwargs parameters are not supported yet" t)
+              (if (%py-op-is? t "*")
+                (let ((n (if (null? (rest p)) () (first (rest p)))))
+                  (if (not (eq? (%py-tag n) (lit tok-name)))
+                    (Err raise (lit syntax) "expected a name after *" t)
+                    (self (rest parts) names dflts (%py-val n))))
+              (if (not (eq? (%py-tag t) (lit tok-name)))
+                (Err raise (lit syntax) "expected a parameter name" t)
+              (if (null? (rest p))
+                (if (null? dflts)
+                  (self (rest parts) (pair (%py-val t) names) dflts rest-name)
+                  (Err raise (lit syntax) "non-default argument follows default argument" t))
+              (if (not (%py-op-is? (first (rest p)) "="))
+                (Err raise (lit syntax) "expected , or = after a parameter name" t)
+                (self (rest parts) (pair (%py-val t) names)
+                  (pair (pair (%py-name->sym (%py-val t)) (%py-expr-of (rest (rest p)))) dflts)
+                  rest-name)))))))))))
+    (go (%py-comma-split toks () ()) () () ())))
+
+; A DEFAULT IS EVALUATED ONCE, AT def TIME, into a let around the fn --
+; Python's rule, and the one the mutable-default idiom depends on.  The fn
+; takes the required parameters fixed and everything after them as a dotted
+; %py-more tail, which a prelude unpacks: each optional through %py-opt (a
+; missing or %py-dflt slot takes the default), the rest as a tuple of what is
+; left.  A keyword call (python/runtime.x %py-kwcall) arranges its arguments
+; into that same positional shape, so the callee never sees a keyword.
+(def %py-dflt-syms
+  (list (lit %py-d0) (lit %py-d1) (lit %py-d2) (lit %py-d3)
+        (lit %py-d4) (lit %py-d5) (lit %py-d6) (lit %py-d7)))
+(def %py-dflt-sym
+  (fn (_ i)
+    (if (>= i 8)
+      (Err raise (lit syntax) "at most 8 default parameters are supported" ())
+      (List ref i %py-dflt-syms))))
+(def %py-dflt-lets
+  (fn (self dflts i)
+    (if (null? dflts) ()
+      (pair (list (%py-dflt-sym i) (rest (first dflts)))
+        (self (rest dflts) (+ i 1))))))
+(def %py-opt-lets
+  (fn (self dflts i rest-sym)
+    (if (null? dflts)
+      (if (null? rest-sym) ()
+        (list (list rest-sym
+                (list (lit %py-tuple-of-list) (list (lit %py-drop) (lit %py-more) i)))))
+      (pair (list (first (first dflts)) (list (lit %py-opt) (lit %py-more) i (%py-dflt-sym i)))
+        (self (rest dflts) (+ i 1) rest-sym)))))
+(def %py-syms-of
+  (fn (self names)
+    (if (null? names) () (pair (%py-name->sym (first names)) (self (rest names))))))
+
 (def %py-except-clause
   (fn (_ toks)
     ; positioned just after the `except` keyword
@@ -1250,20 +1412,39 @@
           (pair (first b) (rest b)))
         (pair () t)))))
 
+; try ... except ... else: the else body runs only when the try body
+; finished without raising -- a flag the guarded body sets last.
+(def %py-try-else
+  (fn (_ toks)
+    (let ((t (%py-skip-nl toks)))
+      (if (%py-name-is? (if (null? t) () (first t)) "else")
+        (let ((b (%py-block (rest t))))
+          (pair (first b) (rest b)))
+        (pair () t)))))
+
 (def %py-try
   (fn (_ toks)
     ; positioned just after the `try` keyword
     (let ((b (%py-block toks)))
       (let ((cs (%py-except-clauses (rest b) ())))
-        (let ((f (%py-finally (rest cs))))
+       (let ((e (%py-try-else (rest cs))))
+        (let ((f (%py-finally (rest e))))
           (if (if (null? (first cs)) (null? (first f)) #f)
             (Err raise (lit syntax) "try needs an except or a finally" ())
             (let ((guarded
                     (if (null? (first cs))
                       (first b)
-                      (list (lit guard)
-                        (list (lit %py-exc) (%py-except-chain (first cs)))
-                        (first b)))))
+                      (if (null? (first e))
+                        (list (lit guard)
+                          (list (lit %py-exc) (%py-except-chain (first cs)))
+                          (first b))
+                        (list (lit let) (list (list (lit %py-ok) (list (lit pair) #f ())))
+                          (list (lit %seq)
+                            (list (lit guard)
+                              (list (lit %py-exc) (%py-except-chain (first cs)))
+                              (list (lit %seq) (first b)
+                                (list (lit %set-first!) (lit %py-ok) #t)))
+                            (list (lit if) (list (lit first) (lit %py-ok)) (first e) ())))))))
               (pair
                 (if (null? (first f))
                   guarded
@@ -1275,7 +1456,7 @@
                     (list (lit %py-fin)
                       (list (lit %seq) (first f) (list (lit error) (lit %py-fin))))
                     (list (lit %seq) guarded (first f))))
-                (rest f)))))))))
+                (rest f))))))))))
 
 (def %py-raise-stmt
   (fn (_ toks)
@@ -1482,72 +1663,72 @@
         (Err raise (lit syntax) "expected a function name after def" name)
         (if (not (%py-group? (if (null? (rest toks)) () (first (rest toks))) "("))
           (Err raise (lit syntax) "expected ( after a function name" ())
-          (let ((p (do
-                     (%set-first! %py-rest-param ())
-                     (pair (%py-group-names (%py-group-of (first (rest toks))) ())
-                           (rest (rest toks))))))
-            (def rest-sym (first %py-rest-param))
+          (let ((sig (%py-params-of (%py-group-of (first (rest toks))))))
+            (def names (first sig))
+            (def syms (%py-syms-of names))
+            (def dflts (first (rest sig)))
+            (def rest-name (first (rest (rest sig))))
+            (def rest-sym (if (null? rest-name) () (%py-name->sym rest-name)))
+            (def nreq (- (List length names) (List length dflts)))
+            (def all-syms (if (null? rest-sym) syms (%py-append syms (list rest-sym))))
+            (def after (rest (rest toks)))
             (let ((outer-self (first %py-current-self)))
-              (%set-first! %py-current-self
-                (if (null? (first p)) () (first (first p))))
-            (let ((b (%py-block (rest p))))
-              ; A FUNCTION'S ASSIGNMENTS ARE ITS OWN.  The module-level scan
-              ; skips def bodies, so their targets are hoisted HERE instead --
-              ; inside the fn, where x's `def` binds locally because the frame
-              ; is the function's.  Parameters are already bound and are not
-              ; re-declared; shadowing them with a nil would break every call.
-              ; THE BODY IS ONE TOKEN, so the span is its contents rather than
-              ; a length subtraction between two positions.  This used to walk
-              ; the remaining token list TWICE per def to find where the body
-              ; ended -- the block knows where it ends.
-              (let ((span (%py-block-contents (rest p))))
+              (%set-first! %py-current-self (if (null? syms) () (first syms)))
+              (let ((b (%py-block after)))
+                ; A FUNCTION'S ASSIGNMENTS ARE ITS OWN.  The module-level scan
+                ; skips def bodies, so their targets are hoisted HERE instead,
+                ; as a `let` (NOT `def`: x's `def` decides global-versus-local
+                ; by save-stack depth, and under TCO that stack can be empty,
+                ; so a body `def` clobbered the module's name with nil).
+                ; Parameters are already bound and are not re-declared.
                 (let ((locals (%py-minus
-                                (%py-dedupe () (%py-assign-targets span ()) ())
-                                (first p))))
-                  ; `let`, NOT `def`.  x's `def` decides global-versus-local by
-                  ; save-stack depth, and inside a called function TCO can leave
-                  ; that stack empty -- so `(def x ())` in a body binds
-                  ; GLOBALLY, clobbering the module's `x` with nil on every
-                  ; call.  Measured: a def merely PRESENT left the module name
-                  ; alone; calling it set the name to nil.
-                  ;
-                  ; `let` binds in the frame unconditionally, which is what a
-                  ; function-local is.  A body with no locals gets no wrapper.
+                                (%py-dedupe () (%py-assign-targets (%py-block-contents after) ()) ())
+                                all-syms)))
+                  (def body0
+                    (if (null? locals) (first b) (list (lit let) (%py-lets locals ()) (first b))))
+                  ; the rest arrives as an x list; Python hands the function a
+                  ; TUPLE.  With defaults the prelude is the %py-opt let.
+                  (def body
+                    (if (null? dflts)
+                      (if (null? rest-sym)
+                        body0
+                        (list (lit %seq)
+                          (list (lit set!) rest-sym (list (lit %py-tuple-of-list) rest-sym))
+                          body0))
+                      ; without a *rest, more optionals than declared is a
+                      ; TypeError -- the dotted tail would swallow them
+                      (if (null? rest-sym)
+                        (list (lit %seq)
+                          (list (lit %py-arity!) (%py-val name) (lit %py-more)
+                            nreq (List length dflts))
+                          (list (lit let) (%py-opt-lets dflts 0 ()) body0))
+                        (list (lit let) (%py-opt-lets dflts 0 rest-sym) body0))))
+                  (def params
+                    (if (null? dflts)
+                      (if (null? rest-sym) syms (%py-dotted-params syms rest-sym))
+                      (%py-dotted-params (%py-take nreq syms) (lit %py-more))))
+                  ; The body runs inside call/cc so `return` has somewhere to
+                  ; jump to, and ends in () so a function that falls off the
+                  ; end answers None.  %seq TAKES TWO FORMS -- a third arm is
+                  ; silently dropped.
+                  (def fn-form
+                    (list (lit fn) (pair (lit _) params)
+                      (list (lit %py-callcc)
+                        (list (lit fn) (list (lit _) (lit %py-return))
+                          (list (lit %seq) body ())))))
+                  ; %py-sig! records the parameter names for keyword calls and
+                  ; answers the closure, so this is still the def's value form
+                  ; -- a class body reads it as the method.
+                  (def sig-form
+                    (list (lit %py-sig!) fn-form (%py-val name)
+                      (pair (lit list) names) nreq (not (null? rest-sym))))
+                  (%set-first! %py-current-self outer-self)
                   (pair
-                    ; The body runs inside call/cc so `return` has somewhere to
-                    ; jump to, and ends in () so a function that falls off the
-                    ; end answers None -- Python's rule. Without that trailing
-                    ; nil the body's last expression would leak out as the
-                    ; return value.
                     (list (lit def) (%py-name->sym (%py-val name))
-                      (list (lit fn)
-                        (pair (lit _)
-                          (if (null? rest-sym)
-                            (first p)
-                            (%py-dotted-params (first p) rest-sym)))
-                        (list (lit %py-callcc)
-                          (list (lit fn) (list (lit _) (lit %py-return))
-                            ; %seq TAKES TWO FORMS -- the tokenizer's
-                            ; sequencing form, not a variadic do -- so the
-                            ; rest-tuple prelude nests a second %seq rather
-                            ; than growing a third arm (a third arm silently
-                            ; dropped the trailing nil, and a function that
-                            ; fell off its end stopped answering None).
-                            (list (lit %seq)
-                              (if (null? rest-sym)
-                                (if (null? locals)
-                                  (first b)
-                                  (list (lit let) (%py-lets locals ()) (first b)))
-                                ; the rest arrives as an x list; Python hands
-                                ; the function a TUPLE
-                                (list (lit %seq)
-                                  (list (lit set!) rest-sym
-                                    (list (lit %py-tuple-of-list) rest-sym))
-                                  (if (null? locals)
-                                    (first b)
-                                    (list (lit let) (%py-lets locals ()) (first b)))))
-                              ())))))
-                    (%seq (%set-first! %py-current-self outer-self) (rest b)))))))))))))
+                      (if (null? dflts)
+                        sig-form
+                        (list (lit let) (%py-dflt-lets dflts 0) sig-form)))
+                    (rest b)))))))))))
 
 (def %py-lets
   (fn (self syms acc)
