@@ -883,7 +883,10 @@
       ; iterating bytes yields ints
       (if (%py-bytes-is v)
         (%py-byte-list (%py-bytes-str v) (- (Str8 length (%py-bytes-str v)) 1) ())
-        (Err raise (lit type) "object is not iterable" ())))))))))
+      ; a generator runs to its end; every consumer here wants the whole list
+      (if (%py-gen-is v)
+        (%py-gen-drain v ())
+        (Err raise (lit type) "object is not iterable" ()))))))))))
 
 ; range(stop) / range(start, stop) / range(start, stop, step)
 ;
@@ -1010,6 +1013,8 @@
         (%py-str-method obj name)
       (if (%py-bytes-is obj)
         (%py-bytes-attr obj name)
+      (if (%py-gen-is obj)
+        (%py-gen-attr obj name)
       (if (%py-obj-is obj)
         (%py-obj-attr obj name)
       (if (%py-super-is obj)
@@ -1024,7 +1029,7 @@
           (Err raise (lit attribute)
             (Str8 append (Str8 append "'complex' object has no attribute '" name) "'") ()))))
         (Err raise (lit attribute)
-          (Str8 append (Str8 append "object has no attribute '" name) "'")())))))))))))
+          (Str8 append (Str8 append "object has no attribute '" name) "'")()))))))))))))
 
 ; str.upper is the method as a function of its receiver -- str.upper("abc")
 ; -- and a user class's attribute is its function, unbound, callable with an
@@ -1249,7 +1254,7 @@
       ; any iterable of strings; anything else is Python's TypeError, with
       ; its message, before the walk (spec 12 pins it)
       (fn (_ it)
-        (if (not (if (%py-list? it) #t (if (%py-tuple-is it) #t (if (str? it) #t (if (%py-dict? it) #t (%py-obj-is it))))))
+        (if (not (if (%py-list? it) #t (if (%py-tuple-is it) #t (if (str? it) #t (if (%py-dict? it) #t (if (%py-obj-is it) #t (%py-gen-is it)))))))
           (Err raise (lit type) "can only join an iterable of str" ())
           (let ((es (%py-iter-elems it)))
             (def all-str (fn (self l) (if (null? l) #t (if (str? (first l)) (self (rest l)) #f))))
@@ -2294,6 +2299,7 @@
     (list
       (pair "__init__"
         (fn (_ self . args)
+          (%py-setattr self "args" (%py-tuple-of-list args))
           (%py-setattr self "__msg__" (if (null? args) "" (first args))))))
     "Exception"))
 
@@ -2313,6 +2319,7 @@
 (def %py-exc-TypeError       (%py-exc-new "TypeError"       %py-exc-Exception))
 (def %py-exc-ValueError      (%py-exc-new "ValueError"      %py-exc-Exception))
 (def %py-exc-StopIteration   (%py-exc-new "StopIteration"   %py-exc-Exception))
+(def %py-exc-GeneratorExit   (%py-exc-new "GeneratorExit"   %py-exc-Exception))
 (def %py-exc-SystemExit      (%py-exc-new "SystemExit"      %py-exc-Exception))
 (def %py-exc-RuntimeError    (%py-exc-new "RuntimeError"    %py-exc-Exception))
 (def %py-exc-SyntaxError     (%py-exc-new "SyntaxError"     %py-exc-Exception))
@@ -2502,6 +2509,212 @@
               (%seq (apply init (pair o args)) o))))))))
 
 ; --- Tuples ------------------------------------------------------------------
+
+; --- Generators --------------------------------------------------------------
+;
+; A GENERATOR IS TWO CONTINUATIONS.  The engine's call/cc copies the C stack
+; and restores it on invocation, so a continuation can be re-entered after
+; the frame that captured it has gone -- and that is all a generator needs:
+; `yield` captures the body's continuation (k-gen) and jumps to the
+; caller's (k-caller) with the value; next()/send() capture the caller's
+; continuation and jump into k-gen with what was sent.  Messages up are
+; (yield v) | (return v) | (raise e); messages down are (send v) |
+; (throw e).  The body runs inside ONE guard, installed on the first
+; resume and part of the body's own captured stack, so an exception raised
+; after any resumption is forwarded to whoever the current caller is --
+; never to the stale handler of the first caller.
+(def %py-gen-body   (fn (_ g) (List ref 0 (%py-gen-state g))))
+(def %py-gen-name   (fn (_ g) (List ref 1 (%py-gen-state g))))
+(def %py-gen-gk     (fn (_ g) (List ref 2 (%py-gen-state g))))
+(def %py-gen-ck     (fn (_ g) (List ref 3 (%py-gen-state g))))
+(def %py-gen-status (fn (_ g) (List ref 4 (%py-gen-state g))))
+(def %py-gen-set-gk!     (fn (_ g k) (%set-first! (rest (rest (%py-gen-state g))) k)))
+(def %py-gen-set-ck!     (fn (_ g k) (%set-first! (rest (rest (rest (%py-gen-state g)))) k)))
+(def %py-gen-set-status! (fn (_ g s) (%set-first! (rest (rest (rest (rest (%py-gen-state g))))) s)))
+(def %py-gen-done (list (lit %py-gen-done)))
+
+; a class raises as a fresh instance, an instance as itself
+(def %py-exc-instance
+  (fn (_ e args) (if (%py-class-is e) (%py-instantiate e args) e)))
+(def %py-raise-any (fn (_ e) (error (%py-exc-instance e ()))))
+; StopIteration carrying the generator's return value (none for None)
+(def %py-raise-stop
+  (fn (_ rv)
+    (error (%py-instantiate %py-exc-StopIteration (if (null? rv) () (list rv))))))
+(def %py-stop-value
+  (fn (_ e)
+    (if (%py-obj-is e)
+      (let ((a (%py-alist-find "args" (%py-obj-attrs e))))
+        (if (null? a) ()
+          (let ((es (%py-tuple-elems (rest a)))) (if (null? es) () (first es)))))
+      ())))
+
+; The body's side: hand v up, wait for what comes down.
+(def %py-yield
+  (fn (_ g v)
+    (let ((msg (%py-callcc
+                 (fn (_ k)
+                   (%py-gen-set-gk! g k)
+                   (%py-gen-set-status! g (lit suspended))
+                   ((%py-gen-ck g) (list (lit yield) v))))))
+      (if (eq? (first msg) (lit throw))
+        (%py-raise-any (first (rest msg)))
+        (first (rest msg))))))
+
+; First entry: run the body to its end under the forwarding guard.
+(def %py-gen-run
+  (fn (_ g)
+    (guard (e
+             (%py-gen-set-status! g (lit done))
+             ((%py-gen-ck g) (list (lit raise) e)))
+      (let ((rv ((%py-gen-body g) g)))
+        (%py-gen-set-status! g (lit done))
+        ((%py-gen-ck g) (list (lit return) rv))))))
+
+; The caller's side: mode is send or throw; answers the yielded value, or
+; raises StopIteration (with the return value) or the body's exception.
+(def %py-gen-resume
+  (fn (_ g mode v)
+    (def st (%py-gen-status g))
+    (if (eq? st (lit done))
+      (if (eq? mode (lit throw)) (%py-raise-any v) (%py-raise-stop ()))
+    (if (eq? st (lit running))
+      (Err raise (lit value) "generator already executing" ())
+      (do
+        (if (if (eq? st (lit created)) (if (eq? mode (lit send)) (not (null? v)) #f) #f)
+          (Err raise (lit type) "can't send non-None value to a just-started generator" ())
+          ())
+        (if (if (eq? st (lit created)) (eq? mode (lit throw)) #f)
+          (do (%py-gen-set-status! g (lit done)) (%py-raise-any v))
+          (let ((r (%py-callcc
+                     (fn (_ k)
+                       (%py-gen-set-ck! g k)
+                       (%py-gen-set-status! g (lit running))
+                       (if (eq? st (lit created))
+                         (%py-gen-run g)
+                         ((%py-gen-gk g) (list mode v)))))))
+            (if (eq? (first r) (lit yield))
+              (first (rest r))
+              (if (eq? (first r) (lit return))
+                (%py-raise-stop (first (rest r)))
+                (error (first (rest r))))))))))))
+
+; next(g) with the StopIteration turned into the done sentinel
+(def %py-gen-pull
+  (fn (_ g)
+    (if (eq? (%py-gen-status g) (lit done))
+      %py-gen-done
+      (guard (e (if (%py-exc-match e %py-exc-StopIteration) %py-gen-done (error e)))
+        (%py-gen-resume g (lit send) ())))))
+(def %py-gen-drain
+  (fn (self g acc)
+    (let ((v (%py-gen-pull g)))
+      (if (same? v %py-gen-done) (List reverse acc) (self g (pair v acc))))))
+
+; close(): throw GeneratorExit in; a body that swallows it and yields again
+; is the RuntimeError, one that ends (either way) is fine
+(def %py-gen-close
+  (fn (_ g)
+    (let ((st (%py-gen-status g)))
+      (if (if (eq? st (lit created)) #t (eq? st (lit done)))
+        (%seq (%py-gen-set-status! g (lit done)) ())
+        (guard (e (if (if (%py-exc-match e %py-exc-GeneratorExit) #t
+                          (%py-exc-match e %py-exc-StopIteration))
+                    ()
+                    (error e)))
+          (%py-gen-resume g (lit throw) (%py-instantiate %py-exc-GeneratorExit ()))
+          (error (%py-instantiate %py-exc-RuntimeError (list "generator ignored GeneratorExit"))))))))
+
+(def %py-gen-attr
+  (fn (_ g name)
+    (if (Str8 =? name "__next__") (fn (_) (%py-gen-resume g (lit send) ()))
+    (if (Str8 =? name "send")     (fn (_ v) (%py-gen-resume g (lit send) v))
+    (if (Str8 =? name "throw")    (fn (_ e . a) (%py-gen-resume g (lit throw) (%py-exc-instance e a)))
+    (if (Str8 =? name "close")    (fn (_) (%py-gen-close g))
+    (if (Str8 =? name "__iter__") (fn (_) g)
+    (if (Str8 =? name "__name__") (%py-gen-name g)
+      (Err raise (lit attribute)
+        (Str8 append (Str8 append "'generator' object has no attribute '" name) "'") ())))))))))
+
+; yield from: a generator is driven send/throw for send/throw, and its
+; return value is the expression's value; any other iterable is yielded
+; through element by element.
+(def %py-yield-from
+  (fn (_ g it)
+    (if (not (%py-gen-is it))
+      (do
+        (def go (fn (self es) (if (null? es) () (%seq (%py-yield g (first es)) (self (rest es))))))
+        (go (%py-iter-elems it))
+        ())
+      (do
+        (def step
+          (fn (self mode v)
+            (let ((r (guard (e (if (%py-exc-match e %py-exc-StopIteration)
+                                 (list (lit stop) (%py-stop-value e))
+                                 (error e)))
+                       (list (lit got) (%py-gen-resume it mode v)))))
+              (if (eq? (first r) (lit stop))
+                (first (rest r))
+                (let ((down (guard (e (list (lit throw) e))
+                              (list (lit send) (%py-yield g (first (rest r)))))))
+                  (self (first down) (first (rest down))))))))
+        (step (lit send) ())))))
+
+; `is`: identity, with the cases Python's caching makes look like identity --
+; None, True and False are singletons, small ints and interned strings
+; compare equal -- stated as equality for ints and strings.
+(def %py-is
+  (fn (_ a b)
+    (if (same? a b) #t
+      (if (null? a) (null? b)
+        (if (if (eq? a #t) #t (eq? a #f)) (eq? a b)
+          (if (if (null? b) #t (if (eq? b #t) #t (eq? b #f))) #f
+            (if (if (str? a) (str? b) #f) (Str8 =? a b)
+              (if (if (eq? (%py-num-kind a) (lit int)) (eq? (%py-num-kind b) (lit int)) #f)
+                (= a b)
+                #f))))))))
+
+; sum(iterable[, start]) -- NOT %py-sum, which is the parser's arithmetic level
+(def %py-builtin-sum
+  (fn (_ it . st)
+    (def go (fn (self es acc) (if (null? es) acc (self (rest es) (%py-add acc (first es))))))
+    (go (%py-iter-elems it) (if (null? st) 0 (first st)))))
+
+; next(it[, default]) and iter(x)
+(def %py-next
+  (fn (_ it . d)
+    (def pull
+      (fn (_)
+        (if (%py-gen-is it)
+          (%py-gen-resume it (lit send) ())
+          (if (%py-obj-is it)
+            (let ((m (%py-dunder it "__next__")))
+              (if (null? m) (Err raise (lit type) "object is not an iterator" ()) (m)))
+            (Err raise (lit type) "object is not an iterator" ())))))
+    (if (null? d)
+      (pull)
+      (guard (e (if (%py-exc-match e %py-exc-StopIteration) (first d) (error e)))
+        (pull)))))
+(def %py-iter
+  (fn (_ v)
+    (if (%py-gen-is v) v
+      (if (%py-obj-is v)
+        (let ((m (%py-dunder v "__iter__")))
+          (if (null? m) (Err raise (lit type) "object is not iterable" ()) (m)))
+        (%py-gen-new (fn (_ g) (%py-yield-from g v)) "iterator")))))
+
+; A for loop PULLS: a generator one value per iteration (its prints
+; interleave with the body's, and it may be infinite), anything else from
+; its materialized element list.
+(def %py-iter-open
+  (fn (_ v) (if (%py-gen-is v) v (pair (%py-iter-elems v) ()))))
+(def %py-iter-pull!
+  (fn (_ src)
+    (if (%py-gen-is src)
+      (%py-gen-pull src)
+      (if (null? (first src))
+        %py-gen-done
+        (let ((v (first (first src)))) (%set-first! src (rest (first src))) v)))))
 
 (def %py-mktuple (fn (_ . elems) (%py-tuple-new elems)))
 ; A *rest parameter arrives as an x list and becomes the tuple Python hands

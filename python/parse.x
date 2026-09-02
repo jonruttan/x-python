@@ -270,7 +270,14 @@
           (let ((rhs (%py-left (rest (rest more)) %py-cmp-ops %py-bor)))
             (pair (list (lit not) (list (lit %py-in) (first r) (first rhs)))
               (rest rhs)))
-          r)))))
+        ; `is` and `is not`: identity (python/runtime.x %py-is)
+        (if (%py-name-is? (if (null? more) () (first more)) "is")
+          (if (%py-name-is? (if (null? (rest more)) () (first (rest more))) "not")
+            (let ((rhs (%py-left (rest (rest more)) %py-cmp-ops %py-bor)))
+              (pair (list (lit not) (list (lit %py-is) (first r) (first rhs))) (rest rhs)))
+            (let ((rhs (%py-left (rest more) %py-cmp-ops %py-bor)))
+              (pair (list (lit %py-is) (first r) (first rhs)) (rest rhs))))
+          r))))))
 (set! %py-bor  (fn (_ toks) (%py-left toks %py-bor-ops %py-bxor)))
 (set! %py-bxor (fn (_ toks) (%py-left toks %py-bxor-ops %py-band)))
 (set! %py-band (fn (_ toks) (%py-left toks %py-band-ops %py-shift)))
@@ -456,8 +463,27 @@
 ; the entry for a full expression; a comprehension's iterable and a for
 ; loop's stay on %py-or-e, because there `if` opens a clause -- Python's own
 ; grammar draws the line in the same place.
+; `yield`, `yield v`, `yield a, b`, `yield from it`: an expression whose
+; value is what send() passes back in.  %py-gen is the enclosing generator
+; body's own parameter (see %py-def).
+(def %py-yield-expr
+  (fn (_ toks)
+    (let ((after (rest toks)))
+      (if (%py-name-is? (if (null? after) () (first after)) "from")
+        (let ((r (%py-test (rest after))))
+          (pair (list (lit %py-yield-from) (lit %py-gen) (first r)) (rest r)))
+        (if (if (null? after) #t
+              (if (eq? (%py-tag (first after)) (lit tok-newline)) #t
+                (if (%py-op-is? (first after) ")") #t
+                  (if (%py-op-is? (first after) "=") #t (%py-op-is? (first after) ",")))))
+          (pair (list (lit %py-yield) (lit %py-gen) ()) after)
+          (let ((r (%py-exprlist after)))
+            (pair (list (lit %py-yield) (lit %py-gen) (first r)) (rest r))))))))
+
 (def %py-test
   (fn (self toks)
+    (if (%py-name-is? (if (null? toks) () (first toks)) "yield")
+      (%py-yield-expr toks)
     (let ((r (%py-or-e toks)))
       (if (%py-name-is? (if (null? (rest r)) () (first (rest r))) "if")
         (let ((c (%py-or-e (rest (rest r)))))
@@ -466,18 +492,40 @@
             (let ((e (self (rest (rest c)))))
               (pair (list (lit if) (list (lit %py-truthy) (first c)) (first r) (first e))
                 (rest e)))))
-        r))))
+        r)))))
 
 ; One complete expression from a complete token list -- anything left over is a
 ; syntax error HERE, where the bracket that bounded it is known.
+; A GENERATOR EXPRESSION is a comprehension whose action is a yield, wrapped
+; as a generator body: `(x for x in y)` and the bare `f(x for x in y)`.
+(def %py-top-for?
+  (fn (self toks)
+    (if (null? toks) #f (if (%py-name-is? (first toks) "for") #t (self (rest toks))))))
+(def %py-genexp
+  (fn (_ elems)
+    (let ((r (%py-test elems)))
+      (if (not (%py-name-is? (if (null? (rest r)) () (first (rest r))) "for"))
+        (Err raise (lit syntax) "expected for in generator expression" ())
+        (let ((cls (%py-comp-clauses (rest r) ())))
+          (list (lit %py-gen-new)
+            (list (lit fn) (list (lit _) (lit %py-gen))
+              (list (lit %py-callcc)
+                (list (lit fn) (list (lit _) (lit %py-return))
+                  (list (lit %seq)
+                    (%py-comp-fold cls (list (lit %py-yield) (lit %py-gen) (first r)))
+                    ()))))
+            "<genexpr>"))))))
+
 (def %py-expr-of
   (fn (_ toks)
     (if (null? toks)
       (Err raise (lit syntax) "expected an expression" ())
+    (if (%py-top-for? toks)
+      (%py-genexp toks)
       (let ((r (%py-test toks)))
         (if (null? (rest r))
           (first r)
-          (Err raise (lit syntax) "unexpected token after an expression" ()))))))
+          (Err raise (lit syntax) "unexpected token after an expression" ())))))))
 
 (def %py-exprs-of
   (fn (self parts acc)
@@ -972,6 +1020,10 @@
         (list "chr"       (lit %py-chr))
         (list "ord"       (lit %py-ord))
         (list "StopIteration"  (lit %py-exc-StopIteration))
+        (list "GeneratorExit"  (lit %py-exc-GeneratorExit))
+        (list "next"           (lit %py-next))
+        (list "sum"            (lit %py-builtin-sum))
+        (list "iter"           (lit %py-iter))
         (list "SystemExit"     (lit %py-exc-SystemExit))
         ; The builtin exceptions are ordinary names bound to ordinary class
         ; values, so `except ValueError` and `except MyError` take one path.
@@ -1258,11 +1310,10 @@
 (def %py-for-bind
   (fn (_ syms)
     (if (null? (rest syms))
-      (list (lit set!) (first syms) (list (lit first) (lit %py-items)))
+      (list (lit set!) (first syms) (lit %py-item))
       (list (lit let)
         (list (list (lit %py-unpacked)
-                (list (lit %py-unpack) (list (lit first) (lit %py-items))
-                      (%py-count syms))))
+                (list (lit %py-unpack) (lit %py-item) (%py-count syms))))
         (pair (lit do) (%py-unpack-sets syms 0 ()))))))
 
 (def %py-for
@@ -1273,16 +1324,20 @@
         (let ((syms (%py-syms-of (first n) ())))
           (let ((it (%py-or-e (rest n))))
             (let ((b (%py-block (rest it))))
+              ; THE LOOP PULLS ONE ITEM AT A TIME from %py-iter-open's source:
+              ; a generator yields lazily (its prints interleave with the
+              ; body's), anything else is its materialized element list.
               (pair
                 (list
-                  (list (lit fn) (list (lit self) (lit %py-items))
-                    (list (lit if) (list (lit null?) (lit %py-items))
-                      ()
-                      (list (lit %seq)
-                        (%py-for-bind syms)
-                        (list (lit %seq) (first b)
-                          (list (lit self) (list (lit rest) (lit %py-items)))))))
-                  (list (lit %py-iter-elems) (first it)))
+                  (list (lit fn) (list (lit self) (lit %py-src))
+                    (list (lit let) (list (list (lit %py-item) (list (lit %py-iter-pull!) (lit %py-src))))
+                      (list (lit if) (list (lit same?) (lit %py-item) (lit %py-gen-done))
+                        ()
+                        (list (lit %seq)
+                          (%py-for-bind syms)
+                          (list (lit %seq) (first b)
+                            (list (lit self) (lit %py-src)))))))
+                  (list (lit %py-iter-open) (first it)))
                 (rest b)))))))))
 
 ; --- try / except / finally --------------------------------------------------
@@ -1766,11 +1821,23 @@
                   ; jump to, and ends in () so a function that falls off the
                   ; end answers None.  %seq TAKES TWO FORMS -- a third arm is
                   ; silently dropped.
+                  ; A BODY WITH A yield IS A GENERATOR FUNCTION: calling it
+                  ; binds the parameters and answers a generator whose body
+                  ; closure -- taking the generator as %py-gen, the object
+                  ; its yields talk to -- runs on the first next().
                   (def fn-form
-                    (list (lit fn) (pair (lit _) params)
-                      (list (lit %py-callcc)
-                        (list (lit fn) (list (lit _) (lit %py-return))
-                          (list (lit %seq) body ())))))
+                    (if (%py-has-yield? (%py-block-contents after) #f)
+                      (list (lit fn) (pair (lit _) params)
+                        (list (lit %py-gen-new)
+                          (list (lit fn) (list (lit _) (lit %py-gen))
+                            (list (lit %py-callcc)
+                              (list (lit fn) (list (lit _) (lit %py-return))
+                                (list (lit %seq) body ()))))
+                          (%py-val name)))
+                      (list (lit fn) (pair (lit _) params)
+                        (list (lit %py-callcc)
+                          (list (lit fn) (list (lit _) (lit %py-return))
+                            (list (lit %seq) body ()))))))
                   ; %py-sig! records the parameter names for keyword calls and
                   ; answers the closure, so this is still the def's value form
                   ; -- a class body reads it as the method.
@@ -1784,6 +1851,21 @@
                         sig-form
                         (list (lit let) (%py-dflt-lets dflts 0) sig-form)))
                     (rest b)))))))))))
+
+; Is there a `yield` in this body?  Groups and blocks are searched, except
+; the block of a nested def or class, whose yields are its own.
+(def %py-has-yield?
+  (fn (self toks skip-block)
+    (if (null? toks) #f
+      (let ((t (first toks)))
+        (if (%py-name-is? t "yield") #t
+          (if (if (%py-name-is? t "def") #t (%py-name-is? t "class"))
+            (self (rest toks) #t)
+            (if (eq? (%py-tag t) (lit tok-group))
+              (if (self (%py-group-of t) #f) #t (self (rest toks) skip-block))
+              (if (%py-block? t)
+                (if (if skip-block #f (self (%py-block-toks t) #f)) #t (self (rest toks) #f))
+                (self (rest toks) skip-block)))))))))
 
 (def %py-lets
   (fn (self syms acc)
