@@ -423,11 +423,10 @@
   (%make-type
     "PY-BYTES"
     (list
+      ; runtime.x owns the escape rules (b'\n', \xhh for anything outside
+      ; printable ASCII, the quote choice), the same way str's repr does
       (pair (lit write)
-        (fn (_ self)
-          (display "b'")
-          (display (first self))
-          (display "'")))
+        (fn (_ self) (display (%py-bytes-repr (first self)))))
       (pair (lit length) (fn (_ self) (Str8 length (first self)))))))
 
 (def %py-tuple-new (fn (_ elems) (%make-instance %py-tuple elems)))
