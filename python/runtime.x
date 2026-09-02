@@ -49,14 +49,56 @@
   %py-mktuple %py-tuple? %py-unpack
   %py-pos %py-invert %py-in %py-bitor %py-bitxor %py-bitand
   %py-abs %py-round %py-min %py-max %py-bytearray %py-mkbytes
-  %py-cls-complex %py-hash %py-lshift %py-rshift)
+  %py-cls-complex %py-hash %py-lshift %py-rshift
+  %py-NotImplemented %py-exc-StopIteration)
 
 ; --- Arithmetic --------------------------------------------------------------
 ; `+` dispatches on the operands, and the string case is not an extra: Python
 ; spells concatenation with it, and every conformance program that builds a
 ; message uses it.
+; --- The operator protocol ---------------------------------------------------
+;
+; A USER CLASS TAKES PART IN EVERY OPERATOR through its dunders, and the
+; seams below ask for them the way Python does: the left operand's __op__
+; first, then the right operand's reflected __rop__, and NotImplemented from
+; either means "try the other side".  The check that opens every seam is a
+; single %type? call -- no frame, no allocation -- so the common numeric path
+; pays nothing for the protocol's existence.
+;
+; NotImplemented is one unique value; identity is the test, as in Python.
+(def %py-NotImplemented (pair (lit %py-NotImplemented) ()))
+
+; The bound dunder, or nil.  A method compiles to (fn (_ py-self ...) ...),
+; so binding is closing over the object -- the same shape %py-obj-attr uses.
+(def %py-dunder
+  (fn (_ obj name)
+    (let ((m (%py-method-find (%py-obj-class obj) name)))
+      (if (null? m) () (%py-bind-method m obj)))))
+
+; One side of a binary dispatch: the dunder's answer, or NotImplemented when
+; the operand is not an object or has no such method.
+(def %py-side
+  (fn (_ x y name)
+    (if (%py-obj-is x)
+      (let ((m (%py-dunder x name)))
+        (if (null? m) %py-NotImplemented (m y)))
+      %py-NotImplemented)))
+
+(def %py-binop
+  (fn (_ a b name rname opname)
+    (let ((r1 (%py-side a b name)))
+      (if (not (eq? r1 %py-NotImplemented))
+        r1
+        (let ((r2 (%py-side b a rname)))
+          (if (not (eq? r2 %py-NotImplemented))
+            r2
+            (Err raise (lit type)
+              (Str8 append "unsupported operand type(s) for " opname) ())))))))
+
 (def %py-add
   (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (%py-binop a b "__add__" "__radd__" "+")
     (if (str? a)
       (if (str? b)
         (Str8 append a b)
@@ -71,15 +113,17 @@
               (eq? (%py-typeof-prim b) %py-th-complex))
           (%py-cx-arith a b "+" 0)
           (+ (if (eq? a #t) 1 (if (eq? a #f) 0 a))
-             (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))))
+             (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))))
 
 (def %py-sub
   (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (%py-binop a b "__sub__" "__rsub__" "-")
     (if (if (eq? (%py-typeof-prim a) %py-th-complex) #t
           (eq? (%py-typeof-prim b) %py-th-complex))
       (%py-cx-arith a b "-" 1)
       (- (if (eq? a #t) 1 (if (eq? a #f) 0 a))
-         (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
+         (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))
 
 ; THE TYPE HANDLES, EARLY: the arithmetic seams below consult them, and
 ; %py-f-2p64 is computed through %py-mul at LOAD time -- so these must be
@@ -120,6 +164,11 @@
 ; Python does -- Num quotient truncates, so the floor is stated.
 (def %py-lshift
   (fn (_ a0 b0)
+    (if (if (%py-obj-is a0) #t (%py-obj-is b0))
+      (%py-binop a0 b0 "__lshift__" "__rlshift__" "<<")
+    (%py-lshift-num a0 b0))))
+(def %py-lshift-num
+  (fn (_ a0 b0)
     (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
     (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
     (if (if (eq? (%py-num-kind a) (lit int)) (eq? (%py-num-kind b) (lit int)) #f)
@@ -128,6 +177,11 @@
         (* a (Num expt 2 b)))
       (Err raise (lit type) "unsupported operand type(s) for <<" ()))))
 (def %py-rshift
+  (fn (_ a0 b0)
+    (if (if (%py-obj-is a0) #t (%py-obj-is b0))
+      (%py-binop a0 b0 "__rshift__" "__rrshift__" ">>")
+    (%py-rshift-num a0 b0))))
+(def %py-rshift-num
   (fn (_ a0 b0)
     (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
     (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
@@ -148,6 +202,8 @@
 
 (def %py-mul
   (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (%py-binop a b "__mul__" "__rmul__" "*")
     (if (str? a)
       (if (str? b)
         (Err raise (lit type) "can't multiply sequence by non-int" ())
@@ -158,7 +214,7 @@
               (eq? (%py-typeof-prim b) %py-th-complex))
           (%py-cx-arith a b "*" 2)
           (* (if (eq? a #t) 1 (if (eq? a #f) 0 a))
-             (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))))
+             (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))))
 
 ; TRUE DIVISION ALWAYS PRODUCES A FLOAT.  `1 / 2` is 0.5 in Python 3 and an
 ; exact 1/2 in x, and that difference is the reason this bundle declares xenon
@@ -175,36 +231,42 @@
   (fn (_ a0 b0)
     (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
     (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (%py-binop a b "__truediv__" "__rtruediv__" "/")
     (if (= b 0)
       (Err raise (lit zero-division) "division by zero" ())
       (if (if (eq? (%py-typeof-prim a) %py-th-complex) #t
             (eq? (%py-typeof-prim b) %py-th-complex))
         (%py-cx-arith a b "/" 3)
-        (/ (* a 1.0) b)))))
+        (/ (* a 1.0) b))))))
 
 ; FLOOR DIVISION OF FLOATS IS A FLOAT: 1.0 // 2 is 0.0 in Python, floor of
 ; the true quotient, where Num quotient wants exact operands.
 (def %py-floordiv
   (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (%py-binop a b "__floordiv__" "__rfloordiv__" "//")
     (if (= b 0)
       (Err raise (lit zero-division) "integer division or modulo by zero" ())
       (if (if (%py-complex-is a) #t (%py-complex-is b))
         (Err raise (lit type) "can't take floor of complex number." ())
       (if (if (%py-float-is a) #t (%py-float-is b))
         (Float floor (/ (* a 1.0) b))
-        (Num quotient a b))))))
+        (Num quotient a b)))))))
 ; A STRING ON THE LEFT OF % IS FORMATTING, not arithmetic -- str.__mod__ --
 ; and the check comes before the zero test because the right operand of a
 ; format is a tuple as often as a number.
 (def %py-mod
   (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (%py-binop a b "__mod__" "__rmod__" "%")
     (if (str? a)
       (%py-format a b)
       (if (if (%py-complex-is a) #t (%py-complex-is b))
         (Err raise (lit type) "can't mod complex numbers." ())
       (if (= b 0)
         (Err raise (lit zero-division) "integer modulo by zero" ())
-        (Num modulo a b))))))
+        (Num modulo a b)))))))
 ; NEVER HAND Num expt A NEGATIVE EXPONENT.  Its parameter is documented
 ; "Non-negative integer exponent" and nothing enforces it: with exp < 0 the
 ; recursion never reaches 0 and SQUARES THE BASE on every even step, so it
@@ -217,6 +279,8 @@
 ; one refusal on this path is 0.0 to a negative power.
 (def %py-pow
   (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (%py-binop a b "__pow__" "__rpow__" "** or pow()")
     (if (if (%py-complex-is a) #t (%py-complex-is b))
       (%py-cpow (%py-complex-of a) (%py-complex-of b))
     ; a negative real base to a fractional power is a COMPLEX in Python 3
@@ -234,25 +298,36 @@
           (Float pow fa fb)))
       (if (< b 0)
         (/ 1.0 (Num expt a (- 0 b)))
-        (Num expt a b)))))))
-(def %py-neg (fn (_ a) (- 0 a)))
+        (Num expt a b))))))))
+(def %py-neg
+  (fn (_ a)
+    (if (%py-obj-is a)
+      (let ((m (%py-dunder a "__neg__")))
+        (if (null? m) (Err raise (lit type) "bad operand type for unary -" ()) (m)))
+      (- 0 a))))
 
 ; Unary + is a no-op on numbers and a TypeError on everything else; unary ~
 ; is exact two's complement on integers and a TypeError on floats -- both
 ; measured refusals in the conformance corpus, not decorations.
 (def %py-pos
   (fn (_ v)
+    (if (%py-obj-is v)
+      (let ((m (%py-dunder v "__pos__")))
+        (if (null? m) (Err raise (lit type) "bad operand type for unary +" ()) (m)))
     (let ((w (%py-boolnorm v)))
       (if (null? (%py-num-kind w))
         (Err raise (lit type) "bad operand type for unary +" ())
-        w))))
+        w)))))
 
 (def %py-invert
   (fn (_ v)
+    (if (%py-obj-is v)
+      (let ((m (%py-dunder v "__invert__")))
+        (if (null? m) (Err raise (lit type) "bad operand type for unary ~" ()) (m)))
     (let ((w (%py-boolnorm v)))
       (if (eq? (%py-num-kind w) (lit int))
         (- (- 0 w) 1)
-        (Err raise (lit type) "bad operand type for unary ~" ())))))
+        (Err raise (lit type) "bad operand type for unary ~" ()))))))
 
 ; True is 1 and False is 0 wherever a number is wanted: comparisons,
 ; arithmetic seams, formatting.  Python's bool IS an int; x's is not.
@@ -288,11 +363,20 @@
         (Str8 append "unsupported operand type(s) for " opname) ()))))
 
 (def %py-bitor
-  (fn (_ a b) (%py-bit2 a b "|" (fn (_ x y) (if x #t y)))))
+  (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (%py-binop a b "__or__" "__ror__" "|")
+      (%py-bit2 a b "|" (fn (_ x y) (if x #t y))))))
 (def %py-bitxor
-  (fn (_ a b) (%py-bit2 a b "^" (fn (_ x y) (if x (not y) y)))))
+  (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (%py-binop a b "__xor__" "__rxor__" "^")
+      (%py-bit2 a b "^" (fn (_ x y) (if x (not y) y))))))
 (def %py-bitand
-  (fn (_ a b) (%py-bit2 a b "&" (fn (_ x y) (if x y #f)))))
+  (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (%py-binop a b "__and__" "__rand__" "&")
+      (%py-bit2 a b "&" (fn (_ x y) (if x y #f))))))
 
 ; --- Membership --------------------------------------------------------------
 ; `a in b`: substring for strings, element walk with Python's equality for
@@ -304,6 +388,11 @@
 
 (def %py-in
   (fn (_ a b)
+    (if (%py-obj-is b)
+      (let ((m (%py-dunder b "__contains__")))
+        (if (null? m)
+          (%py-in-walk a (%py-iter-elems b))
+          (%py-truthy (m a))))
     (if (str? b)
       (if (str? a)
         (Str8 includes? a b)
@@ -319,13 +408,19 @@
                 (fn (self es acc)
                   (if (null? es) acc (self (rest es) (pair (first (first es)) acc)))))
               (%py-in-walk a (keys (%py-dict-entries b) ())))
-            (Err raise (lit type) "argument is not iterable" ())))))))
+            (Err raise (lit type) "argument is not iterable" ()))))))))
 
 ; --- Numeric builtins --------------------------------------------------------
 ; abs clears the SIGN BIT for floats (the arithmetic spelling turns -0.0
 ; into itself); round is the exact-digit machinery at a decimal place, half
 ; to even, int result without ndigits and float with.
 (def %py-abs
+  (fn (_ v0)
+    (if (%py-obj-is v0)
+      (let ((m (%py-dunder v0 "__abs__")))
+        (if (null? m) (Err raise (lit type) "bad operand type for abs()" ()) (m)))
+    (%py-abs-num v0))))
+(def %py-abs-num
   (fn (_ v0)
     (def v (%py-boolnorm v0))
     (if (%py-float-is v)
@@ -407,8 +502,35 @@
 ; INLINE, with no helper call and no frame: these run once per dict entry
 ; on every subscript's linear walk, and a per-call allocation here is a
 ; batch-memory multiplier the CI host measured the hard way.
+; COMPARISON DUNDERS ANSWER RAW VALUES, as Python's do -- an __eq__ that
+; returns 123 prints 123.  __eq__ reflects onto __eq__ and falls back to
+; identity; the default __ne__ is __eq__ inverted unless that answered
+; NotImplemented; < > <= >= reflect onto their mirrors and then refuse.
+(def %py-cmp2
+  (fn (_ a b name rname)
+    (let ((r1 (%py-side a b name)))
+      (if (not (eq? r1 %py-NotImplemented))
+        r1
+        (%py-side b a rname)))))
+
+(def %py-ne-side
+  (fn (_ x y)
+    (if (%py-obj-is x)
+      (let ((m (%py-dunder x "__ne__")))
+        (if (not (null? m))
+          (m y)
+          (let ((e (%py-dunder x "__eq__")))
+            (if (null? e)
+              %py-NotImplemented
+              (let ((r (e y)))
+                (if (eq? r %py-NotImplemented) r (not (%py-truthy r))))))))
+      %py-NotImplemented)))
+
 (def %py-eq
   (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (let ((r (%py-cmp2 a b "__eq__" "__eq__")))
+        (if (eq? r %py-NotImplemented) (eq? a b) r))
     (if (str? a) (if (str? b) (Str8 =? a b) #f)
     (if (str? b) #f
     (if (%py-class-is a) (eq? a b)
@@ -417,8 +539,21 @@
       ; and a nil in a printed comparison reads as None
       (if (= (if (eq? a #t) 1 (if (eq? a #f) 0 a))
              (if (eq? b #t) 1 (if (eq? b #f) 0 b)))
-        #t #f)))))))
-(def %py-ne (fn (_ a b) (not (%py-eq a b))))
+        #t #f))))))))
+(def %py-ne
+  (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (let ((r1 (%py-ne-side a b)))
+        (if (not (eq? r1 %py-NotImplemented))
+          r1
+          (let ((r2 (%py-ne-side b a)))
+            (if (not (eq? r2 %py-NotImplemented)) r2 (not (eq? a b))))))
+      (not (%py-eq a b)))))
+
+(def %py-ord-refuse
+  (fn (_ op)
+    (Err raise (lit type)
+      (Str8 append (Str8 append "'" op) "' not supported between these instances") ())))
 
 ; Strings order lexicographically by code point; the engine's numeric `<`
 ; has no answer for them.  Self-recursive at top level -- no closure built
@@ -446,12 +581,24 @@
 
 (def %py-lt
   (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (let ((r (%py-cmp2 a b "__lt__" "__gt__")))
+        (if (eq? r %py-NotImplemented) (%py-ord-refuse "<") r))
+    (%py-lt-num a b))))
+(def %py-lt-num
+  (fn (_ a b)
     (%py-cmp-refuse a b "<")
     (if (if (str? a) (str? b) #f)
       (< (%py-strcmp a b 0) 0)
       (< (if (eq? a #t) 1 (if (eq? a #f) 0 a))
          (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
 (def %py-gt
+  (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (let ((r (%py-cmp2 a b "__gt__" "__lt__")))
+        (if (eq? r %py-NotImplemented) (%py-ord-refuse ">") r))
+    (%py-gt-num a b))))
+(def %py-gt-num
   (fn (_ a b)
     (%py-cmp-refuse a b ">")
     (if (if (str? a) (str? b) #f)
@@ -460,14 +607,20 @@
          (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
 (def %py-le
   (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (let ((r (%py-cmp2 a b "__le__" "__ge__")))
+        (if (eq? r %py-NotImplemented) (%py-ord-refuse "<=") r))
     (if (if (str? a) (str? b) #f)
       (<= (%py-strcmp a b 0) 0)
-      (if (%py-lt a b) #t (%py-eq a b)))))
+      (if (%py-lt a b) #t (%py-eq a b))))))
 (def %py-ge
   (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (let ((r (%py-cmp2 a b "__ge__" "__le__")))
+        (if (eq? r %py-NotImplemented) (%py-ord-refuse ">=") r))
     (if (if (str? a) (str? b) #f)
       (>= (%py-strcmp a b 0) 0)
-      (if (%py-gt a b) #t (%py-eq a b)))))
+      (if (%py-gt a b) #t (%py-eq a b))))))
 
 ; --- Lists ------------------------------------------------------------------
 ;
@@ -481,6 +634,9 @@
 
 (def %py-len
   (fn (_ v)
+    (if (%py-obj-is v)
+      (let ((m (%py-dunder v "__len__")))
+        (if (null? m) (Err raise (lit type) "object of this type has no len()" ()) (m)))
     (if (%py-dict? v)
       (List length (%py-dict-entries v))
     (if (%py-tuple-is v)
@@ -489,7 +645,7 @@
       (List length (%py-list-elems v))
       (if (str? v)
         (Str8 length v)
-        (Err raise (lit type) "object of this type has no len()" ())))))))
+        (Err raise (lit type) "object of this type has no len()" ()))))))))
 
 ; NEGATIVE INDICES COUNT FROM THE END, which is Python and not x.  -1 is the
 ; last element, and an index past either end raises IndexError rather than
@@ -497,6 +653,9 @@
 ; from the subscript that produced it.
 (def %py-index
   (fn (_ v i)
+    (if (%py-obj-is v)
+      (let ((m (%py-dunder v "__getitem__")))
+        (if (null? m) (Err raise (lit type) "object is not subscriptable" ()) (m i)))
     (if (str? v)
       ; A string index yields a one-character STRING, as in Python -- there is
       ; no character type at this surface.
@@ -515,7 +674,7 @@
       ; SUBSCRIPTING A LIST IS A CALL.  x dispatches `(v i)` through the type's
       ; `call` handler, so negative indices and IndexError are stated once in
       ; python/types.x rather than copied here.
-      (v i)))))))
+      (v i))))))))
 
 ; Store into a list at an index.  Rebuilds the element list and hangs it back on
 ; the SAME tag pair, so every reference sees the store -- the identity argument
@@ -528,6 +687,11 @@
 
 (def %py-setindex
   (fn (_ obj i v)
+    (if (%py-obj-is obj)
+      (let ((m (%py-dunder obj "__setitem__")))
+        (if (null? m)
+          (Err raise (lit type) "object does not support item assignment" ())
+          (m i v)))
     (if (%py-dict? obj)
       (%py-dset obj i v)
     (if (not (%py-list? obj))
@@ -536,7 +700,7 @@
         (let ((k (if (< i 0) (+ n i) i)))
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "list assignment index out of range" ())
-            (%py-list-set! obj (%py-set-nth (%py-list-elems obj) k v)))))))))
+            (%py-list-set! obj (%py-set-nth (%py-list-elems obj) k v))))))))))
 
 ; The escape continuation a `return` invokes.  Fetched rather than assumed
 ; global, the way every other prim in this bundle is reached.
@@ -551,8 +715,50 @@
   (fn (self v i n)
     (if (>= i n) () (pair (Str8 sub i 1 v) (self v (+ i 1) n)))))
 
+; AN OBJECT ITERATES BY ITS PROTOCOL: __iter__ hands back an iterator whose
+; __next__ is called until it raises StopIteration -- materialized here into
+; the element list every consumer already walks.  Without __iter__, the old
+; sequence protocol: __getitem__ from 0 until IndexError.
+(def %py-obj-elems
+  (fn (_ v)
+    (let ((it-m (%py-dunder v "__iter__")))
+      (if (not (null? it-m))
+        (let ((it (it-m)))
+          (let ((nx (if (%py-obj-is it) (%py-dunder it "__next__") ())))
+            (if (null? nx)
+              (if (%py-obj-is it)
+                (Err raise (lit type) "iter() returned non-iterator" ())
+                (%py-iter-elems it))
+              (do
+                (def go
+                  (fn (self acc)
+                    (let ((r (guard (e (if (%py-exc-match e %py-exc-StopIteration)
+                                            %py-NotImplemented
+                                            (error e)))
+                                (nx))))
+                      (if (eq? r %py-NotImplemented)
+                        (List reverse acc)
+                        (self (pair r acc))))))
+                (go ())))))
+        (let ((gi (%py-dunder v "__getitem__")))
+          (if (null? gi)
+            (Err raise (lit type) "object is not iterable" ())
+            (do
+              (def go
+                (fn (self i acc)
+                  (let ((r (guard (e (if (%py-exc-match e %py-exc-IndexError)
+                                          %py-NotImplemented
+                                          (error e)))
+                              (gi i))))
+                    (if (eq? r %py-NotImplemented)
+                      (List reverse acc)
+                      (self (+ i 1) (pair r acc))))))
+              (go 0 ()))))))))
+
 (def %py-iter-elems
   (fn (_ v)
+    (if (%py-obj-is v)
+      (%py-obj-elems v)
     ; Iterating a dict yields its KEYS, as in Python.
     (if (%py-dict? v)
       (%py-dkeys (%py-dict-entries v))
@@ -562,7 +768,7 @@
       (%py-list-elems v)
       (if (str? v)
         (%py-str-chars v 0 (Str8 length v))
-        (Err raise (lit type) "object is not iterable" ())))))))
+        (Err raise (lit type) "object is not iterable" ()))))))))
 
 ; range(stop) / range(start, stop) / range(start, stop, step)
 ;
@@ -1040,10 +1246,24 @@
         (if (null? (rest a))
           (if (str? x)
             (%py-cparse x)
+          ; __complex__ first, and its answer must BE a complex; then
+          ; __float__, whose answer becomes the real part
+          (if (%py-obj-is x)
+            (let ((m (%py-dunder x "__complex__")))
+              (if (not (null? m))
+                (let ((r (m)))
+                  (if (%py-complex-is r)
+                    r
+                    (Err raise (lit type) "__complex__ returned non-complex" ())))
+                (let ((f (%py-dunder x "__float__")))
+                  (if (null? f)
+                    (Err raise (lit type)
+                      "complex() first argument must be a string or a number" ())
+                    (%py-complex-of (f))))))
             (if (null? (%py-num-kind (if (eq? x #t) 1 (if (eq? x #f) 0 x))))
               (Err raise (lit type)
                 "complex() first argument must be a string or a number" ())
-              (%py-complex-of x)))
+              (%py-complex-of x))))
           ; complex(a, b) with two REALS builds the parts directly -- through
           ; the tower, -0.0 + 0.0 is +0.0 and the signed zero Python keeps
           ; ((-0+1j), (1-0j)) would be lost; with a complex on either side it
@@ -1103,7 +1323,9 @@
       v
     (if (str? v)
       (Hash fnv-1a v)
-      (Err raise (lit type) "unhashable type" ())))))))))
+    (if (%py-obj-is v)
+      (let ((m (%py-dunder v "__hash__"))) (if (null? m) 0 (m)))
+      (Err raise (lit type) "unhashable type" ()))))))))))
 
 ; Is v a machine float?  The type-handle compare %py-num-kind uses, taken
 ; directly so the writer below can ask cheaply.
@@ -1142,10 +1364,10 @@
                 ; has to read the same whether the raise came from Python source
                 ; or from this runtime.
                 (if (%py-obj-is v)
-                  (if (%py-subclass? (%py-obj-class v) %py-exc-Exception)
-                    (display (%py-exc-msg v))
-                    (display v))
-                  (display v))))))))))))))
+                  (display (%py-obj-repr v))
+                (if (eq? v %py-NotImplemented)
+                  (display "NotImplemented")
+                  (display v)))))))))))))))
 
 ; Close the loop: python/types.x forward-declares %py-repr and its PY-LIST write
 ; handler calls it per element, so that a string inside a list shows its quotes.
@@ -1165,9 +1387,15 @@
 ; dicts, numbers -- is identical, so this defers rather than restating the
 ; cases. Restating them is how dicts came to print as raw pairs: the dict branch
 ; was added to write and not to its copy here.
+; print() shows an object's str; a container shows its elements' repr --
+; the one place the two writers part ways.
 (def %py-display
   (fn (_ v)
-    (if (str? v) (display v) (%py-write v))))
+    (if (str? v)
+      (display v)
+      (if (%py-obj-is v)
+        (display (%py-obj-str v))
+        (%py-write v)))))
 
 (def %py-print
   (fn (_ . args)
@@ -1229,6 +1457,7 @@
 (def %py-exc-NameError       (%py-exc-new "NameError"       %py-exc-Exception))
 (def %py-exc-TypeError       (%py-exc-new "TypeError"       %py-exc-Exception))
 (def %py-exc-ValueError      (%py-exc-new "ValueError"      %py-exc-Exception))
+(def %py-exc-StopIteration   (%py-exc-new "StopIteration"   %py-exc-Exception))
 (def %py-exc-RuntimeError    (%py-exc-new "RuntimeError"    %py-exc-Exception))
 (def %py-exc-SyntaxError     (%py-exc-new "SyntaxError"     %py-exc-Exception))
 
@@ -1353,14 +1582,28 @@
         (rest e)
         (let ((m (%py-method-find (%py-obj-class obj) name)))
           (if (null? m)
-            (Err raise (lit attribute)
-              (Str8 append
-                (Str8 append
-                  (Str8 append "'" (%py-class-name (%py-obj-class obj)))
-                  "' object has no attribute '")
-                (Str8 append name "'"))
-              ())
+            ; the last resort is the class's own __getattr__, as in Python
+            (let ((ga (%py-method-find (%py-obj-class obj) "__getattr__")))
+              (if (null? ga)
+                (Err raise (lit attribute)
+                  (Str8 append
+                    (Str8 append
+                      (Str8 append "'" (%py-class-name (%py-obj-class obj)))
+                      "' object has no attribute '")
+                    (Str8 append name "'"))
+                  ())
+                (ga obj name)))
             (%py-bind-method m obj)))))))
+
+; obj(...) is __call__, through the PY-OBJ type's call handler.
+(set! %py-obj-call
+  (fn (_ obj args)
+    (let ((m (%py-dunder obj "__call__")))
+      (if (null? m)
+        (Err raise (lit type)
+          (Str8 append (Str8 append "'" (%py-class-name (%py-obj-class obj)))
+            "' object is not callable") ())
+        (apply m args)))))
 
 ; Setting an attribute REPLACES the entry or appends one, and hangs the result
 ; back on the instance's cell so every reference sees it -- the same identity
@@ -1494,10 +1737,8 @@
         ; str(e) is the MESSAGE, the same rule %py-write states for print(e)
         (if (Err err? v)
           (v msg)
-          (if (if (%py-obj-is v)
-                (%py-subclass? (%py-obj-class v) %py-exc-Exception)
-                #f)
-            (%py-exc-msg v)
+          (if (%py-obj-is v)
+            (%py-obj-str v)
             (%py-write-to-str v))))))))
 
 (def %py-repr-of
@@ -1505,7 +1746,33 @@
     (if (str? v)
       (Str8 append (Str8 append "'" v) "'")
       (if (%py-float-is v) (%py-frepr v)
-        (if (%py-complex-is v) (%py-crepr v) (%py-write-to-str v))))))
+        (if (%py-complex-is v) (%py-crepr v)
+          (if (%py-obj-is v) (%py-obj-repr v) (%py-write-to-str v)))))))
+
+; str(o) and repr(o) for an object: __str__ (falling back to __repr__) and
+; __repr__, each answering a string; an exception instance's str is its
+; message; the default is the <qualname object> form.
+(def %py-obj-default-repr
+  (fn (_ o)
+    (if (%py-subclass? (%py-obj-class o) %py-exc-Exception)
+      (Str8 append (%py-class-name (%py-obj-class o))
+        (Str8 append ": " (%py-exc-msg o)))
+      (Str8 append "<" (Str8 append (%py-class-qualname (%py-obj-class o)) " object>")))))
+(def %py-obj-repr
+  (fn (_ o)
+    (let ((m (%py-dunder o "__repr__")))
+      (if (null? m) (%py-obj-default-repr o) (m)))))
+(def %py-obj-str
+  (fn (_ o)
+    (let ((m (%py-dunder o "__str__")))
+      (if (not (null? m))
+        (m)
+        (let ((r (%py-dunder o "__repr__")))
+          (if (not (null? r))
+            (r)
+            (if (%py-subclass? (%py-obj-class o) %py-exc-Exception)
+              (%py-exc-msg o)
+              (%py-obj-default-repr o))))))))
 
 ; `list(x)` takes anything iterable, which is exactly what `for` already asks
 ; for -- so it is the same function, wrapped.
@@ -1695,6 +1962,11 @@
         (if (eq? v #t) 1
         (if (eq? v #f) 0
         (if (str? v) (%py-int-of-str v)
+        (if (%py-obj-is v)
+          (let ((m (%py-dunder v "__int__")))
+            (if (null? m)
+              (Err raise (lit type) "int() argument must be a number or string" ())
+              (m)))
           (let ((k (%py-num-kind v)))
             (if (eq? k (lit int)) v
             (if (eq? k (lit float))
@@ -1703,7 +1975,7 @@
               (let ((m (%py-fmt-int-mag v)))
                 (let ((n (%py-int-of-str (rest m))))
                   (if (first m) (- 0 n) n)))
-              (Err raise (lit type) "int() argument must be a number or string" ())))))))))))
+              (Err raise (lit type) "int() argument must be a number or string" ()))))))))))))
 
 (def %py-float-ctor
   (fn (_ . a)
@@ -1713,11 +1985,16 @@
         (if (eq? v #t) 1.0
         (if (eq? v #f) 0.0
         (if (str? v) (%py-float-of-str v)
+        (if (%py-obj-is v)
+          (let ((m (%py-dunder v "__float__")))
+            (if (null? m)
+              (Err raise (lit type) "float() argument must be a number or string" ())
+              (m)))
         (if (%py-bytes-is v) (%py-float-of-str (%py-bytes-str v))
           (let ((k (%py-num-kind v)))
             (if (eq? k (lit float)) v
             (if (eq? k (lit int)) (* v 1.0)
-              (Err raise (lit type) "float() argument must be a number or string" ()))))))))))))
+              (Err raise (lit type) "float() argument must be a number or string" ())))))))))))))
 
 ; Python's truthiness, stated once: the empties and the zeros are false and
 ; everything else is true.  Objects and classes are unconditionally true.
@@ -1730,7 +2007,12 @@
     (if (%py-list-is v) (not (null? (%py-list-elems v)))
     (if (%py-dict-is v) (not (null? (%py-dict-entries v)))
     (if (%py-tuple-is v) (not (null? (%py-tuple-elems v)))
-    (if (%py-obj-is v) #t
+    (if (%py-obj-is v)
+      (let ((b (%py-dunder v "__bool__")))
+        (if (not (null? b))
+          (%py-truthy (b))
+          (let ((l (%py-dunder v "__len__")))
+            (if (null? l) #t (not (= (l) 0))))))
     (if (%py-class-is v) #t
       (not (= v 0)))))))))))))
 
