@@ -735,6 +735,8 @@
         (list "bytearray" (lit %py-bytearray))
         (list "complex"   (lit %py-cls-complex))
         (list "hash"      (lit %py-hash))
+        (list "NotImplemented" (lit %py-NotImplemented))
+        (list "StopIteration"  (lit %py-exc-StopIteration))
         ; The builtin exceptions are ordinary names bound to ordinary class
         ; values, so `except ValueError` and `except MyError` take one path.
         (list "Exception"         (lit %py-exc-Exception))

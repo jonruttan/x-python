@@ -50,7 +50,7 @@
   %py-repr %py-equal %py-repeat
   %py-tuple %py-tuple-new %py-tuple-is %py-tuple-elems
   %py-class %py-class-new %py-class-is %py-class-name %py-class-base
-  %py-class-methods %py-class-qualname %py-instantiate %py-obj-write
+  %py-class-methods %py-class-qualname %py-instantiate %py-obj-write %py-obj-call
   %py-obj %py-obj-new %py-obj-is %py-obj-class %py-obj-attrs %py-obj-set-attrs!
   %py-super-t %py-super-new %py-super-is %py-super-from %py-super-self)
 
@@ -342,6 +342,9 @@
 ; Set by runtime.x: how an instance renders depends on whether it is an
 ; exception, which is a Python rule and not a property of the type.
 (def %py-obj-write ())
+; And __call__: an object called like a function.  runtime.x owns the
+; dunder protocol, so the type's call handler reaches it through a hook.
+(def %py-obj-call ())
 
 ; A class is (name base methods qualname) and never mutates, so it needs no
 ; cell.  The QUALNAME is the display form and nothing else: a user class prints
@@ -389,7 +392,12 @@
         (fn (_ self)
           (if (null? %py-obj-write)
             (display "<" (%py-class-qualname (first (first self))) " object>")
-            (%py-obj-write self)))))))
+            (%py-obj-write self))))
+      (pair (lit call)
+        (fn (_ self . args)
+          (if (null? %py-obj-call)
+            (Err raise (lit type) "object is not callable" ())
+            (%py-obj-call self args)))))))
 
 ; --- PY-TUPLE ----------------------------------------------------------------
 ;
