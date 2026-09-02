@@ -345,13 +345,17 @@
 (def %py-number-body ())
 (def %py-number-exp-digits ())
 
+; A j OR J ENDS THE LITERAL AS AN IMAGINARY, accepted INCLUDING the suffix:
+; `2j`, `1.5j`, `1e3j`.  The parse strips it and builds the complex.
 (set! %py-number-exp-digits
   (fn (_ buffer score chr)
     (if (%py-digit? chr)
       %py-number-exp-digits
       (if (= chr 95)
         %py-number-exp-digits
-        (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+        (if (if (= chr 106) #t (= chr 74))
+          (%score-set score 1 buffer)
+          (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))
 
 ; After the `e`: an optional sign, then at least one digit.
 (def %py-number-exp-first
@@ -372,7 +376,9 @@
         %py-number-frac
         (if (if (= chr 101) #t (= chr 69))
           %py-number-exp-sign
-          (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))
+          (if (if (= chr 106) #t (= chr 74))
+            (%score-set score 1 buffer)
+            (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))))
 
 (set! %py-number-body
   (fn (_ buffer score chr)
@@ -384,7 +390,9 @@
           %py-number-frac
           (if (if (= chr 101) #t (= chr 69))
             %py-number-exp-sign
-            (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))))
+            (if (if (= chr 106) #t (= chr 74))
+              (%score-set score 1 buffer)
+              (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))))
 
 ; A LEADING DOT STARTS A FLOAT (`.1`), but only when a digit follows: the
 ; entry moves through this state without setting a score, so a bare `.` or
@@ -566,7 +574,10 @@
         (if (= a 43) #t (if (= a 45) #t (if (= a 42) #t
           (if (= a 47) #t (= a 37)))))))))
       (if (if (= a 47) (= b 47) #f) #t
-        (if (= a 42) (= b 42) #f)))))
+        (if (if (= a 42) (= b 42) #f) #t
+          ; << and >> -- the shifts
+          (if (if (= a 60) (= b 60) #f) #t
+            (if (= a 62) (= b 62) #f)))))))
 
 ; ONLY THE SIX CHARACTERS THAT CAN BEGIN A TWO-CHARACTER OPERATOR look ahead.
 ; Everything else accepts on the spot.
@@ -710,7 +721,9 @@
         (lit (fn (me buffer score chr)
           (if (or (and (>= chr 48) (<= chr 57)) (= chr 95))
             me
-            (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
+            (if (or (= chr 106) (= chr 74))
+              (%score-set score 1 buffer)
+              (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
         (list (pair (lit u) 1))))
     (def nexpf
       (compile-asm
@@ -731,7 +744,9 @@
             me
             (if (or (= chr 101) (= chr 69))
               es
-              (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+              (if (or (= chr 106) (= chr 74))
+                (%score-set score 1 buffer)
+                (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))
         (list (pair (lit es) nexps))))
     (def nbody
       (compile-asm
@@ -742,7 +757,9 @@
               frac
               (if (or (= chr 101) (= chr 69))
                 es
-                (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))
+                (if (or (= chr 106) (= chr 74))
+                  (%score-set score 1 buffer)
+                  (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))))
         (list (pair (lit frac) nfrac) (pair (lit es) nexps))))
     (def ndotf
       (compile-asm

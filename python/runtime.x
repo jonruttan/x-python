@@ -48,7 +48,8 @@
   %py-mkdict %py-dict? %py-dget %py-dset
   %py-mktuple %py-tuple? %py-unpack
   %py-pos %py-invert %py-in %py-bitor %py-bitxor %py-bitand
-  %py-abs %py-round %py-min %py-max %py-bytearray %py-mkbytes)
+  %py-abs %py-round %py-min %py-max %py-bytearray %py-mkbytes
+  %py-cls-complex %py-hash %py-lshift %py-rshift)
 
 ; --- Arithmetic --------------------------------------------------------------
 ; `+` dispatches on the operands, and the string case is not an extra: Python
@@ -65,10 +66,78 @@
         ; reached x's `+` with a string operand and answered a number.
         (Err raise (lit type) "unsupported operand type(s) for +" ())
         ; Lists concatenate through PY-LIST's own `+` op, which the engine
-        ; dispatches from here.
-        (+ a b)))))
+        ; dispatches from here.  Bools are ints here too: 1j + True.
+        (if (if (eq? (%py-typeof-prim a) %py-th-complex) #t
+              (eq? (%py-typeof-prim b) %py-th-complex))
+          (%py-cx-arith a b "+" 0)
+          (+ (if (eq? a #t) 1 (if (eq? a #f) 0 a))
+             (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))))
 
-(def %py-sub (fn (_ a b) (- a b)))
+(def %py-sub
+  (fn (_ a b)
+    (if (if (eq? (%py-typeof-prim a) %py-th-complex) #t
+          (eq? (%py-typeof-prim b) %py-th-complex))
+      (%py-cx-arith a b "-" 1)
+      (- (if (eq? a #t) 1 (if (eq? a #f) 0 a))
+         (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
+
+; THE TYPE HANDLES, EARLY: the arithmetic seams below consult them, and
+; %py-f-2p64 is computed through %py-mul at LOAD time -- so these must be
+; bound before the first seam runs, not where the constructors that also
+; use them happen to live.
+(def %py-typeof-prim (prim-ref (lit type) (lit of)))
+(def %py-th-int (%py-typeof-prim 1))
+(def %py-th-big (%py-typeof-prim 99999999999999999999))
+(def %py-th-float (%py-typeof-prim 1.5))
+(def %py-th-complex (%py-typeof-prim (Complex make 0.0 1.0)))
+(def %py-complex-is
+  (fn (_ v) (eq? (%py-typeof-prim v) %py-th-complex)))
+
+; THE COMPLEX BRANCH OF THE FOUR SEAMS.  A complex beside a non-number is a
+; TypeError here, not the tower's promotion error -- that one is x's
+; teaching raise (#584) and its kind is not `type`, so `except TypeError`
+; never saw it and 1j + [] killed the program.  And a bigint beside a
+; complex is FLOATED first, as Python does, because the tower declares no
+; COMPLEX x BIGINT promotion.  Only the complex case pays: the seams reach
+; here after two handle compares, and every other pairing the tower already
+; refuses in a kind Python recognises.
+(def %py-cx-arith
+  (fn (_ a0 b0 op code)
+    (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
+    (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
+    (if (if (null? (%py-num-kind a)) #t (null? (%py-num-kind b)))
+      (Err raise (lit type)
+        (Str8 append "unsupported operand type(s) for " op) ())
+      (do
+        (def x (if (eq? (%py-typeof-prim a) %py-th-big) (* 1.0 a) a))
+        (def y (if (eq? (%py-typeof-prim b) %py-th-big) (* 1.0 b) b))
+        (if (= code 0) (+ x y)
+        (if (= code 1) (- x y)
+        (if (= code 2) (* x y)
+          (/ x y))))))))
+
+; The shifts: ints only, and >> FLOORS for a negative left operand the way
+; Python does -- Num quotient truncates, so the floor is stated.
+(def %py-lshift
+  (fn (_ a0 b0)
+    (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
+    (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
+    (if (if (eq? (%py-num-kind a) (lit int)) (eq? (%py-num-kind b) (lit int)) #f)
+      (if (< b 0)
+        (Err raise (lit value) "negative shift count" ())
+        (* a (Num expt 2 b)))
+      (Err raise (lit type) "unsupported operand type(s) for <<" ()))))
+(def %py-rshift
+  (fn (_ a0 b0)
+    (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
+    (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
+    (if (if (eq? (%py-num-kind a) (lit int)) (eq? (%py-num-kind b) (lit int)) #f)
+      (if (< b 0)
+        (Err raise (lit value) "negative shift count" ())
+        (let ((p (Num expt 2 b)))
+          (let ((q (Num quotient a p)))
+            (if (if (< a 0) (not (= (* q p) a)) #f) (- q 1) q))))
+      (Err raise (lit type) "unsupported operand type(s) for >>" ()))))
 ; STRING REPETITION IS HANDLED HERE, NOT ON THE TYPE.  A type's ops fire when
 ; either operand carries the type, so pushing `*` onto x's str type would change
 ; what `*` means for every string in the process, the platform's included.  The
@@ -85,7 +154,11 @@
         (%py-str-repeat a b))
       (if (str? b)
         (%py-str-repeat b a)
-        (* a b)))))
+        (if (if (eq? (%py-typeof-prim a) %py-th-complex) #t
+              (eq? (%py-typeof-prim b) %py-th-complex))
+          (%py-cx-arith a b "*" 2)
+          (* (if (eq? a #t) 1 (if (eq? a #f) 0 a))
+             (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))))
 
 ; TRUE DIVISION ALWAYS PRODUCES A FLOAT.  `1 / 2` is 0.5 in Python 3 and an
 ; exact 1/2 in x, and that difference is the reason this bundle declares xenon
@@ -99,10 +172,15 @@
 ; this runtime makes.  The kind is what `except ZeroDivisionError` matches on;
 ; see the exception section for why both shapes are caught the same way.
 (def %py-div
-  (fn (_ a b)
+  (fn (_ a0 b0)
+    (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
+    (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
     (if (= b 0)
       (Err raise (lit zero-division) "division by zero" ())
-      (/ (* a 1.0) b))))
+      (if (if (eq? (%py-typeof-prim a) %py-th-complex) #t
+            (eq? (%py-typeof-prim b) %py-th-complex))
+        (%py-cx-arith a b "/" 3)
+        (/ (* a 1.0) b)))))
 
 ; FLOOR DIVISION OF FLOATS IS A FLOAT: 1.0 // 2 is 0.0 in Python, floor of
 ; the true quotient, where Num quotient wants exact operands.
@@ -110,9 +188,11 @@
   (fn (_ a b)
     (if (= b 0)
       (Err raise (lit zero-division) "integer division or modulo by zero" ())
+      (if (if (%py-complex-is a) #t (%py-complex-is b))
+        (Err raise (lit type) "can't take floor of complex number." ())
       (if (if (%py-float-is a) #t (%py-float-is b))
         (Float floor (/ (* a 1.0) b))
-        (Num quotient a b)))))
+        (Num quotient a b))))))
 ; A STRING ON THE LEFT OF % IS FORMATTING, not arithmetic -- str.__mod__ --
 ; and the check comes before the zero test because the right operand of a
 ; format is a tuple as often as a number.
@@ -120,9 +200,11 @@
   (fn (_ a b)
     (if (str? a)
       (%py-format a b)
+      (if (if (%py-complex-is a) #t (%py-complex-is b))
+        (Err raise (lit type) "can't mod complex numbers." ())
       (if (= b 0)
         (Err raise (lit zero-division) "integer modulo by zero" ())
-        (Num modulo a b)))))
+        (Num modulo a b))))))
 ; NEVER HAND Num expt A NEGATIVE EXPONENT.  Its parameter is documented
 ; "Non-negative integer exponent" and nothing enforces it: with exp < 0 the
 ; recursion never reaches 0 and SQUARES THE BASE on every even step, so it
@@ -135,6 +217,13 @@
 ; one refusal on this path is 0.0 to a negative power.
 (def %py-pow
   (fn (_ a b)
+    (if (if (%py-complex-is a) #t (%py-complex-is b))
+      (%py-cpow (%py-complex-of a) (%py-complex-of b))
+    ; a negative real base to a fractional power is a COMPLEX in Python 3
+    (if (if (< (if (eq? a #t) 1 (if (eq? a #f) 0 a)) 0)
+          (if (%py-float-is b) (not (= b (Float floor b))) #f)
+          #f)
+      (%py-cpow (%py-complex-of a) (%py-complex-of b))
     (if (if (%py-float-is a) #t (%py-float-is b))
       (do
         (def fa (* (%py-boolnorm a) 1.0))
@@ -145,7 +234,7 @@
           (Float pow fa fb)))
       (if (< b 0)
         (/ 1.0 (Num expt a (- 0 b)))
-        (Num expt a b)))))
+        (Num expt a b)))))))
 (def %py-neg (fn (_ a) (- 0 a)))
 
 ; Unary + is a no-op on numbers and a TypeError on everything else; unary ~
@@ -241,9 +330,11 @@
     (def v (%py-boolnorm v0))
     (if (%py-float-is v)
       (if (< (first v) 0) (- 0.0 v) v)
-      (if (eq? (%py-num-kind v) (lit int))
-        (if (< v 0) (- 0 v) v)
-        (Err raise (lit type) "bad operand type for abs()" ())))))
+      (if (%py-complex-is v)
+        (Complex magnitude v)
+        (if (eq? (%py-num-kind v) (lit int))
+          (if (< v 0) (- 0 v) v)
+          (Err raise (lit type) "bad operand type for abs()" ()))))))
 
 (def %py-round
   (fn (_ . a)
@@ -322,8 +413,11 @@
     (if (str? b) #f
     (if (%py-class-is a) (eq? a b)
     (if (%py-class-is b) #f
-      (= (if (eq? a #t) 1 (if (eq? a #f) 0 a))
-         (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))))
+      ; a BOOL, always: the tower's `=` answers nil for an unequal complex,
+      ; and a nil in a printed comparison reads as None
+      (if (= (if (eq? a #t) 1 (if (eq? a #f) 0 a))
+             (if (eq? b #t) 1 (if (eq? b #f) 0 b)))
+        #t #f)))))))
 (def %py-ne (fn (_ a b) (not (%py-eq a b))))
 
 ; Strings order lexicographically by code point; the engine's numeric `<`
@@ -339,14 +433,27 @@
               (cb (%py-char-code (%str-ref b i))))
           (if (< ca cb) (- 0 1) (if (> ca cb) 1 (self a b (+ i 1)))))))))
 
+; Complex has no ordering, and the tower's `<` answers #f for it without a
+; word -- so the refusal is stated here, on the handle compare that costs
+; nothing per call.
+(def %py-cmp-refuse
+  (fn (_ a b op)
+    (if (if (eq? (%py-typeof-prim a) %py-th-complex) #t
+          (eq? (%py-typeof-prim b) %py-th-complex))
+      (Err raise (lit type)
+        (Str8 append (Str8 append "'" op) "' not supported between complex instances") ())
+      ())))
+
 (def %py-lt
   (fn (_ a b)
+    (%py-cmp-refuse a b "<")
     (if (if (str? a) (str? b) #f)
       (< (%py-strcmp a b 0) 0)
       (< (if (eq? a #t) 1 (if (eq? a #f) 0 a))
          (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
 (def %py-gt
   (fn (_ a b)
+    (%py-cmp-refuse a b ">")
     (if (if (str? a) (str? b) #f)
       (> (%py-strcmp a b 0) 0)
       (> (if (eq? a #t) 1 (if (eq? a #f) 0 a))
@@ -584,8 +691,15 @@
         (%py-obj-attr obj name)
       (if (%py-super-is obj)
         (%py-super-attr obj name)
+      (if (%py-complex-is obj)
+        (if (Str8 =? name "real") (%py-cre obj)
+        (if (Str8 =? name "imag") (%py-cim obj)
+        (if (Str8 =? name "conjugate")
+          (fn (_) (Complex make (%py-cre obj) (- 0.0 (%py-cim obj))))
+          (Err raise (lit attribute)
+            (Str8 append (Str8 append "'complex' object has no attribute '" name) "'") ()))))
         (Err raise (lit attribute)
-          (Str8 append (Str8 append "object has no attribute '" name) "'")()))))))))
+          (Str8 append (Str8 append "object has no attribute '" name) "'")())))))))))
 
 ; STRING METHODS MAP ONTO Str8, WHICH ALREADY HAS THEM -- upcase, downcase,
 ; trim, split, join, replace, starts?, ends?, index-of. The work here is the
@@ -823,6 +937,174 @@
           (let ((r (try 1)))
             (if (null? r) (Str8 append sgn (%py-write-to-str v)) r)))))))
 
+; --- Complex -----------------------------------------------------------------
+;
+; THE VALUE IS THE PLATFORM'S: x/num/complex.x's instance, a (re . im) pair of
+; floats, with the tower doing + - * / and = across ints, floats and bools.
+; What Python adds is spelling and refusal: the repr, the constructor's string
+; grammar, ordering as a TypeError, floor and modulo as TypeErrors, and powers
+; through the polar form.  Parts are ALWAYS floats -- the platform keeps ints
+; where it is given ints, so every door here floats them on the way in.
+(def %py-cre (fn (_ z) (let ((r (first (first z)))) (if (%py-float-is r) r (* 1.0 r)))))
+(def %py-cim (fn (_ z) (let ((i (rest (first z)))) (if (%py-float-is i) i (* 1.0 i)))))
+
+(def %py-complex-of
+  (fn (_ v)
+    (if (%py-complex-is v)
+      v
+      (Complex make (* 1.0 (if (eq? v #t) 1 (if (eq? v #f) 0 v))) 0.0))))
+
+; A part prints as its float repr with a trailing .0 dropped: (1+2j), not
+; (1.0+2.0j); 1.5 and 1e+20 and nan keep their spelling.
+(def %py-cpart
+  (fn (_ f)
+    (let ((s (%py-frepr f)))
+      (let ((n (Str8 length s)))
+        (if (if (> n 2) (Str8 =? (Str8 sub (- n 2) 2 s) ".0") #f)
+          (Str8 sub 0 (- n 2) s)
+          s)))))
+
+; Python's rule: the real part is omitted, and the parens with it, only when
+; it is EXACTLY +0.0 (a -0.0 real prints as (-0+1j)); the imaginary sign is
+; the sign BIT, so -0.0 imag prints as -0j.
+(def %py-crepr
+  (fn (_ z)
+    (def re (%py-cre z))
+    (def im (%py-cim z))
+    (def ineg (< (first im) 0))
+    (def imag (%py-cpart (if ineg (- 0.0 im) im)))
+    (if (= (first re) 0)
+      (Str8 append (if ineg "-" "") (Str8 append imag "j"))
+      (Str8 append "("
+        (Str8 append (%py-cpart re)
+          (Str8 append (if ineg "-" "+")
+            (Str8 append imag "j)")))))))
+
+; complex("...") -- Python's grammar: optional parens, [real][(+|-)imag]j,
+; each part a float spelling (inf and nan included), a bare sign or nothing
+; before the j meaning one.  No internal whitespace.  Everything malformed
+; is a ValueError, and the float parser raises it for us on every garbage
+; part; the split is at the LAST sign that does not follow an exponent's e.
+(def %py-cparse
+  (fn (_ s0)
+    (def s1 (%py-f-trim s0))
+    (def n1 (Str8 length s1))
+    (def bad
+      (fn (_)
+        (Err raise (lit value) "complex() arg is a malformed string" ())))
+    (def s
+      (if (if (>= n1 2)
+            (if (= (%py-f-code s1 0) 40) (= (%py-f-code s1 (- n1 1)) 41) #f)
+            #f)
+        (Str8 sub 1 (- n1 2) s1)
+        s1))
+    (def n (Str8 length s))
+    (if (= n 0)
+      (bad)
+      (if (not (null? (Str8 index-of " " s)))
+        (bad)
+        (let ((last (%py-f-code s (- n 1))))
+          (if (if (= last 106) #t (= last 74))
+            (do
+              (def body (Str8 sub 0 (- n 1) s))
+              (def bn (Str8 length body))
+              (def split
+                (fn (self i)
+                  (if (< i 1)
+                    ()
+                    (let ((c (%py-f-code body i)))
+                      (if (if (if (= c 43) #t (= c 45))
+                            (let ((pc (%py-f-code body (- i 1))))
+                              (not (if (= pc 101) #t (= pc 69))))
+                            #f)
+                        i
+                        (self (- i 1)))))))
+              (def at (split (- bn 1)))
+              (def re-s (if (null? at) "" (Str8 sub 0 at body)))
+              (def im-s (if (null? at) body (Str8 sub at (- bn at) body)))
+              (def im
+                (if (if (Str8 =? im-s "") #t (Str8 =? im-s "+"))
+                  1.0
+                  (if (Str8 =? im-s "-")
+                    (- 0.0 1.0)
+                    (%py-float-of-str im-s))))
+              (def re (if (Str8 =? re-s "") 0.0 (%py-float-of-str re-s)))
+              (Complex make re im))
+            (Complex make (%py-float-of-str s) 0.0)))))))
+
+(def %py-complex-ctor
+  (fn (_ . a)
+    (if (null? a)
+      (Complex make 0.0 0.0)
+      (let ((x (first a)))
+        (if (null? (rest a))
+          (if (str? x)
+            (%py-cparse x)
+            (if (null? (%py-num-kind (if (eq? x #t) 1 (if (eq? x #f) 0 x))))
+              (Err raise (lit type)
+                "complex() first argument must be a string or a number" ())
+              (%py-complex-of x)))
+          ; complex(a, b) with two REALS builds the parts directly -- through
+          ; the tower, -0.0 + 0.0 is +0.0 and the signed zero Python keeps
+          ; ((-0+1j), (1-0j)) would be lost; with a complex on either side it
+          ; is a + b*1j, which is where Python puts the parts too
+          (if (str? x)
+            (Err raise (lit type) "complex() can't take second arg if first is a string" ())
+            (let ((y (first (rest a))))
+              (if (if (%py-complex-is x) #t (%py-complex-is y))
+                (+ (%py-complex-of x) (* (%py-complex-of y) (Complex make 0.0 1.0)))
+                (Complex make
+                  (* 1.0 (if (eq? x #t) 1 (if (eq? x #f) 0 x)))
+                  (* 1.0 (if (eq? y #t) 1 (if (eq? y #f) 0 y))))))))))))
+
+; z ** w.  An integer w multiplies exactly (1j ** 2 is exactly -1+0j);
+; anything else goes through the polar form, exp(w * log z).  Zero to a
+; negative or complex power is Python's ZeroDivisionError.
+(def %py-cpow
+  (fn (_ z w)
+    (def wr (%py-cre w))
+    (def wi (%py-cim w))
+    (def zr (%py-cre z))
+    (def zi (%py-cim z))
+    (if (if (= zr 0.0) (= zi 0.0) #f)
+      (if (if (= wr 0.0) (= wi 0.0) #f)
+        (Complex make 1.0 0.0)
+        (if (if (< wr 0.0) #t (not (= wi 0.0)))
+          (Err raise (lit zero-division)
+            "0.0 to a negative or complex power" ())
+          (Complex make 0.0 0.0)))
+      (if (if (= wi 0.0) (if (= wr (Float floor wr)) (< (%py-abs wr) 1024.0) #f) #f)
+        (do
+          (def n (Float ->int wr))
+          (def mul
+            (fn (self k acc) (if (= k 0) acc (self (- k 1) (* acc z)))))
+          (if (< n 0)
+            (/ (Complex make 1.0 0.0) (mul (- 0 n) (Complex make 1.0 0.0)))
+            (mul n (Complex make 1.0 0.0))))
+        (do
+          (def lr (Float log (Complex magnitude z)))
+          (def th (Float atan2 zi zr))
+          (def er (- (* wr lr) (* wi th)))
+          (def ei (+ (* wr th) (* wi lr)))
+          (Complex from-polar (Float exp er) ei))))))
+
+; hash(): ints are their own hash (Python folds them modulo 2^61-1, which
+; only shows past 2^61), bools 0 and 1, integral floats their int, other
+; floats their bit pattern, complex CPython's real + 1000003 * imag.
+(def %py-hash
+  (fn (_ v)
+    (if (eq? v #t) 1
+    (if (eq? v #f) 0
+    (if (%py-float-is v)
+      (if (= v (Float floor v)) (Float ->int v) (first v))
+    (if (%py-complex-is v)
+      (+ (%py-hash (%py-cre v)) (* 1000003 (%py-hash (%py-cim v))))
+    (if (eq? (%py-num-kind v) (lit int))
+      v
+    (if (str? v)
+      (Hash fnv-1a v)
+      (Err raise (lit type) "unhashable type" ())))))))))
+
 ; Is v a machine float?  The type-handle compare %py-num-kind uses, taken
 ; directly so the writer below can ask cheaply.
 (def %py-float-is
@@ -833,6 +1115,8 @@
   (fn (_ v)
     (if (%py-float-is v)
       (display (%py-frepr v))
+    (if (%py-complex-is v)
+      (display (%py-crepr v))
     (if (str? v)
       ; A string inside a container shows its quotes; on its own it does not.
       (%seq (display "'") (%seq (display v) (display "'")))
@@ -861,7 +1145,7 @@
                   (if (%py-subclass? (%py-obj-class v) %py-exc-Exception)
                     (display (%py-exc-msg v))
                     (display v))
-                  (display v)))))))))))))
+                  (display v))))))))))))))
 
 ; Close the loop: python/types.x forward-declares %py-repr and its PY-LIST write
 ; handler calls it per element, so that a string inside a list shows its quotes.
@@ -1205,6 +1489,8 @@
       v
       (if (%py-float-is v)
         (%py-frepr v)
+      (if (%py-complex-is v)
+        (%py-crepr v)
         ; str(e) is the MESSAGE, the same rule %py-write states for print(e)
         (if (Err err? v)
           (v msg)
@@ -1212,13 +1498,14 @@
                 (%py-subclass? (%py-obj-class v) %py-exc-Exception)
                 #f)
             (%py-exc-msg v)
-            (%py-write-to-str v)))))))
+            (%py-write-to-str v))))))))
 
 (def %py-repr-of
   (fn (_ v)
     (if (str? v)
       (Str8 append (Str8 append "'" v) "'")
-      (if (%py-float-is v) (%py-frepr v) (%py-write-to-str v)))))
+      (if (%py-float-is v) (%py-frepr v)
+        (if (%py-complex-is v) (%py-crepr v) (%py-write-to-str v))))))
 
 ; `list(x)` takes anything iterable, which is exactly what `for` already asks
 ; for -- so it is the same function, wrapped.
@@ -1243,10 +1530,6 @@
 ; the handles compare.  bool's base is int, which is Python's own arrangement
 ; and the reason isinstance(True, int) is True while isinstance(1, bool) is not.
 
-(def %py-typeof-prim (prim-ref (lit type) (lit of)))
-(def %py-th-int (%py-typeof-prim 1))
-(def %py-th-big (%py-typeof-prim 99999999999999999999))
-(def %py-th-float (%py-typeof-prim 1.5))
 (def %py-char-code (prim-ref (lit char) (lit ->int)))
 
 ; --- constructors ------------------------------------------------------------
@@ -1401,7 +1684,8 @@
       (if (eq? h %py-th-int) (lit int)
       (if (eq? h %py-th-big) (lit int)
       (if (eq? h %py-th-float) (lit float)
-        ()))))))
+      (if (eq? h %py-th-complex) (lit complex)
+        ())))))))
 
 (def %py-int-ctor
   (fn (_ . a)
@@ -1494,6 +1778,8 @@
   (%py-class-new "bool" %py-cls-int (list (pair "%ctor" %py-bool-ctor)) "bool"))
 (def %py-cls-float
   (%py-class-new "float" () (list (pair "%ctor" %py-float-ctor)) "float"))
+(def %py-cls-complex
+  (%py-class-new "complex" () (list (pair "%ctor" %py-complex-ctor)) "complex"))
 (def %py-cls-str
   (%py-class-new "str" () (list (pair "%ctor" %py-str-ctor)) "str"))
 (def %py-cls-list
@@ -1521,7 +1807,8 @@
       (let ((k (%py-num-kind v)))
         (if (eq? k (lit int)) %py-cls-int
         (if (eq? k (lit float)) %py-cls-float
-          (Err raise (lit type) "type: unsupported value" ())))))))))))))))
+        (if (eq? k (lit complex)) %py-cls-complex
+          (Err raise (lit type) "type: unsupported value" ()))))))))))))))))
 
 ; isinstance walks the base chain with the same %py-subclass? the exception
 ; matcher uses, so user classes, user exceptions and builtins all answer from
