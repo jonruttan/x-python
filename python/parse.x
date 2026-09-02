@@ -1251,6 +1251,10 @@
       ; distinction belongs.
       (if (%py-name-is? t "class")
         (%py-class-stmt (rest toks))
+      (if (if (%py-name-is? t "global") #t (%py-name-is? t "nonlocal"))
+        ; the declaration itself does nothing; %py-def reads it to leave the
+        ; names out of the local hoist, so assignment reaches the module's
+        (let ((sp (%py-line-of (rest toks) ()))) (pair () (rest sp)))
       (if (%py-name-is? t "try")
         (%py-try (rest toks))
       (if (%py-name-is? t "raise")
@@ -1333,7 +1337,7 @@
                             (pair
                               (%py-store (first tgt)
                                 (list aug (first tgt) (first r)))
-                              (rest r))))))))))))))))))))))
+                              (rest r)))))))))))))))))))))))
 
 ; `else:` after an if.  `elif` is `else: if ...`, which is what Python's own
 ; grammar says it is, so it needs no separate shape.
@@ -1650,8 +1654,10 @@
                     ; every argument: raise ValueError('a', 0)
                     (pair (%py-name->sym (%py-val n)) (%py-group-exprs g))))
                 (rest (rest toks))))
+            ; `raise X` with no parens: a class instantiates, an instance
+            ; (from `except X as e`) raises as itself
             (pair
-              (list (lit %py-raise) (list (%py-name->sym (%py-val n))))
+              (list (lit %py-raise) (list (lit %py-exc-instance) (%py-name->sym (%py-val n)) ()))
               (rest toks))))))))
 
 ; --- class -------------------------------------------------------------------
@@ -1853,7 +1859,7 @@
                 ; Parameters are already bound and are not re-declared.
                 (let ((locals (%py-minus
                                 (%py-dedupe () (%py-assign-targets (%py-block-contents after) ()) ())
-                                all-syms)))
+                                (%py-append (%py-global-names (%py-block-contents after) ()) all-syms))))
                   (def body0
                     (if (null? locals) (first b) (list (lit let) (%py-lets locals ()) (first b))))
                   ; the rest arrives as an x list; Python hands the function a
@@ -1914,6 +1920,24 @@
 
 ; Is there a `yield` in this body?  Groups and blocks are searched, except
 ; the block of a nested def or class, whose yields are its own.
+; The names declared global (or nonlocal) anywhere in a body, as symbols.
+(def %py-global-names
+  (fn (self toks acc)
+    (if (null? toks) acc
+      (let ((t (first toks)))
+        (if (if (%py-name-is? t "global") #t (%py-name-is? t "nonlocal"))
+          (let ((sp (%py-line-of (rest toks) ())))
+            (def names
+              (fn (self ts a)
+                (if (null? ts) a
+                  (if (eq? (%py-tag (first ts)) (lit tok-name))
+                    (self (rest ts) (pair (%py-name->sym (%py-val (first ts))) a))
+                    (self (rest ts) a)))))
+            (self (rest sp) (names (first sp) acc)))
+          (if (%py-block? t)
+            (self (rest toks) (self (%py-block-toks t) acc))
+            (self (rest toks) acc)))))))
+
 (def %py-has-yield?
   (fn (self toks skip-block)
     (if (null? toks) #f

@@ -37,10 +37,10 @@ change of answer IS the feature: the name stopped raising because it now works.
 ### and a different one names itself
 
 ```python
-(python-run "print(sorted(1))")
+(python-run "print(frobnicate(1))")
 ```
 ---
-    Error: #<err:name name 'sorted' is not defined>
+    Error: #<err:name name 'frobnicate' is not defined>
 
 ### a bare reference does NOT raise yet
 

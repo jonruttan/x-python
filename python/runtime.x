@@ -2305,7 +2305,8 @@
         (fn (_ self . args)
           (%py-setattr self "args" (%py-tuple-of-list args))
           (%py-setattr self "__msg__" (if (null? args) "" (first args)))))
-      ; repr(e) is Name(arg, ...) with each arg's repr
+      ; str(e) is the message; repr(e) is Name(arg, ...) with each arg's repr
+      (pair "__str__" (fn (_ self) (%py-exc-msg self)))
       (pair "__repr__"
         (fn (_ self)
           (let ((a (%py-alist-find "args" (%py-obj-attrs self))))
@@ -2546,9 +2547,38 @@
 (def %py-gen-done (list (lit %py-gen-done)))
 
 ; a class raises as a fresh instance, an instance as itself
+; throw(type, value): a value that is already an instance of the type is
+; the exception itself, not a constructor argument
 (def %py-exc-instance
-  (fn (_ e args) (if (%py-class-is e) (%py-instantiate e args) e)))
-(def %py-raise-any (fn (_ e) (error (%py-exc-instance e ()))))
+  (fn (_ e args)
+    (if (%py-class-is e)
+      (if (if (null? args) #f
+            (if (null? (rest args))
+              (if (%py-obj-is (first args)) (%py-subclass? (%py-obj-class (first args)) e) #f)
+              #f))
+        (first args)
+        (%py-instantiate e args))
+      e)))
+; raising what was thrown: a class instantiates, an instance is itself,
+; anything else is Python's TypeError
+(def %py-raise-any
+  (fn (_ e)
+    (if (if (%py-class-is e) #t (if (%py-obj-is e) (%py-subclass? (%py-obj-class e) %py-exc-Exception) #f))
+      (error (%py-exc-instance e ()))
+      (Err raise (lit type) "exceptions must derive from BaseException" ()))))
+; is a thrown value (class or instance) of this exception class?
+(def %py-thrown-is?
+  (fn (_ e cls)
+    (if (%py-class-is e) (%py-subclass? e cls)
+      (if (%py-obj-is e) (%py-exc-match e cls) #f))))
+; the body's side of a delegating yield: the raw message, (send v) | (throw e)
+(def %py-yield-raw
+  (fn (_ g v)
+    (%py-callcc
+      (fn (_ k)
+        (%py-gen-set-gk! g k)
+        (%py-gen-set-status! g (lit suspended))
+        ((%py-gen-ck g) (list (lit yield) v))))))
 ; StopIteration carrying the generator's return value (none for None)
 (def %py-raise-stop
   (fn (_ rv)
@@ -2641,7 +2671,10 @@
   (fn (_ g name)
     (if (Str8 =? name "__next__") (fn (_) (%py-gen-resume g (lit send) ()))
     (if (Str8 =? name "send")     (fn (_ v) (%py-gen-resume g (lit send) v))
-    (if (Str8 =? name "throw")    (fn (_ e . a) (%py-gen-resume g (lit throw) (%py-exc-instance e a)))
+    (if (Str8 =? name "throw")
+      (fn (_ e . a)
+        (%py-gen-resume g (lit throw)
+          (if (if (null? a) #t (if (null? (rest a)) (null? (first a)) #f)) e (%py-exc-instance e a))))
     (if (Str8 =? name "close")    (fn (_) (%py-gen-close g))
     (if (Str8 =? name "__iter__") (fn (_) g)
     (if (Str8 =? name "__name__") (%py-gen-name g)
@@ -2654,10 +2687,36 @@
 (def %py-yield-from
   (fn (_ g it)
     (if (not (%py-gen-is it))
-      (do
-        (def go (fn (self es) (if (null? es) () (%seq (%py-yield g (first es)) (self (rest es))))))
-        (go (%py-iter-elems it))
-        ())
+      (let ((nx (if (%py-obj-is it) (%py-dunder it "__next__") ())))
+        (if (null? nx)
+          (do
+            (def go (fn (self es) (if (null? es) () (%seq (%py-yield g (first es)) (self (rest es))))))
+            (go (%py-iter-elems it))
+            ())
+          ; PEP 380 on a duck-typed iterator: __next__ for None, send() for a
+          ; value when it has one, throw() when it has one, StopIteration's
+          ; value is the result
+          (do
+            (def snd (%py-dunder it "send"))
+            (def thr (%py-dunder it "throw"))
+            (def cls (%py-dunder it "close"))
+            (def step
+              (fn (self mode v)
+                (let ((r (guard (e (if (%py-exc-match e %py-exc-StopIteration)
+                                     (list (lit stop) (%py-stop-value e))
+                                     (error e)))
+                           (list (lit got)
+                             (if (eq? mode (lit throw))
+                               (if (null? thr) (%py-raise-any v) (thr v))
+                               (if (if (null? v) #t (null? snd)) (nx) (snd v)))))))
+                  (if (eq? (first r) (lit stop))
+                    (first (rest r))
+                    (let ((down (%py-yield-raw g (first (rest r)))))
+                      (if (if (eq? (first down) (lit throw))
+                            (%py-thrown-is? (first (rest down)) %py-exc-GeneratorExit) #f)
+                        (%seq (if (null? cls) () (cls)) (%py-raise-any (first (rest down))))
+                        (self (first down) (first (rest down)))))))))
+            (step (lit send) ()))))
       (do
         (def step
           (fn (self mode v)
@@ -2667,13 +2726,12 @@
                        (list (lit got) (%py-gen-resume it mode v)))))
               (if (eq? (first r) (lit stop))
                 (first (rest r))
-                (let ((down (guard (e (list (lit throw) e))
-                              (list (lit send) (%py-yield g (first (rest r)))))))
+                (let ((down (%py-yield-raw g (first (rest r)))))
                   ; PEP 380: a GeneratorExit thrown into the delegator closes
                   ; the sub-generator and is raised in the delegator itself
                   (if (if (eq? (first down) (lit throw))
-                        (%py-exc-match (first (rest down)) %py-exc-GeneratorExit) #f)
-                    (%seq (%py-gen-close it) (error (first (rest down))))
+                        (%py-thrown-is? (first (rest down)) %py-exc-GeneratorExit) #f)
+                    (%seq (%py-gen-close it) (%py-raise-any (first (rest down))))
                     (self (first down) (first (rest down)))))))))
         (step (lit send) ())))))
 
@@ -2776,14 +2834,31 @@
 ; interleave with the body's, and it may be infinite), anything else from
 ; its materialized element list.
 (def %py-iter-open
-  (fn (_ v) (if (%py-gen-is v) v (pair (%py-iter-elems v) ()))))
+  (fn (_ v)
+    (if (%py-gen-is v) v
+      (if (%py-obj-is v)
+        ; an object with __iter__ whose iterator has __next__ is pulled a
+        ; step at a time too, so a __next__ that prints or raises does so
+        ; in step with the loop body
+        (let ((it-m (%py-dunder v "__iter__")))
+          (if (null? it-m)
+            (pair (%py-iter-elems v) ())
+            (let ((it (it-m)))
+              (let ((nx (if (%py-obj-is it) (%py-dunder it "__next__") ())))
+                (if (null? nx)
+                  (pair (%py-iter-elems v) ())
+                  (list (lit %py-cursor) nx))))))
+        (pair (%py-iter-elems v) ())))))
 (def %py-iter-pull!
   (fn (_ src)
     (if (%py-gen-is src)
       (%py-gen-pull src)
-      (if (null? (first src))
-        %py-gen-done
-        (let ((v (first (first src)))) (%set-first! src (rest (first src))) v)))))
+      (if (eq? (first src) (lit %py-cursor))
+        (guard (e (if (%py-exc-match e %py-exc-StopIteration) %py-gen-done (error e)))
+          ((first (rest src))))
+        (if (null? (first src))
+          %py-gen-done
+          (let ((v (first (first src)))) (%set-first! src (rest (first src))) v))))))
 
 (def %py-mktuple (fn (_ . elems) (%py-tuple-new elems)))
 ; A *rest parameter arrives as an x list and becomes the tuple Python hands
