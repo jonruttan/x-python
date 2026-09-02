@@ -1028,12 +1028,16 @@
           (fn (_) (Complex make (%py-cre obj) (- 0.0 (%py-cim obj))))
           (Err raise (lit attribute)
             (Str8 append (Str8 append "'complex' object has no attribute '" name) "'") ()))))
-        (Err raise (lit attribute)
-          (Str8 append (Str8 append "object has no attribute '" name) "'")()))))))))))))
+        (let ((sig (%py-sig-of obj)))
+          (if (if (null? sig) #f (Str8 =? name "__name__"))
+            (first sig)
+            (Err raise (lit attribute)
+              (Str8 append (Str8 append "object has no attribute '" name) "'")()))))))))))))))
 
 ; str.upper is the method as a function of its receiver -- str.upper("abc")
 ; -- and a user class's attribute is its function, unbound, callable with an
 ; explicit self.  A builtin class other than str has no such surface yet.
+
 (def %py-class-attr
   (fn (_ cls name)
     (if (eq? cls %py-cls-str)
@@ -2300,7 +2304,15 @@
       (pair "__init__"
         (fn (_ self . args)
           (%py-setattr self "args" (%py-tuple-of-list args))
-          (%py-setattr self "__msg__" (if (null? args) "" (first args))))))
+          (%py-setattr self "__msg__" (if (null? args) "" (first args)))))
+      ; repr(e) is Name(arg, ...) with each arg's repr
+      (pair "__repr__"
+        (fn (_ self)
+          (let ((a (%py-alist-find "args" (%py-obj-attrs self))))
+            (def rs
+              (fn (self l) (if (null? l) () (pair (%py-repr-of (first l)) (self (rest l))))))
+            (Str8 append (%py-class-name (%py-obj-class self))
+              (Str8 append "(" (Str8 append (Str8 join ", " (if (null? a) () (rs (%py-tuple-elems (rest a))))) ")")))))))
     "Exception"))
 
 ; Exceptions print <class 'ValueError'> in Python, not <class '__main__....'>
@@ -2405,7 +2417,7 @@
 (def %py-exc-msg
   (fn (_ e)
     (let ((a (%py-alist-find "__msg__" (%py-obj-attrs e))))
-      (if (null? a) "" (rest a)))))
+      (if (null? a) "" (%py-str (rest a))))))
 
 ; --- Classes -----------------------------------------------------------------
 ;
@@ -2657,7 +2669,12 @@
                 (first (rest r))
                 (let ((down (guard (e (list (lit throw) e))
                               (list (lit send) (%py-yield g (first (rest r)))))))
-                  (self (first down) (first (rest down))))))))
+                  ; PEP 380: a GeneratorExit thrown into the delegator closes
+                  ; the sub-generator and is raised in the delegator itself
+                  (if (if (eq? (first down) (lit throw))
+                        (%py-exc-match (first (rest down)) %py-exc-GeneratorExit) #f)
+                    (%seq (%py-gen-close it) (error (first (rest down))))
+                    (self (first down) (first (rest down)))))))))
         (step (lit send) ())))))
 
 ; `is`: identity, with the cases Python's caching makes look like identity --
@@ -2679,6 +2696,58 @@
   (fn (_ it . st)
     (def go (fn (self es acc) (if (null? es) acc (self (rest es) (%py-add acc (first es))))))
     (go (%py-iter-elems it) (if (null? st) 0 (first st)))))
+
+; map(f, it) is LAZY -- a generator pulling from its source -- so a
+; StopIteration raised by f ends it where a yield from expects
+(def %py-map
+  (fn (_ f it)
+    (%py-gen-new
+      (fn (_ g)
+        (def src (%py-iter-open it))
+        (def go
+          (fn (self)
+            (let ((v (%py-iter-pull! src)))
+              (if (same? v %py-gen-done) () (%seq (%py-yield g (f v)) (self))))))
+        (go))
+      "map")))
+(def %py-zip
+  (fn (_ . its)
+    (def lists (fn (self l) (if (null? l) () (pair (%py-iter-elems (first l)) (self (rest l))))))
+    (def go
+      (fn (self ls acc)
+        (if (if (null? ls) #t (%py-any-null? ls))
+          (%py-list-new (List reverse acc))
+          (self (%py-rests ls) (pair (%py-tuple-new (%py-firsts ls)) acc)))))
+    (go (lists its) ())))
+(def %py-any-null? (fn (self ls) (if (null? ls) #f (if (null? (first ls)) #t (self (rest ls))))))
+(def %py-firsts (fn (self ls) (if (null? ls) () (pair (first (first ls)) (self (rest ls))))))
+(def %py-rests (fn (self ls) (if (null? ls) () (pair (rest (first ls)) (self (rest ls))))))
+(def %py-all
+  (fn (_ it)
+    (def go (fn (self es) (if (null? es) #t (if (%py-truthy (first es)) (self (rest es)) #f))))
+    (go (%py-iter-elems it))))
+(def %py-any
+  (fn (_ it)
+    (def go (fn (self es) (if (null? es) #f (if (%py-truthy (first es)) #t (self (rest es))))))
+    (go (%py-iter-elems it))))
+; sorted(it): a stable merge sort on %py-lt
+(def %py-msort
+  (fn (self l)
+    (if (if (null? l) #t (null? (rest l))) l
+      (let ((h (%py-split-half l (List length l))))
+        (%py-merge (self (first h)) (self (rest h)))))))
+(def %py-split-half
+  (fn (_ l n)
+    (def go (fn (self k xs acc) (if (= k 0) (pair (List reverse acc) xs) (self (- k 1) (rest xs) (pair (first xs) acc)))))
+    (go (Num quotient n 2) l ())))
+(def %py-merge
+  (fn (self a b)
+    (if (null? a) b
+      (if (null? b) a
+        (if (%py-truthy (%py-lt (first b) (first a)))
+          (pair (first b) (self a (rest b)))
+          (pair (first a) (self (rest a) b)))))))
+(def %py-sorted (fn (_ it) (%py-list-new (%py-msort (%py-iter-elems it)))))
 
 ; next(it[, default]) and iter(x)
 (def %py-next

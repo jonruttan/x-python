@@ -444,19 +444,34 @@
 
 (def %py-group-of (fn (_ t) (first (rest (rest t)))))
 
+; A LAMBDA'S PARAMETER COMMAS ARE NOT SEPARATORS: `(lambda a, b: a)` is one
+; lambda, not a tuple.  Both scanners copy a lambda's tokens through its
+; colon; its body is a %py-test and stops at a comma on its own.
+(def %py-lambda-head
+  (fn (self toks acc)
+    (if (null? toks) (pair (List reverse acc) ())
+      (if (%py-op-is? (first toks) ":")
+        (pair (List reverse (pair (first toks) acc)) (rest toks))
+        (self (rest toks) (pair (first toks) acc))))))
 (def %py-comma-split
   (fn (self toks cur acc)
     (if (null? toks)
       (List reverse (if (null? cur) acc (pair (List reverse cur) acc)))
       (if (%py-op-is? (first toks) ",")
         (self (rest toks) () (if (null? cur) acc (pair (List reverse cur) acc)))
-        (self (rest toks) (pair (first toks) cur) acc)))))
+        (if (%py-name-is? (first toks) "lambda")
+          (let ((h (%py-lambda-head toks ())))
+            (self (rest h) (%py-append (List reverse (first h)) cur) acc))
+          (self (rest toks) (pair (first toks) cur) acc))))))
 
 (def %py-has-comma?
   (fn (self toks)
     (if (null? toks)
       #f
-      (if (%py-op-is? (first toks) ",") #t (self (rest toks))))))
+      (if (%py-op-is? (first toks) ",") #t
+        (if (%py-name-is? (first toks) "lambda")
+          (self (rest (%py-lambda-head toks ())))
+          (self (rest toks)))))))
 
 ; A CONDITIONAL EXPRESSION sits above `or`: `a if c else b`, right-
 ; associative, the value chosen by %py-truthy like every condition.  This is
@@ -480,8 +495,47 @@
           (let ((r (%py-exprlist after)))
             (pair (list (lit %py-yield) (lit %py-gen) (first r)) (rest r))))))))
 
+; lambda params: expr -- the def emission's parameter machinery (defaults
+; let-bound once, optionals on a dotted tail, a registered signature) with
+; an expression body.  The parameters end at the first top-level colon.
+(def %py-lambda-expr
+  (fn (_ toks)
+    (def split
+      (fn (self ts acc)
+        (if (null? ts) (Err raise (lit syntax) "expected : after lambda parameters" ())
+          (if (%py-op-is? (first ts) ":") (pair (List reverse acc) (rest ts))
+            (self (rest ts) (pair (first ts) acc))))))
+    (let ((sp (split (rest toks) ())))
+      (let ((sig (%py-params-of (first sp))) (b (%py-test (rest sp))))
+        (def names (first sig))
+        (def syms (%py-strs->syms names))
+        (def dflts (first (rest sig)))
+        (def rest-name (first (rest (rest sig))))
+        (def rest-sym (if (null? rest-name) () (%py-name->sym rest-name)))
+        (def nreq (- (List length names) (List length dflts)))
+        (def body
+          (if (null? dflts)
+            (if (null? rest-sym) (first b)
+              (list (lit let) (list (list rest-sym (list (lit %py-tuple-of-list) rest-sym))) (first b)))
+            (if (null? rest-sym)
+              (list (lit %seq)
+                (list (lit %py-arity!) "<lambda>" (lit %py-more) nreq (List length dflts))
+                (list (lit let) (%py-opt-lets dflts 0 ()) (first b)))
+              (list (lit let) (%py-opt-lets dflts 0 rest-sym) (first b)))))
+        (def params
+          (if (null? dflts)
+            (if (null? rest-sym) syms (%py-dotted-params syms rest-sym))
+            (%py-dotted-params (%py-take nreq syms) (lit %py-more))))
+        (def sig-form
+          (list (lit %py-sig!) (list (lit fn) (pair (lit _) params) body)
+            "<lambda>" (pair (lit list) names) nreq (not (null? rest-sym))))
+        (pair (if (null? dflts) sig-form (list (lit let) (%py-dflt-lets dflts 0) sig-form))
+          (rest b))))))
+
 (def %py-test
   (fn (self toks)
+    (if (%py-name-is? (if (null? toks) () (first toks)) "lambda")
+      (%py-lambda-expr toks)
     (if (%py-name-is? (if (null? toks) () (first toks)) "yield")
       (%py-yield-expr toks)
     (let ((r (%py-or-e toks)))
@@ -492,7 +546,7 @@
             (let ((e (self (rest (rest c)))))
               (pair (list (lit if) (list (lit %py-truthy) (first c)) (first r) (first e))
                 (rest e)))))
-        r)))))
+        r))))))
 
 ; One complete expression from a complete token list -- anything left over is a
 ; syntax error HERE, where the bracket that bounded it is known.
@@ -1023,6 +1077,11 @@
         (list "GeneratorExit"  (lit %py-exc-GeneratorExit))
         (list "next"           (lit %py-next))
         (list "sum"            (lit %py-builtin-sum))
+        (list "map"            (lit %py-map))
+        (list "zip"            (lit %py-zip))
+        (list "all"            (lit %py-all))
+        (list "any"            (lit %py-any))
+        (list "sorted"         (lit %py-sorted))
         (list "iter"           (lit %py-iter))
         (list "SystemExit"     (lit %py-exc-SystemExit))
         ; The builtin exceptions are ordinary names bound to ordinary class
@@ -1588,7 +1647,8 @@
                   (if (null? g)
                     ; `raise X()` -- no argument
                     (list (%py-name->sym (%py-val n)))
-                    (list (%py-name->sym (%py-val n)) (%py-expr-of g))))
+                    ; every argument: raise ValueError('a', 0)
+                    (pair (%py-name->sym (%py-val n)) (%py-group-exprs g))))
                 (rest (rest toks))))
             (pair
               (list (lit %py-raise) (list (%py-name->sym (%py-val n))))
