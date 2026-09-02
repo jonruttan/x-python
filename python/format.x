@@ -223,6 +223,15 @@
 
 ; A numeric operand for the float conversions, through the tower so 10**val
 ; formats the same as its float twin.
+; %d on an object asks __int__, as int() would
+(def %py-fmt-int-of
+  (fn (_ v)
+    (if (%py-obj-is v)
+      (let ((m (%py-dunder v "__int__")))
+        (if (null? m)
+          (Err raise (lit type) "%d format: a real number is required, not object" ())
+          (m)))
+      v)))
 (def %py-fmt-float-of
   (fn (_ v)
     (if (%py-float-is v) v (* 1.0 (if (eq? v #t) 1 (if (eq? v #f) 0 v))))))
@@ -243,17 +252,24 @@
 ; nothing it can define first.
 (def %py-fmt-one
   (fn (_ conv v left plus space zero alt width prec bad)
-    ; s and r: text, precision truncates, zero pads with spaces
-    (if (if (= conv 115) #t (= conv 114))
+    ; s and r: text, precision truncates, zero pads with spaces; c is the
+    ; character of a code point, or a one-character string as itself
+    (if (if (= conv 115) #t (if (= conv 114) #t (= conv 99)))
       (do
-        (def s0 (if (= conv 115) (%py-str v) (%py-repr-of v)))
+        (def s0
+          (if (= conv 99)
+            (if (str? v)
+              (if (= (%py-len v) 1) v
+                (Err raise (lit type) "%c requires an int or a unicode char, not a string of length other than 1" ()))
+              (%py-chr v))
+            (if (= conv 115) (%py-str v) (%py-repr-of v))))
         (def s (if (if (>= prec 0) (> (Str8 length s0) prec) #f)
           (Str8 sub 0 prec s0) s0))
         (%py-fmt-pad "" s width left #f))
       ; d i u
       (if (if (= conv 100) #t (if (= conv 105) #t (= conv 117)))
         (do
-          (def m (%py-fmt-int-mag v))
+          (def m (%py-fmt-int-mag (%py-fmt-int-of v)))
           (def body
             (if (if (>= prec 0) (< (Str8 length (rest m)) prec) #f)
               (Str8 append (%py-fmt-zeros (- prec (Str8 length (rest m)))) (rest m))
@@ -311,7 +327,18 @@
   (fn (_ fmt arg)
     (def args (if (%py-tuple-is arg) (%py-tuple-elems arg) (list arg)))
     (def cell (pair args ()))
+    ; A DICT IS A MAPPING: %(key)s looks the key up, and the looked-up value
+    ; becomes the ONE positional argument left (CPython's own rule -- a %s
+    ; after a keyed spec is "not enough arguments"), and a mapping never
+    ; trips the not-all-converted check.
+    (def mapping (if (%py-dict-is arg) arg ()))
     (def n (Str8 length fmt))
+    ; * takes the width or precision from the arguments
+    (def star!
+      (fn (_)
+        (let ((v (%py-fmt-take! cell)))
+          (if (eq? (%py-num-kind v) (lit int)) v
+            (Err raise (lit type) "* wants int" ())))))
     (def spec-err
       (fn (_ i)
         (Err raise (lit value)
@@ -335,7 +362,18 @@
               (if (= c 48) (self (+ j 1) left plus space #t alt)
               (if (= c 35) (self (+ j 1) left plus space zero #t)
                 (list j left plus space zero alt)))))))))
-        (def fl (flags j0 #f #f #f #f #f))
+        (def keyed
+          (if (if (< j0 n) (= (%py-fmt-code fmt j0) 40) #f)
+            (let ((close (Str8 index-of ")" (Str8 sub j0 (- n j0) fmt))))
+              (if (null? close)
+                (Err raise (lit value) "incomplete format key" ())
+                (pair (+ j0 close 1) (Str8 sub (+ j0 1) (- close 1) fmt))))
+            ()))
+        (if (null? keyed) ()
+          (if (null? mapping)
+            (Err raise (lit type) "format requires a mapping" ())
+            (%set-first! cell (list (%py-dget mapping (rest keyed))))))
+        (def fl (flags (if (null? keyed) j0 (first keyed)) #f #f #f #f #f))
         (def j1 (first fl))
         (def left (first (rest fl)))
         (def plus (first (rest (rest fl))))
@@ -348,13 +386,18 @@
             (if (if (< j n) (%py-fmt-digit? (%py-fmt-code fmt j)) #f)
               (self (+ j 1) (+ (* acc2 10) (- (%py-fmt-code fmt j) 48)))
               (pair j acc2))))
-        (def w (num j1 0))
+        (def w
+          (if (if (< j1 n) (= (%py-fmt-code fmt j1) 42) #f)
+            (pair (+ j1 1) (star!))
+            (num j1 0)))
         (def j2 (first w))
         (def width (rest w))
         ; precision: a dot with no digits is precision 0
         (def pr
           (if (if (< j2 n) (= (%py-fmt-code fmt j2) 46) #f)
-            (num (+ j2 1) 0)
+            (if (if (< (+ j2 1) n) (= (%py-fmt-code fmt (+ j2 1)) 42) #f)
+              (pair (+ j2 2) (star!))
+              (num (+ j2 1) 0))
             (pair j2 (- 0 1))))
         (def j3 (first pr))
         (def prec (rest pr))
@@ -381,7 +424,7 @@
                 (Err raise (lit value) "incomplete format" ())
                 (self-spec (+ i 1) acc)))))))
     (let ((out (go 0 "")))
-      (if (null? (first cell))
+      (if (if (null? (first cell)) #t (not (null? mapping)))
         out
         (Err raise (lit type)
           "not all arguments converted during string formatting" ())))))

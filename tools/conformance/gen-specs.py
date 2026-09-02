@@ -34,6 +34,7 @@
 #                     case delimiter.  It would desync the whole batch.
 #   fence-clash       the output contains ``` and would close the expected
 #                     block early.
+#   t-strings         PEP 750 template strings (3.14), outside this bundle's scope.
 #   oversize          source or output past the caps below.  Keeps one spec
 #                     file readable and one awk batch sane.
 #   empty-output      the program prints nothing, so the assertion has no
@@ -56,6 +57,7 @@ MAX_OUT_CHARS = 40000
 REASONS = [
     "cpython-refused", "nondeterministic", "prompt-prefix",
     "separator-clash", "fence-clash", "oversize", "empty-output",
+    "t-strings",
 ]
 
 
@@ -93,13 +95,20 @@ def run_cpython(path, seed):
         p = subprocess.run(
             [sys.executable, os.path.basename(path)],
             cwd=os.path.dirname(path), env=env,
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, timeout=15,
         )
-    except (subprocess.TimeoutExpired, UnicodeDecodeError):
+    except subprocess.TimeoutExpired:
         return None
     if p.returncode != 0:
         return None
-    return p.stdout
+    # BYTES, NOT text=True: text mode is universal-newlines mode, which
+    # rewrites every \r in the program's output to \n and so records a
+    # print of "R\rV" as two lines.  The expected block must be the bytes
+    # CPython wrote.
+    try:
+        return p.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def normalise(out):
@@ -144,6 +153,12 @@ def main():
             except UnicodeDecodeError:
                 skipped.append((rel, "oversize"))
                 continue
+            # PEP 750 template strings are a 3.14 feature outside this
+            # bundle's scope, and one of them loops the parser to the
+            # allocation ceiling, taking its batch-mates with it.
+            if "tstring" in fn:
+                skipped.append((rel, "t-strings"))
+                continue
 
             a = run_cpython(path, 0)
             if a is None:
@@ -182,11 +197,24 @@ def main():
     # case, so the forty-one after it read as dead when they were never
     # run.  Chunking keeps every case measurable; the heading is the same
     # in every chunk so the scoreboard's per-group tally is unchanged.
+    # AND AT MOST BUDGET BYTES OF PROGRAM: the ceiling counts allocations
+    # over the whole process, so a chunk of long programs that now run to
+    # completion crosses it where a chunk of short ones never will.
     CHUNK = 10
+    BUDGET = 2500
     for (suite, group), cases in sorted(groups.items()):
-      nchunks = (len(cases) + CHUNK - 1) // CHUNK
-      for ci in range(nchunks):
-        chunk = cases[ci * CHUNK:(ci + 1) * CHUNK]
+      chunks = []
+      cur, size = [], 0
+      for c in cases:
+          if cur and (len(cur) >= CHUNK or size + len(c[1]) > BUDGET):
+              chunks.append(cur)
+              cur, size = [], 0
+          cur.append(c)
+          size += len(c[1])
+      if cur:
+          chunks.append(cur)
+      nchunks = len(chunks)
+      for ci, chunk in enumerate(chunks):
         suffix = "" if nchunks == 1 else "-%d" % (ci + 1)
         out = os.path.join(outdir, "%s-%s%s.spec.md" % (suite, group, suffix))
         with open(out, "w", encoding="utf-8") as fh:

@@ -396,6 +396,29 @@
               (%score-set score 1 buffer)
               (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))))
 
+; 0x 0o 0b: a zero, the base letter, then that base's digits (underscores
+; allowed).  The parse reads the base back off the text.
+(def %py-number-based ())
+(set! %py-number-based
+  (fn (_ buffer score chr)
+    (if (if (%py-digit? chr) #t
+          (if (if (>= chr 97) (<= chr 102) #f) #t
+            (if (if (>= chr 65) (<= chr 70) #f) #t (= chr 95))))
+      %py-number-based
+      (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
+(def %py-number-base-first
+  (fn (_ buffer score chr)
+    (if (if (%py-digit? chr) #t
+          (if (if (>= chr 97) (<= chr 102) #f) #t (if (>= chr 65) (<= chr 70) #f)))
+      %py-number-based
+      ())))
+; After a leading 0: x/X o/O b/B open a based literal; otherwise the body.
+(def %py-number-zero
+  (fn (_ buffer score chr)
+    (if (if (= chr 120) #t (if (= chr 88) #t (if (= chr 111) #t (if (= chr 79) #t (if (= chr 98) #t (= chr 66))))))
+      %py-number-base-first
+      (%py-number-body buffer score chr))))
+
 ; A LEADING DOT STARTS A FLOAT (`.1`), but only when a digit follows: the
 ; entry moves through this state without setting a score, so a bare `.` or
 ; `.method` rejects the number candidacy and PY-OP's one-character match wins.
@@ -421,17 +444,21 @@
 (def %py-number-signed ())
 (set! %py-number-signed
   (fn (_ buffer score chr)
-    (if (%py-digit? chr) %py-number-body ())))
+    ; a signed zero may open a based literal: -0x10
+    (if (= chr 48) %py-number-zero
+      (if (%py-digit? chr) %py-number-body ()))))
 
 (def %py-t-number
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
+        (if (= chr 48)
+          %py-number-zero
         (if (%py-digit? chr)
           %py-number-body
           (if (= chr 46)
             %py-number-dot-first
-            (if (if (= chr 43) #t (= chr 45)) %py-number-signed ())))))
+            (if (if (= chr 43) #t (= chr 45)) %py-number-signed ()))))))
     (pair (lit read)
       (fn (_ . args) (mk-tok-number (%buffer-token (first args)))))))
 (Base make-type %py-base "PY-NUMBER" %py-t-number)
@@ -470,6 +497,35 @@
 ; string reader that silently produces nothing is worse than one that is slow:
 ; these are string LITERALS, so the quadratic append is over a handful of
 ; characters.
+; THE ESCAPES PYTHON HAS: \n \t \r \\ \' \" \a \b \f \v \0, octal \ooo (one to
+; three digits), hex \xhh -- each a CODE POINT, spelled back as text through
+; the engine's int->char door so \xff is the two-byte character it is, not
+; a stray byte.  An escape Python does not know (\z) is kept verbatim,
+; backslash and all, which is Python's rule too.
+(def %py-int->char (prim-ref (lit int) (lit ->char)))
+; THE CONVERSION CANNOT RUN INSIDE A READ HANDLER -- (%cvt l %string) hands
+; back nil there (the reason the old decoder was built on Str8 appends) --
+; so the 256 one-character strings a byte-sized code point can name are
+; built ONCE, here, at load time, and the decoder indexes them.  Larger code
+; points (\u escapes, unsupported) fall back to the conversion.
+(def %py-cp-strs
+  (do
+    (def go
+      (fn (self n acc)
+        (if (< n 0) acc
+          (self (- n 1) (pair (%py-list->string (list (%py-int->char n))) acc)))))
+    (go 255 ())))
+(def %py-cp->str
+  (fn (_ n)
+    (if (< n 256)
+      (List ref n %py-cp-strs)
+      (%py-list->string (list (%py-int->char n))))))
+(def %py-hexval
+  (fn (_ c)
+    (if (if (>= c 48) (<= c 57) #f) (- c 48)
+      (if (if (>= c 97) (<= c 102) #f) (- c 87)
+        (if (if (>= c 65) (<= c 70) #f) (- c 55) ())))))
+
 (def %py-unescape
   (fn (_ s)
     (def len (Str8 length s))
@@ -478,15 +534,45 @@
         (if (>= i len)
           acc
           (if (if (= (%py-char->int (Str8 ref i s)) 92) (< (+ i 1) len) #f)
-            (let ((code (%py-char->int (Str8 ref (+ i 1) s))))
-              (self (+ i 2)
-                (Str8 append acc
-                  (if (= code 110) "\n"
-                    (if (= code 116) "\t"
-                      (if (= code 114) "\r" (Str8 sub (+ i 1) 1 s)))))))
+            (let ((r (%py-esc-at s i len)))
+              (self (first r) (Str8 append acc (rest r))))
             (self (+ i 1) (Str8 append acc (Str8 sub i 1 s)))))))
     (%go 0 "")))
 
+; One escape at index i (which holds the backslash): (next-index . text).
+(def %py-esc-at
+  (fn (_ s i len)
+    (def at (fn (_ k) (%py-char->int (Str8 ref k s))))
+    (def code (at (+ i 1)))
+    (def simple
+      (fn (_ t) (pair (+ i 2) t)))
+    (if (= code 10)  (pair (+ i 2) "")
+    (if (= code 110) (simple "\n")
+    (if (= code 116) (simple "\t")
+    (if (= code 114) (simple "\r")
+    (if (= code 92)  (simple "\\")
+    (if (= code 39)  (simple "'")
+    (if (= code 34)  (simple "\"")
+    (if (= code 97)  (simple (%py-cp->str 7))
+    (if (= code 98)  (simple (%py-cp->str 8))
+    (if (= code 102) (simple (%py-cp->str 12))
+    (if (= code 118) (simple (%py-cp->str 11))
+    (if (= code 120)
+      (let ((h1 (if (< (+ i 2) len) (%py-hexval (at (+ i 2))) ()))
+            (h2 (if (< (+ i 3) len) (%py-hexval (at (+ i 3))) ())))
+        (if (if (null? h1) #t (null? h2))
+          (simple "\\x")
+          (pair (+ i 4) (%py-cp->str (+ (* h1 16) h2)))))
+    (if (if (>= code 48) (<= code 55) #f)
+      (let ((d1 (- code 48)))
+        (let ((n2 (if (if (< (+ i 2) len) (if (>= (at (+ i 2)) 48) (<= (at (+ i 2)) 55) #f) #f) 1 0)))
+          (let ((n3 (if (if (= n2 1) (if (< (+ i 3) len) (if (>= (at (+ i 3)) 48) (<= (at (+ i 3)) 55) #f) #f) #f) 1 0)))
+            (let ((v (if (= n2 0) d1
+                       (if (= n3 0) (+ (* d1 8) (- (at (+ i 2)) 48))
+                         (+ (* (+ (* d1 8) (- (at (+ i 2)) 48)) 8) (- (at (+ i 3)) 48))))))
+              (pair (+ i (+ 2 (+ n2 n3))) (%py-cp->str v))))))
+      ; unknown: keep the backslash and the character, Python's rule
+      (pair (+ i 2) (Str8 sub i 2 s)))))))))))))))))
 (def %py-string-read
   (fn (_ . args)
     (def raw (%buffer-token (first args)))
@@ -509,60 +595,135 @@
     (pair (lit read) %py-string-read)))
 (Base make-type %py-base "PY-DQ" %py-t-dq)
 
-; --- PY-BSQ / PY-BDQ: bytes literals, b'...' and b"..." ---------------------
-; The b and the quote are matched here; the BODY is the string types' own
-; states, reused as-is -- so escapes, terminators and scoring stay one
-; implementation.  A bare b followed by anything else rejects, and PY-NAME's
-; one-character match wins, which is how `b = 1` still parses.
+; --- PY-PSQ / PY-PDQ: prefixed literals, r u b f in either case ---------------
+; ONE type per quote for every one-letter prefix: the prefix letter and the
+; quote are matched here, the BODY is the string types' own states reused
+; as-is -- escapes, terminators and scoring stay one implementation -- and
+; the READ handler reads the prefix back off the lexeme to decide what the
+; literal is: b a bytes value, f an f-string, r a RAW string (no escape
+; processing), u a plain string.  A bare letter followed by anything else
+; rejects, and PY-NAME's one-character match wins: `b = 1` still parses.
+; After the prefix letter, a quote opens a body -- and a SECOND quote is
+; either the empty literal (f'' -- accept, giving the next character back)
+; or, with a third, a triple-quoted body.
+(def %py-psq-q2
+  (fn (_ buffer score chr)
+    (if (= chr 39) %py-tsq-body (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
+(def %py-psq-q1
+  (fn (_ buffer score chr) (if (= chr 39) %py-psq-q2 (%py-sq-body buffer score chr))))
 (def %py-bsq-start
-  (fn (_ buffer score chr) (if (= chr 39) %py-sq-body ())))
+  (fn (_ buffer score chr) (if (= chr 39) %py-psq-q1 ())))
+(def %py-pdq-q2
+  (fn (_ buffer score chr)
+    (if (= chr 34) %py-tdq-body (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
+(def %py-pdq-q1
+  (fn (_ buffer score chr) (if (= chr 34) %py-pdq-q2 (%py-dq-body buffer score chr))))
 (def %py-bdq-start
-  (fn (_ buffer score chr) (if (= chr 34) %py-dq-body ())))
+  (fn (_ buffer score chr) (if (= chr 34) %py-pdq-q1 ())))
 
-(def %py-bytes-read
+(def %py-prefix-char?
+  (fn (_ c)
+    (if (= c 98) #t (if (= c 66) #t (if (= c 102) #t (if (= c 70) #t
+      (if (= c 114) #t (if (= c 82) #t (if (= c 117) #t (= c 85))))))))))
+
+(def %py-prefixed-read
   (fn (_ . args)
     (def raw (%buffer-token (first args)))
     (def len (Str8 length raw))
-    ; Drop the b and both quotes.
-    (mk-tok-bytes (%py-unescape (Str8 sub 2 (- len 3) raw)))))
+    (def p (%py-char->int (Str8 ref 0 raw)))
+    ; one quote or three: a triple-quoted lexeme is at least seven long and
+    ; opens with three of the same quote
+    (def triple
+      (if (>= len 7)
+        (if (= (%py-char->int (Str8 ref 1 raw)) (%py-char->int (Str8 ref 2 raw)))
+          (= (%py-char->int (Str8 ref 2 raw)) (%py-char->int (Str8 ref 3 raw)))
+          #f)
+        #f))
+    (def body
+      (if triple
+        (%py-crlf->lf (Str8 sub 4 (- len 7) raw))
+        (Str8 sub 2 (- len 3) raw)))
+    (if (if (= p 98) #t (= p 66))
+      (mk-tok-bytes (%py-unescape body))
+      (if (if (= p 102) #t (= p 70))
+        (mk-tok-fstring (%py-unescape body))
+        (if (if (= p 114) #t (= p 82))
+          (mk-tok-string body)
+          (mk-tok-string (%py-unescape body)))))))
 
-(def %py-t-bsq
+(def %py-t-psq
   (list
     (pair (lit analyse)
-      (fn (_ buffer score chr) (if (= chr 98) %py-bsq-start ())))
-    (pair (lit read) %py-bytes-read)))
-(def %py-t-bdq
+      (fn (_ buffer score chr) (if (%py-prefix-char? chr) %py-bsq-start ())))
+    (pair (lit read) %py-prefixed-read)))
+(def %py-t-pdq
   (list
     (pair (lit analyse)
-      (fn (_ buffer score chr) (if (= chr 98) %py-bdq-start ())))
-    (pair (lit read) %py-bytes-read)))
-(Base make-type %py-base "PY-BSQ" %py-t-bsq)
-(Base make-type %py-base "PY-BDQ" %py-t-bdq)
+      (fn (_ buffer score chr) (if (%py-prefix-char? chr) %py-bdq-start ())))
+    (pair (lit read) %py-prefixed-read)))
+(Base make-type %py-base "PY-PSQ" %py-t-psq)
+(Base make-type %py-base "PY-PDQ" %py-t-pdq)
 
-; --- PY-FSQ / PY-FDQ: f-strings, f'...' and f"..." ---------------------------
-; The same shape as the bytes prefix: f or F, then a quote, then the string
-; types' own body states.  The lexeme is unescaped here and handed to the
-; parser whole -- the fields are grammar, not lexis.
-(def %py-fstring-read
+; --- PY-TSQ / PY-TDQ: triple-quoted strings ----------------------------------
+; Three quotes open, three close, anything at all in between -- newlines
+; included.  The single-quote type matches the same first character; when
+; the second character is not a quote this type rejects and the single-quote
+; type's match stands, and `''` (an empty single-quoted string) is the same
+; story one character on.  A run of three or more closing quotes is Python's:
+; the literal ends at the first three.
+(def %py-tsq-body ())
+(def %py-tsq-c1 ())
+(def %py-tsq-c2 ())
+(set! %py-tsq-body (fn (_ buffer score chr) (if (= chr 39) %py-tsq-c1 %py-tsq-body)))
+(set! %py-tsq-c1 (fn (_ buffer score chr) (if (= chr 39) %py-tsq-c2 %py-tsq-body)))
+(set! %py-tsq-c2
+  (fn (_ buffer score chr) (if (= chr 39) (%score-set score 1 buffer) %py-tsq-body)))
+(def %py-tsq-o3 (fn (_ buffer score chr) (if (= chr 39) %py-tsq-body ())))
+(def %py-tsq-o2 (fn (_ buffer score chr) (if (= chr 39) %py-tsq-o3 ())))
+
+(def %py-tdq-body ())
+(def %py-tdq-c1 ())
+(def %py-tdq-c2 ())
+(set! %py-tdq-body (fn (_ buffer score chr) (if (= chr 34) %py-tdq-c1 %py-tdq-body)))
+(set! %py-tdq-c1 (fn (_ buffer score chr) (if (= chr 34) %py-tdq-c2 %py-tdq-body)))
+(set! %py-tdq-c2
+  (fn (_ buffer score chr) (if (= chr 34) (%score-set score 1 buffer) %py-tdq-body)))
+(def %py-tdq-o3 (fn (_ buffer score chr) (if (= chr 34) %py-tdq-body ())))
+(def %py-tdq-o2 (fn (_ buffer score chr) (if (= chr 34) %py-tdq-o3 ())))
+
+; A CR or CRLF inside the literal is a newline, Python's line-ending rule.
+(def %py-crlf->lf
+  (fn (_ s)
+    (def n (Str8 length s))
+    (def go
+      (fn (self i acc)
+        (if (>= i n)
+          acc
+          (let ((c (%py-char->int (Str8 ref i s))))
+            (if (= c 13)
+              (self (if (if (< (+ i 1) n) (= (%py-char->int (Str8 ref (+ i 1) s)) 10) #f) (+ i 2) (+ i 1))
+                (Str8 append acc "\n"))
+              (self (+ i 1) (Str8 append acc (Str8 sub i 1 s))))))))
+    (if (null? (Str8 index-of (%py-cp->str 13) s)) s (go 0 ""))))
+
+(def %py-triple-read
   (fn (_ . args)
     (def raw (%buffer-token (first args)))
     (def len (Str8 length raw))
-    (mk-tok-fstring (%py-unescape (Str8 sub 2 (- len 3) raw)))))
+    (mk-tok-string (%py-unescape (%py-crlf->lf (Str8 sub 3 (- len 6) raw))))))
 
-(def %py-t-fsq
+(def %py-t-tsq
   (list
     (pair (lit analyse)
-      (fn (_ buffer score chr)
-        (if (if (= chr 102) #t (= chr 70)) %py-bsq-start ())))
-    (pair (lit read) %py-fstring-read)))
-(def %py-t-fdq
+      (fn (_ buffer score chr) (if (= chr 39) %py-tsq-o2 ())))
+    (pair (lit read) %py-triple-read)))
+(def %py-t-tdq
   (list
     (pair (lit analyse)
-      (fn (_ buffer score chr)
-        (if (if (= chr 102) #t (= chr 70)) %py-bdq-start ())))
-    (pair (lit read) %py-fstring-read)))
-(Base make-type %py-base "PY-FSQ" %py-t-fsq)
-(Base make-type %py-base "PY-FDQ" %py-t-fdq)
+      (fn (_ buffer score chr) (if (= chr 34) %py-tdq-o2 ())))
+    (pair (lit read) %py-triple-read)))
+(Base make-type %py-base "PY-TSQ" %py-t-tsq)
+(Base make-type %py-base "PY-TDQ" %py-t-tdq)
 
 ; --- PY-OP: operators and delimiters -----------------------------------------
 ; LONGEST MATCH MATTERS AND IS EASY TO GET WRONG.  `//` is floor division and
@@ -796,8 +957,10 @@
     (def nsigned
       (compile-asm
         (lit (fn (_ buffer score chr)
-          (if (and (>= chr 48) (<= chr 57)) body ())))
-        (list (pair (lit body) nbody))))
+          (if (= chr 48)
+            zero
+            (if (and (>= chr 48) (<= chr 57)) body ()))))
+        (list (pair (lit zero) %py-number-zero) (pair (lit body) nbody))))
     ; The escape states are interpreted and rare; each hands control back to
     ; the compiled body by evaluating its own global, which after adoption is
     ; only ever reached from here -- so the handoff is fvar out, global back.
@@ -852,13 +1015,17 @@
     (def e-number
       (compile-asm
         (lit (fn (_ buffer score chr)
-          (if (and (>= chr 48) (<= chr 57))
-            body
-            (if (= chr 46)
-              dotf
-              (if (or (= chr 43) (= chr 45)) signed ())))))
-        (list (pair (lit body) nbody) (pair (lit dotf) ndotf)
-          (pair (lit signed) nsigned))))
+          (if (= chr 48)
+            zero
+            (if (and (>= chr 48) (<= chr 57))
+              body
+              (if (= chr 46)
+                dotf
+                (if (or (= chr 43) (= chr 45)) signed ()))))))
+        ; the leading-zero state stays interpreted: it is rare (0x, 0o, 0b
+        ; and plain zeros) and hands the digit run back to the compiled body
+        (list (pair (lit zero) %py-number-zero) (pair (lit body) nbody)
+          (pair (lit dotf) ndotf) (pair (lit signed) nsigned))))
     (def e-sq
       (compile-asm
         (lit (fn (_ buffer score chr)
@@ -903,10 +1070,10 @@
     ; bytes literals stay interpreted at entry: the b-prefix test runs once
     ; per token start and the body states are the compiled string bodies'
     ; interpreted twins, reached through the same globals either way
-    (Base make-type b "PY-BSQ" %py-t-bsq)
-    (Base make-type b "PY-BDQ" %py-t-bdq)
-    (Base make-type b "PY-FSQ" %py-t-fsq)
-    (Base make-type b "PY-FDQ" %py-t-fdq)
+    (Base make-type b "PY-PSQ" %py-t-psq)
+    (Base make-type b "PY-PDQ" %py-t-pdq)
+    (Base make-type b "PY-TSQ" %py-t-tsq)
+    (Base make-type b "PY-TDQ" %py-t-tdq)
     (Base make-type b "PY-OP" %py-t-op)
     (reg "PY-CLOSE" e-close %py-t-close)
     (reg "PY-OPEN" e-open %py-t-open)
