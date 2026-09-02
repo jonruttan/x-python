@@ -201,7 +201,7 @@ def main():
     # over the whole process, so a chunk of long programs that now run to
     # completion crosses it where a chunk of short ones never will.
     CHUNK = 10
-    BUDGET = 4000
+    BUDGET = 2500
     for (suite, group), cases in sorted(groups.items()):
       chunks = []
       cur, size = [], 0

@@ -1060,15 +1060,43 @@
   (fn (_ toks)
     (if (not (%py-op-is? (if (null? toks) () (first toks)) ":"))
       (Err raise (lit syntax) "expected : after a compound statement header" ())
+      ; A SIMPLE STATEMENT ON THE HEADER LINE -- `for x in y: print(x)` --
+      ; is the block: its tokens up to the newline, parsed as statements.
+      (if (if (null? (rest toks)) #f
+            (if (eq? (%py-tag (first (rest toks))) (lit tok-newline)) #f
+              (not (%py-block? (first (rest toks))))))
+        (let ((sp (%py-line-of (rest toks) ())))
+          (pair
+            (%py-seq-of (first (%py-stmts (%py-semi->nl (first sp)) ())))
+            (rest sp)))
       (let ((t (%py-skip-nl (rest toks))))
         (if (not (%py-block? (if (null? t) () (first t))))
           (Err raise (lit syntax) "expected an indented block" ())
           (pair
-            (%py-seq-of (first (%py-stmts (%py-block-toks (first t)) ())))
-            (rest t)))))))
+            (%py-seq-of (first (%py-stmts (%py-semi->nl (%py-block-toks (first t))) ())))
+            (rest t))))))))
+
+; (line-tokens . rest-from-the-newline)
+(def %py-line-of
+  (fn (self toks acc)
+    (if (if (null? toks) #t
+          (if (eq? (%py-tag (first toks)) (lit tok-newline)) (null? (rest (first toks))) #f))
+      (pair (List reverse acc) toks)
+      (self (rest toks) (pair (first toks) acc)))))
 
 ; Statements until the token list runs out.  A block IS its token list now, so
 ; running out is the only end there is.
+; `a = 1; b = 2`: a top-level ; is a statement boundary, so it becomes the
+; newline token the statement parser already stops at.  Shallow on
+; purpose: a block's contents are their own list and get their own pass.
+(def %py-semi->nl
+  (fn (self toks)
+    (if (null? toks) ()
+      ; MARKED: (tok-newline semi), so a header line's one-line body --
+      ; `for x in y: a; b` -- still runs to the real newline
+      (pair (if (%py-op-is? (first toks) ";") (list (lit tok-newline) (lit semi)) (first toks))
+        (self (rest toks))))))
+
 (set! %py-stmts
   (fn (self toks acc)
     (let ((t (%py-skip-nl toks)))
@@ -1349,7 +1377,7 @@
                 (list (lit %py-tuple-of-list) (list (lit %py-drop) (lit %py-more) i)))))
       (pair (list (first (first dflts)) (list (lit %py-opt) (lit %py-more) i (%py-dflt-sym i)))
         (self (rest dflts) (+ i 1) rest-sym)))))
-(def %py-syms-of
+(def %py-strs->syms
   (fn (self names)
     (if (null? names) () (pair (%py-name->sym (first names)) (self (rest names))))))
 
@@ -1665,7 +1693,7 @@
           (Err raise (lit syntax) "expected ( after a function name" ())
           (let ((sig (%py-params-of (%py-group-of (first (rest toks))))))
             (def names (first sig))
-            (def syms (%py-syms-of names))
+            (def syms (%py-strs->syms names))
             (def dflts (first (rest sig)))
             (def rest-name (first (rest (rest sig))))
             (def rest-sym (if (null? rest-name) () (%py-name->sym rest-name)))
@@ -1986,7 +2014,7 @@
     (%set-first! %py-current-self ())
     (def %toks (python-lex src))
     (def %targets (%py-dedupe () (%py-assign-targets %toks ()) ()))
-    (def %body (first (%py-stmts %toks ())))
+    (def %body (first (%py-stmts (%py-semi->nl %toks) ())))
     (def %undef
       (%py-undefined (%py-mentioned %toks ())
                      (%py-append (%py-bound-names %toks ()) (%py-param-names %toks ()))
