@@ -93,16 +93,25 @@
       (if (not (null? (Str8 index-of "e" t))) #t
         (not (null? (Str8 index-of "E" t)))))))
 
+; An imaginary literal is its magnitude as a float on the imaginary axis;
+; complex parts are always floats in Python, so `2j` is 0.0+2.0j.
+(def %py-num-imag?
+  (fn (_ t)
+    (let ((c (%py-char->int (Str8 ref (- (Str8 length t) 1) t))))
+      (if (= c 106) #t (= c 74)))))
+
 (def %py-num
   (fn (_ text)
     (let ((t (%py-num-strip text)))
+      (if (%py-num-imag? t)
+        (Complex make 0.0 (Float from (Str8 sub 0 (- (Str8 length t) 1) t)))
       (if (%py-num-float-text? t)
         (Float from t)
         ; THE HAND PARSER, NOT THE CHILD BASE.  %py-sexp-base is a (Base make)
         ; child and bigint is a library type it does not carry, so a literal
         ; past 2^63 WRAPPED silently -- the same trap the float comment above
         ; records, one type over.  %py-int-of-str promotes through the tower.
-        (%py-int-of-str t)))))
+        (%py-int-of-str t))))))
 
 ; --- Token helpers -----------------------------------------------------------
 ; Guarded for the same reason as python/indent.x's %py-tok-type: (first 2)
@@ -178,6 +187,8 @@
 (def %py-bor-ops  (list (list "|" (lit %py-bitor))))
 (def %py-bxor-ops (list (list "^" (lit %py-bitxor))))
 (def %py-band-ops (list (list "&" (lit %py-bitand))))
+(def %py-shift-ops
+  (list (list "<<" (lit %py-lshift)) (list ">>" (lit %py-rshift))))
 (def %py-product-ops
   (list (list "*" (lit %py-mul)) (list "/" (lit %py-div))
         (list "//" (lit %py-floordiv)) (list "%" (lit %py-mod))))
@@ -187,6 +198,7 @@
 (def %py-bor ())
 (def %py-bxor ())
 (def %py-band ())
+(def %py-shift ())
 (def %py-sum ())
 (def %py-product ())
 (def %py-unary ())
@@ -243,7 +255,8 @@
           r)))))
 (set! %py-bor  (fn (_ toks) (%py-left toks %py-bor-ops %py-bxor)))
 (set! %py-bxor (fn (_ toks) (%py-left toks %py-bxor-ops %py-band)))
-(set! %py-band (fn (_ toks) (%py-left toks %py-band-ops %py-sum)))
+(set! %py-band (fn (_ toks) (%py-left toks %py-band-ops %py-shift)))
+(set! %py-shift (fn (_ toks) (%py-left toks %py-shift-ops %py-sum)))
 
 ; --- or / and / not ----------------------------------------------------------
 ;
@@ -720,6 +733,8 @@
         (list "min"       (lit %py-min))
         (list "max"       (lit %py-max))
         (list "bytearray" (lit %py-bytearray))
+        (list "complex"   (lit %py-cls-complex))
+        (list "hash"      (lit %py-hash))
         ; The builtin exceptions are ordinary names bound to ordinary class
         ; values, so `except ValueError` and `except MyError` take one path.
         (list "Exception"         (lit %py-exc-Exception))
