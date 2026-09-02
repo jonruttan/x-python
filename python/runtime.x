@@ -101,6 +101,12 @@
   (fn (_ a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (%py-binop a b "__add__" "__radd__" "+")
+    (if (%py-bytes-is a)
+      (if (%py-bytes-is b)
+        (%py-bytes-new (Str8 append (%py-bytes-str a) (%py-bytes-str b)))
+        (Err raise (lit type) "can't concat to bytes" ()))
+    (if (%py-bytes-is b)
+      (Err raise (lit type) "can't concat bytes to non-bytes" ())
     (if (str? a)
       (if (str? b)
         (Str8 append a b)
@@ -115,7 +121,7 @@
               (eq? (%py-typeof-prim b) %py-th-complex))
           (%py-cx-arith a b "+" 0)
           (+ (if (eq? a #t) 1 (if (eq? a #f) 0 a))
-             (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))))
+             (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))))))
 
 (def %py-sub
   (fn (_ a b)
@@ -206,6 +212,10 @@
   (fn (_ a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (%py-binop a b "__mul__" "__rmul__" "*")
+    (if (%py-bytes-is a)
+      (%py-bytes-new (%py-str-repeat (%py-bytes-str a) b))
+    (if (%py-bytes-is b)
+      (%py-bytes-new (%py-str-repeat (%py-bytes-str b) a))
     (if (str? a)
       (if (str? b)
         (Err raise (lit type) "can't multiply sequence by non-int" ())
@@ -216,7 +226,7 @@
               (eq? (%py-typeof-prim b) %py-th-complex))
           (%py-cx-arith a b "*" 2)
           (* (if (eq? a #t) 1 (if (eq? a #f) 0 a))
-             (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))))
+             (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))))))
 
 ; TRUE DIVISION ALWAYS PRODUCES A FLOAT.  `1 / 2` is 0.5 in Python 3 and an
 ; exact 1/2 in x, and that difference is the reason this bundle declares xenon
@@ -397,6 +407,10 @@
         (if (null? m)
           (%py-in-walk a (%py-iter-elems b))
           (%py-truthy (m a))))
+    (if (%py-bytes-is b)
+      (if (%py-bytes-is a)
+        (Str8 includes? (%py-bytes-str a) (%py-bytes-str b))
+        (Err raise (lit type) "a bytes-like object is required" ()))
     (if (str? b)
       (if (str? a)
         (Str8 includes? a b)
@@ -412,7 +426,7 @@
                 (fn (self es acc)
                   (if (null? es) acc (self (rest es) (pair (first (first es)) acc)))))
               (%py-in-walk a (keys (%py-dict-entries b) ())))
-            (Err raise (lit type) "argument is not iterable" ()))))))))
+            (Err raise (lit type) "argument is not iterable" ())))))))))
 
 ; --- Numeric builtins --------------------------------------------------------
 ; abs clears the SIGN BIT for floats (the arithmetic spelling turns -0.0
@@ -490,6 +504,86 @@
 
 ; --- Bytes seams -------------------------------------------------------------
 (def %py-mkbytes (fn (_ s) (%py-bytes-new s)))
+
+; b'...' with Python's escapes: the quote rule of str's repr, \n \r \t by
+; name, and every byte outside printable ASCII as \xhh.
+(def %py-bytes-repr
+  (fn (_ s)
+    (def n (Str8 length s))
+    (def q (if (if (not (null? (Str8 index-of "'" s))) (null? (Str8 index-of "\"" s)) #f) 34 39))
+    (def go
+      (fn (self i acc)
+        (if (>= i n)
+          acc
+          (let ((c (%py-char-code (%str-ref s i))))
+            (self (+ i 1)
+              (Str8 append acc
+                (if (= c 92) "\\\\"
+                (if (= c q) (Str8 append "\\" (Str8 sub i 1 s))
+                (if (= c 10) "\\n"
+                (if (= c 13) "\\r"
+                (if (= c 9) "\\t"
+                (if (if (< c 32) #t (>= c 127)) (Str8 append "\\x" (%py-hex2 c))
+                  (Str8 sub i 1 s)))))))))))))
+    (let ((qs (Str8 sub (if (= q 34) 1 0) 1 "'\"")))
+      (Str8 append "b" (Str8 append qs (Str8 append (go 0 "") qs))))))
+
+; BYTES METHODS ARE THE str METHODS ON THE UNDERLYING BYTE STRING: the str
+; surface is byte-indexed by design, so a bytes method unwraps its bytes
+; arguments, runs the str method, and wraps every string in the answer back
+; into bytes.  A str argument to a bytes method, or a bytes argument to a
+; str method, is Python's TypeError.
+(def %py-bytes-wrap
+  (fn (self v)
+    (if (str? v) (%py-bytes-new v)
+      (if (%py-list? v) (%py-list-new (%py-bytes-wrap-all (%py-list-elems v)))
+        (if (%py-tuple-is v) (%py-tuple-new (%py-bytes-wrap-all (%py-tuple-elems v)))
+          v)))))
+(def %py-bytes-wrap-all
+  (fn (self l) (if (null? l) () (pair (%py-bytes-wrap (first l)) (self (rest l))))))
+(def %py-bytes-unwrap-seq
+  (fn (self l)
+    (if (null? l) ()
+      (pair
+        (if (%py-bytes-is (first l)) (%py-bytes-str (first l))
+          (if (str? (first l))
+            (Err raise (lit type) "sequence item: expected a bytes-like object, str found" ())
+            (first l)))
+        (self (rest l))))))
+(def %py-bytes-args
+  (fn (self args)
+    (if (null? args) ()
+      (let ((a (first args)))
+        (pair
+          (if (%py-bytes-is a) (%py-bytes-str a)
+            (if (str? a) (Err raise (lit type) "a bytes-like object is required, not 'str'" ())
+              (if (%py-list? a) (%py-list-new (%py-bytes-unwrap-seq (%py-list-elems a)))
+                (if (%py-tuple-is a) (%py-tuple-new (%py-bytes-unwrap-seq (%py-tuple-elems a)))
+                  a))))
+          (self (rest args)))))))
+(def %py-bytes-attr
+  (fn (_ b name)
+    (if (Str8 =? name "decode")
+      (fn (_ . a) (%py-bytes-str b))
+      (let ((m (%py-str-attr (%py-bytes-str b) name)))
+        (fn (_ . args) (%py-bytes-wrap (apply m (%py-bytes-args args))))))))
+(def %py-any-bytes?
+  (fn (self l) (if (null? l) #f (if (%py-bytes-is (first l)) #t (self (rest l))))))
+(def %py-str-method
+  (fn (_ s name)
+    (let ((m (%py-str-attr s name)))
+      (fn (_ . args)
+        (if (%py-any-bytes? args)
+          (Err raise (lit type) "must be str, not bytes" ())
+          (apply m args))))))
+; the byte values of a byte string, as a list of ints
+(def %py-byte-list
+  (fn (self s i acc)
+    (if (< i 0) acc (self s (- i 1) (pair (%py-char-code (%str-ref s i)) acc)))))
+(def %py-sl-bytes
+  (fn (self s idxs acc)
+    (if (null? idxs) (List reverse acc)
+      (self s (rest idxs) (pair (Str8 sub (first idxs) 1 s) acc)))))
 (def %py-bytearray
   (fn (_ v)
     (if (%py-bytes-is v)
@@ -537,13 +631,15 @@
         (if (eq? r %py-NotImplemented) (eq? a b) r))
     (if (str? a) (if (str? b) (Str8 =? a b) #f)
     (if (str? b) #f
+    (if (%py-bytes-is a) (if (%py-bytes-is b) (Str8 =? (%py-bytes-str a) (%py-bytes-str b)) #f)
+    (if (%py-bytes-is b) #f
     (if (%py-class-is a) (eq? a b)
     (if (%py-class-is b) #f
       ; a BOOL, always: the tower's `=` answers nil for an unequal complex,
       ; and a nil in a printed comparison reads as None
       (if (= (if (eq? a #t) 1 (if (eq? a #f) 0 a))
              (if (eq? b #t) 1 (if (eq? b #f) 0 b)))
-        #t #f))))))))
+        #t #f))))))))))
 (def %py-ne
   (fn (_ a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
@@ -650,7 +746,9 @@
       (if (str? v)
         ; CODE POINTS, not bytes: len('\xff') is 1
         (Str length v)
-        (Err raise (lit type) "object of this type has no len()" ()))))))))
+      (if (%py-bytes-is v)
+        (Str8 length (%py-bytes-str v))
+        (Err raise (lit type) "object of this type has no len()" ())))))))))
 
 ; NEGATIVE INDICES COUNT FROM THE END, which is Python and not x.  -1 is the
 ; last element, and an index past either end raises IndexError rather than
@@ -670,6 +768,14 @@
           (if (if (< k 0) #t (>= k n))
             (Err raise (lit index) "string index out of range" ())
             (Str sub k 1 v))))
+    ; a bytes index is the byte's value, an int
+    (if (%py-bytes-is v)
+      (let ((s (%py-bytes-str v)))
+        (let ((n (Str8 length s)))
+          (let ((k (if (< i 0) (+ n i) i)))
+            (if (if (< k 0) #t (>= k n))
+              (Err raise (lit index) "index out of range" ())
+              (%py-char-code (%str-ref s k))))))
     ; Subscripting a tuple and a dict are calls too -- see the list branch.
     (if (%py-tuple-is v)
       (v i)
@@ -680,7 +786,7 @@
       ; SUBSCRIPTING A LIST IS A CALL.  x dispatches `(v i)` through the type's
       ; `call` handler, so negative indices and IndexError are stated once in
       ; python/types.x rather than copied here.
-      (v i))))))))
+      (v i)))))))))
 
 ; Store into a list at an index.  Rebuilds the element list and hangs it back on
 ; the SAME tag pair, so every reference sees the store -- the identity argument
@@ -774,7 +880,10 @@
       (%py-list-elems v)
       (if (str? v)
         (%py-str-chars v 0 (Str8 length v))
-        (Err raise (lit type) "object is not iterable" ()))))))))
+      ; iterating bytes yields ints
+      (if (%py-bytes-is v)
+        (%py-byte-list (%py-bytes-str v) (- (Str8 length (%py-bytes-str v)) 1) ())
+        (Err raise (lit type) "object is not iterable" ())))))))))
 
 ; range(stop) / range(start, stop) / range(start, stop, step)
 ;
@@ -898,7 +1007,9 @@
       (if (%py-dict? obj)
         (%py-dict-attr obj name)
       (if (str? obj)
-        (%py-str-attr obj name)
+        (%py-str-method obj name)
+      (if (%py-bytes-is obj)
+        (%py-bytes-attr obj name)
       (if (%py-obj-is obj)
         (%py-obj-attr obj name)
       (if (%py-super-is obj)
@@ -913,7 +1024,7 @@
           (Err raise (lit attribute)
             (Str8 append (Str8 append "'complex' object has no attribute '" name) "'") ()))))
         (Err raise (lit attribute)
-          (Str8 append (Str8 append "object has no attribute '" name) "'")()))))))))))
+          (Str8 append (Str8 append "object has no attribute '" name) "'")())))))))))))
 
 ; str.upper is the method as a function of its receiver -- str.upper("abc")
 ; -- and a user class's attribute is its function, unbound, callable with an
@@ -3126,6 +3237,10 @@
           (Str8 join ""
             (%py-sl-chars obj
               (%py-slice-idxs (Str length obj) start stop st) ()))
+          (if (%py-bytes-is obj)
+            (let ((s (%py-bytes-str obj)))
+              (%py-bytes-new
+                (Str8 join "" (%py-sl-bytes s (%py-slice-idxs (Str8 length s) start stop st) ()))))
           (if (%py-list-is obj)
             (%py-list-new
               (%py-sl-pick (%py-list-elems obj)
@@ -3135,7 +3250,7 @@
                 (%py-sl-pick (%py-tuple-elems obj)
                   (%py-slice-idxs (List length (%py-tuple-elems obj)) start stop st) ()))
               ; a dict gets Python's own complaint: a slice is not a key
-              (Err raise (lit type) "unhashable type: 'slice'" ()))))))))
+              (Err raise (lit type) "unhashable type: 'slice'" ())))))))))
 
 ; --- def, whatever the frame depth -------------------------------------------
 ;

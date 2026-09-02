@@ -526,22 +526,38 @@
       (if (if (>= c 97) (<= c 102) #f) (- c 87)
         (if (if (>= c 65) (<= c 70) #f) (- c 55) ())))))
 
+; A BYTES LITERAL'S \xhh IS ONE BYTE, not a code point: b'\xff' has length
+; 1.  The engine's byte packer (bytes ->str: one byte per character, low
+; byte) is a prim with no x-lang dispatch, so it is safe here -- but the
+; table is still built at load, like %py-cp-strs, and indexed by the decoder.
+(def %py-bytes->str (prim-ref (lit bytes) (lit ->str)))
+(def %py-byte-strs
+  (do
+    (def go
+      (fn (self n acc)
+        (if (< n 0) acc
+          (self (- n 1) (pair (%py-bytes->str (list (%py-int->char n))) acc)))))
+    (go 255 ())))
+(def %py-byte->str (fn (_ n) (List ref n %py-byte-strs)))
+
+; raw? decodes \xhh and octal escapes to raw bytes (bytes literals) rather
+; than code points (str literals)
 (def %py-unescape
-  (fn (_ s)
+  (fn (_ s raw?)
     (def len (Str8 length s))
     (def %go
       (fn (self i acc)
         (if (>= i len)
           acc
           (if (if (= (%py-char->int (Str8 ref i s)) 92) (< (+ i 1) len) #f)
-            (let ((r (%py-esc-at s i len)))
+            (let ((r (%py-esc-at s i len raw?)))
               (self (first r) (Str8 append acc (rest r))))
             (self (+ i 1) (Str8 append acc (Str8 sub i 1 s)))))))
     (%go 0 "")))
 
 ; One escape at index i (which holds the backslash): (next-index . text).
 (def %py-esc-at
-  (fn (_ s i len)
+  (fn (_ s i len raw?)
     (def at (fn (_ k) (%py-char->int (Str8 ref k s))))
     (def code (at (+ i 1)))
     (def simple
@@ -562,7 +578,8 @@
             (h2 (if (< (+ i 3) len) (%py-hexval (at (+ i 3))) ())))
         (if (if (null? h1) #t (null? h2))
           (simple "\\x")
-          (pair (+ i 4) (%py-cp->str (+ (* h1 16) h2)))))
+          (let ((v (+ (* h1 16) h2)))
+            (pair (+ i 4) (if raw? (%py-byte->str v) (%py-cp->str v))))))
     (if (if (>= code 48) (<= code 55) #f)
       (let ((d1 (- code 48)))
         (let ((n2 (if (if (< (+ i 2) len) (if (>= (at (+ i 2)) 48) (<= (at (+ i 2)) 55) #f) #f) 1 0)))
@@ -570,7 +587,7 @@
             (let ((v (if (= n2 0) d1
                        (if (= n3 0) (+ (* d1 8) (- (at (+ i 2)) 48))
                          (+ (* (+ (* d1 8) (- (at (+ i 2)) 48)) 8) (- (at (+ i 3)) 48))))))
-              (pair (+ i (+ 2 (+ n2 n3))) (%py-cp->str v))))))
+              (pair (+ i (+ 2 (+ n2 n3))) (if raw? (%py-byte->str v) (%py-cp->str v)))))))
       ; unknown: keep the backslash and the character, Python's rule
       (pair (+ i 2) (Str8 sub i 2 s)))))))))))))))))
 (def %py-string-read
@@ -579,7 +596,7 @@
     (def len (Str8 length raw))
     ; Drop the opening and closing quote; an unterminated string never reaches
     ; here, because its state never accepted.
-    (mk-tok-string (%py-unescape (Str8 sub 1 (- len 2) raw)))))
+    (mk-tok-string (%py-unescape (Str8 sub 1 (- len 2) raw) #f))))
 
 (def %py-t-sq
   (list
@@ -644,12 +661,12 @@
         (%py-crlf->lf (Str8 sub 4 (- len 7) raw))
         (Str8 sub 2 (- len 3) raw)))
     (if (if (= p 98) #t (= p 66))
-      (mk-tok-bytes (%py-unescape body))
+      (mk-tok-bytes (%py-unescape body #t))
       (if (if (= p 102) #t (= p 70))
-        (mk-tok-fstring (%py-unescape body))
+        (mk-tok-fstring (%py-unescape body #f))
         (if (if (= p 114) #t (= p 82))
           (mk-tok-string body)
-          (mk-tok-string (%py-unescape body)))))))
+          (mk-tok-string (%py-unescape body #f)))))))
 
 (def %py-t-psq
   (list
@@ -710,7 +727,7 @@
   (fn (_ . args)
     (def raw (%buffer-token (first args)))
     (def len (Str8 length raw))
-    (mk-tok-string (%py-unescape (%py-crlf->lf (Str8 sub 3 (- len 6) raw))))))
+    (mk-tok-string (%py-unescape (%py-crlf->lf (Str8 sub 3 (- len 6) raw)) #f))))
 
 (def %py-t-tsq
   (list

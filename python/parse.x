@@ -376,6 +376,14 @@
 
 ; Calls, left-associative so f(1)(2) works when there is something to return a
 ; callable.  Subscripts and attributes belong here too and are not here yet.
+; (joined-text . rest): the literal plus every literal of the same kind that
+; follows it directly.
+(def %py-adjacent
+  (fn (self tag acc toks)
+    (if (if (null? toks) #f (eq? (%py-tag (first toks)) tag))
+      (self tag (Str8 append acc (%py-val (first toks))) (rest toks))
+      (pair acc toks))))
+
 (set! %py-postfix
   (fn (_ toks)
     (def %a (%py-atom toks))
@@ -744,9 +752,11 @@
             ; QUOTED, because the form is evaluated: a bare string literal is
             ; self-evaluating in x, but a form built here is handed to eval!,
             ; and an unquoted string in head position would be called.
-            (pair (%py-val t) (rest toks))
+            ; ADJACENT LITERALS CONCATENATE: "a" "b" is "ab".
+            (%py-adjacent (lit tok-string) (%py-val t) (rest toks))
           (if (eq? (%py-tag t) (lit tok-bytes))
-            (pair (list (lit %py-mkbytes) (%py-val t)) (rest toks))
+            (let ((r (%py-adjacent (lit tok-bytes) (%py-val t) (rest toks))))
+              (pair (list (lit %py-mkbytes) (first r)) (rest r)))
           (if (eq? (%py-tag t) (lit tok-fstring))
             (pair (%py-fstring-form (%py-val t)) (rest toks))
             (if (%py-super-call? toks)
