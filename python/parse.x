@@ -364,7 +364,7 @@
     (def %go
       (fn (self acc more)
         (if (%py-group? (if (null? more) () (first more)) "(")
-          (self (pair acc (%py-group-exprs (%py-group-of (first more))))
+          (self (%py-call-form acc (%py-group-of (first more)))
                 (rest more))
           ; Attribute access binds like a call, and yields a VALUE -- the
           ; bound method -- so `f = x.append` works and a following `(` simply
@@ -444,6 +444,33 @@
 
 (def %py-group-exprs
   (fn (_ elems) (%py-exprs-of (%py-comma-split elems () ()) ())))
+
+; A CALL WITH A *spread BECOMES apply: the argument parts are gathered into
+; segments -- (list e1 e2) for plain arguments, (%py-iter-elems s) for a
+; spread -- and %py-splat concatenates them into the one argument list.
+; Without a spread the call is the plain form it always was.
+(def %py-spread-part?
+  (fn (_ part) (if (null? part) #f (%py-op-is? (first part) "*"))))
+
+(def %py-call-form
+  (fn (_ f elems)
+    (def parts (%py-comma-split elems () ()))
+    (def any-spread
+      (fn (self ps)
+        (if (null? ps) #f (if (%py-spread-part? (first ps)) #t (self (rest ps))))))
+    (if (not (any-spread parts))
+      (pair f (%py-exprs-of parts ()))
+      (do
+        (def segs
+          (fn (self ps run acc)
+            (if (null? ps)
+              (List reverse (if (null? run) acc (pair (pair (lit list) (List reverse run)) acc)))
+              (if (%py-spread-part? (first ps))
+                (self (rest ps) ()
+                  (pair (list (lit %py-iter-elems) (%py-expr-of (rest (first ps))))
+                    (if (null? run) acc (pair (pair (lit list) (List reverse run)) acc))))
+                (self (rest ps) (pair (%py-expr-of (first ps)) run) acc)))))
+        (list (lit apply) f (pair (lit %py-splat) (segs parts () ())))))))
 
 ; A dict entry: KEY : VALUE, split at the first colon of one comma-part.
 (def %py-colon-split
@@ -663,6 +690,8 @@
             (pair (%py-val t) (rest toks))
           (if (eq? (%py-tag t) (lit tok-bytes))
             (pair (list (lit %py-mkbytes) (%py-val t)) (rest toks))
+          (if (eq? (%py-tag t) (lit tok-fstring))
+            (pair (%py-fstring-form (%py-val t)) (rest toks))
             (if (%py-super-call? toks)
               ; `super()` -- the group is consumed with the name
               (if (null? (first %py-current-class))
@@ -702,7 +731,87 @@
                         (pair (lit %py-mktuple) (%py-group-exprs elems))
                         (rest toks))
                       (pair (%py-expr-of elems) (rest toks)))))
-                (Err raise (lit syntax) "unexpected token in expression" t)))))))))))))
+                (Err raise (lit syntax) "unexpected token in expression" t))))))))))))))
+
+; --- f-strings ---------------------------------------------------------------
+;
+; AN f-STRING IS A JOIN OF PARTS, expanded at parse time: literal text between
+; fields, and for each {expr!conv:spec} a (%py-fmtfield EXPR "conv" SPEC)
+; form whose EXPR is the field's source re-tokenized and parsed right here,
+; and whose SPEC is a plain string or -- when it holds fields of its own, the
+; nested-replacement case -- another expansion.  {{ and }} are literal braces.
+(def %py-fs-code (fn (_ s i) (%py-char->int (Str8 ref i s))))
+
+; The index of the } that closes the field opened at i (which is just past
+; the {), counting nested braces.
+(def %py-fs-close
+  (fn (self s i depth)
+    (if (>= i (Str8 length s))
+      (Err raise (lit syntax) "f-string: expecting '}'" ())
+      (let ((c (%py-fs-code s i)))
+        (if (= c 123) (self s (+ i 1) (+ depth 1))
+          (if (= c 125)
+            (if (= depth 0) i (self s (+ i 1) (- depth 1)))
+            (self s (+ i 1) depth)))))))
+
+; The first ! or : at nesting depth zero inside a field, or nil.
+(def %py-fs-split
+  (fn (self s i depth)
+    (if (>= i (Str8 length s))
+      ()
+      (let ((c (%py-fs-code s i)))
+        (if (if (= c 40) #t (if (= c 91) #t (= c 123))) (self s (+ i 1) (+ depth 1))
+          (if (if (= c 41) #t (if (= c 93) #t (= c 125))) (self s (+ i 1) (- depth 1))
+            (if (if (= depth 0) (if (= c 33) #t (= c 58)) #f)
+              i
+              (self s (+ i 1) depth))))))))
+
+(def %py-fstring-field
+  (fn (_ field)
+    (def n (Str8 length field))
+    (def at (%py-fs-split field 0 0))
+    (def expr-s (if (null? at) field (Str8 sub 0 at field)))
+    (def tail (if (null? at) "" (Str8 sub at (- n at) field)))
+    ; !conv comes first if present, then :spec
+    (def conv
+      (if (if (> (Str8 length tail) 1) (= (%py-fs-code tail 0) 33) #f)
+        (Str8 sub 1 1 tail)
+        ""))
+    (def after-conv
+      (if (Str8 =? conv "") tail (Str8 sub 2 (- (Str8 length tail) 2) tail)))
+    (def spec
+      (if (if (> (Str8 length after-conv) 0) (= (%py-fs-code after-conv 0) 58) #f)
+        (Str8 sub 1 (- (Str8 length after-conv) 1) after-conv)
+        ""))
+    (if (= (Str8 length (Str8 trim expr-s)) 0)
+      (Err raise (lit syntax) "f-string: empty expression not allowed" ())
+      (list (lit %py-fmtfield)
+        (%py-expr-of (python-tokenize expr-s))
+        conv
+        (if (null? (Str8 index-of "{" spec)) spec (%py-fstring-form spec))))))
+
+(def %py-fstring-form
+  (fn (_ s)
+    (def n (Str8 length s))
+    (def go
+      (fn (self i lit acc)
+        (def flush (fn (_) (if (Str8 =? lit "") acc (pair lit acc))))
+        (if (>= i n)
+          (List reverse (flush))
+          (let ((c (%py-fs-code s i)))
+            (if (= c 123)
+              (if (if (< (+ i 1) n) (= (%py-fs-code s (+ i 1)) 123) #f)
+                (self (+ i 2) (Str8 append lit "{") acc)
+                (let ((close (%py-fs-close s (+ i 1) 0)))
+                  (self (+ close 1) ""
+                    (pair (%py-fstring-field (Str8 sub (+ i 1) (- close (+ i 1)) s))
+                      (flush)))))
+              (if (= c 125)
+                (if (if (< (+ i 1) n) (= (%py-fs-code s (+ i 1)) 125) #f)
+                  (self (+ i 2) (Str8 append lit "}") acc)
+                  (Err raise (lit syntax) "f-string: single '}' is not allowed" ()))
+                (self (+ i 1) (Str8 append lit (Str8 sub i 1 s)) acc)))))))
+    (list (lit %py-fjoin) (pair (lit list) (go 0 "" ())))))
 
 ; A Python name becomes an x symbol, EXCEPT the builtins that have a runtime
 ; function -- `print` is the only one so far.  A name table rather than a
@@ -736,6 +845,8 @@
         (list "complex"   (lit %py-cls-complex))
         (list "hash"      (lit %py-hash))
         (list "NotImplemented" (lit %py-NotImplemented))
+        (list "chr"       (lit %py-chr))
+        (list "ord"       (lit %py-ord))
         (list "StopIteration"  (lit %py-exc-StopIteration))
         ; The builtin exceptions are ordinary names bound to ordinary class
         ; values, so `except ValueError` and `except MyError` take one path.
@@ -1046,6 +1157,11 @@
 
 ; The names inside a group, commas ignored -- shared by `except (A, B)` and a
 ; def's parameter list, which are the same shape once the bracket is a group.
+; `*rest` IS THE LAST PARAMETER: its name joins the list like any other (so
+; the locals hoist skips it) and the def reads the cell to build a dotted
+; parameter list.  `**kw` is refused by name until keyword arguments exist.
+(def %py-rest-param (pair () ()))
+
 (def %py-group-names
   (fn (self toks acc)
     (if (null? toks)
@@ -1053,9 +1169,27 @@
       (let ((t (first toks)))
         (if (%py-op-is? t ",")
           (self (rest toks) acc)
+          (if (%py-op-is? t "**")
+            (Err raise (lit syntax) "**kwargs parameters are not supported yet" t)
+          (if (%py-op-is? t "*")
+            (let ((n (if (null? (rest toks)) () (first (rest toks)))))
+              (if (not (eq? (%py-tag n) (lit tok-name)))
+                (Err raise (lit syntax) "expected a name after *" t)
+                (do
+                  (%set-first! %py-rest-param (%py-name->sym (%py-val n)))
+                  (self (rest (rest toks)) (pair (%py-name->sym (%py-val n)) acc)))))
           (if (eq? (%py-tag t) (lit tok-name))
             (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
-            (Err raise (lit syntax) "expected a name" t)))))))
+            (Err raise (lit syntax) "expected a name" t)))))))))
+
+; (a b . rest) -- the parameter list with the rest name as the dotted tail.
+(def %py-dotted-params
+  (fn (self names rest-sym)
+    (if (null? names)
+      rest-sym
+      (if (if (null? (rest names)) (eq? (first names) rest-sym) #f)
+        rest-sym
+        (pair (first names) (self (rest names) rest-sym))))))
 
 (def %py-except-clause
   (fn (_ toks)
@@ -1348,8 +1482,11 @@
         (Err raise (lit syntax) "expected a function name after def" name)
         (if (not (%py-group? (if (null? (rest toks)) () (first (rest toks))) "("))
           (Err raise (lit syntax) "expected ( after a function name" ())
-          (let ((p (pair (%py-group-names (%py-group-of (first (rest toks))) ())
-                         (rest (rest toks)))))
+          (let ((p (do
+                     (%set-first! %py-rest-param ())
+                     (pair (%py-group-names (%py-group-of (first (rest toks))) ())
+                           (rest (rest toks))))))
+            (def rest-sym (first %py-rest-param))
             (let ((outer-self (first %py-current-self)))
               (%set-first! %py-current-self
                 (if (null? (first p)) () (first (first p))))
@@ -1383,13 +1520,32 @@
                     ; nil the body's last expression would leak out as the
                     ; return value.
                     (list (lit def) (%py-name->sym (%py-val name))
-                      (list (lit fn) (pair (lit _) (first p))
+                      (list (lit fn)
+                        (pair (lit _)
+                          (if (null? rest-sym)
+                            (first p)
+                            (%py-dotted-params (first p) rest-sym)))
                         (list (lit %py-callcc)
                           (list (lit fn) (list (lit _) (lit %py-return))
+                            ; %seq TAKES TWO FORMS -- the tokenizer's
+                            ; sequencing form, not a variadic do -- so the
+                            ; rest-tuple prelude nests a second %seq rather
+                            ; than growing a third arm (a third arm silently
+                            ; dropped the trailing nil, and a function that
+                            ; fell off its end stopped answering None).
                             (list (lit %seq)
-                              (if (null? locals)
-                                (first b)
-                                (list (lit let) (%py-lets locals ()) (first b)))
+                              (if (null? rest-sym)
+                                (if (null? locals)
+                                  (first b)
+                                  (list (lit let) (%py-lets locals ()) (first b)))
+                                ; the rest arrives as an x list; Python hands
+                                ; the function a TUPLE
+                                (list (lit %seq)
+                                  (list (lit set!) rest-sym
+                                    (list (lit %py-tuple-of-list) rest-sym))
+                                  (if (null? locals)
+                                    (first b)
+                                    (list (lit let) (%py-lets locals ()) (first b)))))
                               ())))))
                     (%seq (%set-first! %py-current-self outer-self) (rest b)))))))))))))
 

@@ -47,7 +47,7 @@
 (provide python/tokens
   python-tokenize %py-base
   mk-tok-name mk-tok-number mk-tok-string mk-tok-op mk-tok-newline
-  mk-tok-bytes mk-tok-group mk-tok-block)
+  mk-tok-bytes mk-tok-fstring mk-tok-group mk-tok-block)
 
 ; (Base make-tok) is the isolated, type-free base -- 2024's make-token-base.
 (import x/reader/indent)
@@ -74,6 +74,8 @@
 (def mk-tok-string  (fn (_ s) (list (lit tok-string) s)))
 (def mk-tok-op      (fn (_ s) (list (lit tok-op) s)))
 (def mk-tok-bytes   (fn (_ s) (list (lit tok-bytes) s)))
+; An f-string keeps its RAW (unescaped) text; the parser splits the fields.
+(def mk-tok-fstring (fn (_ s) (list (lit tok-fstring) s)))
 ; A bracketed run, already nested by the reader: (tok-group "[" (tok ...)).
 (def mk-tok-group   (fn (_ open elems) (list (lit tok-group) open elems)))
 ; An indented run, already nested by the reader: (tok-block (tok ...)).
@@ -537,6 +539,31 @@
 (Base make-type %py-base "PY-BSQ" %py-t-bsq)
 (Base make-type %py-base "PY-BDQ" %py-t-bdq)
 
+; --- PY-FSQ / PY-FDQ: f-strings, f'...' and f"..." ---------------------------
+; The same shape as the bytes prefix: f or F, then a quote, then the string
+; types' own body states.  The lexeme is unescaped here and handed to the
+; parser whole -- the fields are grammar, not lexis.
+(def %py-fstring-read
+  (fn (_ . args)
+    (def raw (%buffer-token (first args)))
+    (def len (Str8 length raw))
+    (mk-tok-fstring (%py-unescape (Str8 sub 2 (- len 3) raw)))))
+
+(def %py-t-fsq
+  (list
+    (pair (lit analyse)
+      (fn (_ buffer score chr)
+        (if (if (= chr 102) #t (= chr 70)) %py-bsq-start ())))
+    (pair (lit read) %py-fstring-read)))
+(def %py-t-fdq
+  (list
+    (pair (lit analyse)
+      (fn (_ buffer score chr)
+        (if (if (= chr 102) #t (= chr 70)) %py-bdq-start ())))
+    (pair (lit read) %py-fstring-read)))
+(Base make-type %py-base "PY-FSQ" %py-t-fsq)
+(Base make-type %py-base "PY-FDQ" %py-t-fdq)
+
 ; --- PY-OP: operators and delimiters -----------------------------------------
 ; LONGEST MATCH MATTERS AND IS EASY TO GET WRONG.  `//` is floor division and
 ; `/` is true division; `**` is power; `==` `!=` `<=` `>=` are comparisons and
@@ -878,6 +905,8 @@
     ; interpreted twins, reached through the same globals either way
     (Base make-type b "PY-BSQ" %py-t-bsq)
     (Base make-type b "PY-BDQ" %py-t-bdq)
+    (Base make-type b "PY-FSQ" %py-t-fsq)
+    (Base make-type b "PY-FDQ" %py-t-fdq)
     (Base make-type b "PY-OP" %py-t-op)
     (reg "PY-CLOSE" e-close %py-t-close)
     (reg "PY-OPEN" e-open %py-t-open)

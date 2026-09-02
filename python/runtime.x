@@ -50,7 +50,9 @@
   %py-pos %py-invert %py-in %py-bitor %py-bitxor %py-bitand
   %py-abs %py-round %py-min %py-max %py-bytearray %py-mkbytes
   %py-cls-complex %py-hash %py-lshift %py-rshift
-  %py-NotImplemented %py-exc-StopIteration)
+  %py-NotImplemented %py-exc-StopIteration
+  %py-splat %py-tuple-of-list %py-fjoin %py-fmtfield %py-format-spec %py-strformat
+  %py-chr %py-ord)
 
 ; --- Arithmetic --------------------------------------------------------------
 ; `+` dispatches on the operands, and the string case is not an extra: Python
@@ -941,9 +943,353 @@
       (fn (_ sub)
         (let ((i (Str8 index-of sub s)))
           (if (null? i) (- 0 1) i)))
+    (if (Str8 =? name "format")
+      (fn (_ . args) (%py-strformat s args))
       (Err raise (lit attribute)
         (Str8 append (Str8 append "'str' object has no attribute '" name) "'")
-        ()))))))))))))
+        ())))))))))))))
+
+; chr() and ord(): the engine's int->char door and the char->int one, with
+; the one-character string built the way the tokenizer builds strings.
+(def %py-int->char (prim-ref (lit int) (lit ->char)))
+(def %py-chr
+  (fn (_ n)
+    (if (eq? (%py-num-kind (if (eq? n #t) 1 (if (eq? n #f) 0 n))) (lit int))
+      (%py-list->string (list (%py-int->char (if (eq? n #t) 1 (if (eq? n #f) 0 n)))))
+      (Err raise (lit type) "an integer is required" ()))))
+; ord() counts CODE POINTS, not bytes: chr(955) is a two-byte string that
+; is one character, so the utf-8-aware Str class measures and indexes it.
+(def %py-ord
+  (fn (_ s)
+    (if (if (str? s) (= (Str length s) 1) #f)
+      (%py-char-code (Str ref 0 s))
+      (Err raise (lit type) "ord() expected a character" ()))))
+
+; --- The format-spec mini-language -------------------------------------------
+;
+; [[fill]align][sign][#][0][width][,][.precision][type], shared by str.format
+; and f-strings.  The numeric bodies are the %-operator's, on the exact
+; digits (python/format.x); what differs here is the framing -- fill and
+; alignment, = for sign-aware padding, thousands grouping, the % type, and
+; the empty type's rules.  Every unknown type is Python's ValueError.
+(def %py-spec-code (fn (_ s i) (%py-char-code (%str-ref s i))))
+
+; The parsed spec, as a list: (fill align sign alt zero width comma prec type)
+(def %py-spec-parse
+  (fn (_ spec)
+    (def n (Str8 length spec))
+    (def align? (fn (_ c) (if (= c 60) #t (if (= c 62) #t (if (= c 94) #t (= c 61))))))
+    ; fill+align if the SECOND char is an align char, else align alone
+    (def i0 0)
+    (def fill " ")
+    (def align ())
+    (if (if (>= n 2) (align? (%py-spec-code spec 1)) #f)
+      (do (set! fill (Str8 sub 0 1 spec))
+          (set! align (Str8 sub 1 1 spec))
+          (set! i0 2))
+      (if (if (>= n 1) (align? (%py-spec-code spec 0)) #f)
+        (do (set! align (Str8 sub 0 1 spec)) (set! i0 1))
+        ()))
+    (def i i0)
+    (def sign "")
+    (if (if (< i n) (let ((c (%py-spec-code spec i))) (if (= c 43) #t (if (= c 45) #t (= c 32)))) #f)
+      (do (set! sign (Str8 sub i 1 spec)) (set! i (+ i 1))) ())
+    (def alt #f)
+    (if (if (< i n) (= (%py-spec-code spec i) 35) #f)
+      (do (set! alt #t) (set! i (+ i 1))) ())
+    (def zero #f)
+    (if (if (< i n) (= (%py-spec-code spec i) 48) #f)
+      (do (set! zero #t) (set! i (+ i 1))) ())
+    (def num
+      (fn (self j acc)
+        (if (if (< j n) (%py-fmt-digit? (%py-spec-code spec j)) #f)
+          (self (+ j 1) (+ (* acc 10) (- (%py-spec-code spec j) 48)))
+          (pair j acc))))
+    (def w (num i 0))
+    (def width (if (= (first w) i) () (rest w)))
+    (set! i (first w))
+    (def comma #f)
+    (if (if (< i n) (= (%py-spec-code spec i) 44) #f)
+      (do (set! comma #t) (set! i (+ i 1))) ())
+    (def prec ())
+    (if (if (< i n) (= (%py-spec-code spec i) 46) #f)
+      (let ((p (num (+ i 1) 0)))
+        (if (= (first p) (+ i 1))
+          (Err raise (lit value) "Format specifier missing precision" ())
+          (do (set! prec (rest p)) (set! i (first p)))))
+      ())
+    (def type (if (< i n) (Str8 sub i 1 spec) ""))
+    (if (< (+ i 1) n)
+      (Err raise (lit value) "Invalid format specifier" ())
+      (list fill align sign alt zero width comma prec type))))
+
+(def %py-spec-pad
+  (fn (_ s width fill align default-align sgn)
+    ; sgn is a sign already split off for = alignment; s is the body
+    (def total (+ (Str8 length sgn) (Str8 length s)))
+    (def a (if (null? align) default-align align))
+    (def rep (fn (self k) (if (<= k 0) "" (Str8 append fill (self (- k 1))))))
+    (if (if (null? width) #t (>= total width))
+      (Str8 append sgn s)
+      (let ((padn (- width total)))
+        (if (Str8 =? a "<") (Str8 append (Str8 append sgn s) (rep padn))
+        (if (Str8 =? a ">") (Str8 append (rep padn) (Str8 append sgn s))
+        (if (Str8 =? a "=") (Str8 append sgn (Str8 append (rep padn) s))
+          ; ^ centres, the extra space on the right
+          (let ((l (Num quotient padn 2)))
+            (Str8 append (rep l) (Str8 append (Str8 append sgn s) (rep (- padn l))))))))))))
+
+; Thousands grouping on a digit string.
+(def %py-group3
+  (fn (_ ds)
+    (def n (Str8 length ds))
+    (def go
+      (fn (self i acc)
+        (if (<= i 0)
+          acc
+          (let ((start (if (< (- i 3) 0) 0 (- i 3))))
+            (self start
+              (if (Str8 =? acc "")
+                (Str8 sub start (- i start) ds)
+                (Str8 append (Str8 sub start (- i start) ds) (Str8 append "," acc))))))))
+    (go n "")))
+
+(def %py-format-spec
+  (fn (_ v spec)
+    (if (Str8 =? spec "")
+      (%py-str v)
+      (do
+        (def ps (%py-spec-parse spec))
+        (def fill (List ref 0 ps))
+        (def align (List ref 1 ps))
+        (def sign (List ref 2 ps))
+        (def alt (List ref 3 ps))
+        (def zero (List ref 4 ps))
+        (def width (List ref 5 ps))
+        (def comma (List ref 6 ps))
+        (def prec (List ref 7 ps))
+        (def type (List ref 8 ps))
+        (def tc (if (Str8 =? type "") 0 (%py-spec-code type 0)))
+        ; the 0 flag is fill 0 with = alignment, for numbers
+        (def fill2 (if (if zero (Str8 =? fill " ") #f) "0" fill))
+        (def align2 (if (if zero (null? align) #f) "=" align))
+        (if (if (str? v) #t (if (= tc 115) #t (if (%py-obj-is v) #t (if (null? v) #t (if (%py-list? v) #t (%py-tuple-is v))))))
+          ; strings (and anything shown as its str): s or empty type only
+          (if (if (not (= tc 0)) (not (= tc 115)) #f)
+            (Err raise (lit value)
+              (Str8 append "Unknown format code '" (Str8 append type "' for object of type 'str'")) ())
+            (let ((s0 (%py-str v)))
+              (let ((s (if (if (not (null? prec)) (> (Str8 length s0) prec) #f) (Str8 sub 0 prec s0) s0)))
+                (%py-spec-pad s width fill align "<" ""))))
+          (do
+            (def w (if (eq? v #t) 1 (if (eq? v #f) 0 v)))
+            (def kind (%py-num-kind w))
+            (if (null? kind)
+              (Err raise (lit type) "unsupported format string passed to object.__format__" ())
+              ())
+            ; integers with an integer or empty type
+            (if (if (eq? kind (lit int)) (= tc 99) #f)
+              ; c: the character with that code point, as text
+              (%py-spec-pad (%py-chr w) width fill align "<" "")
+            (if (if (eq? kind (lit int))
+                  (if (= tc 0) #t (if (= tc 100) #t (if (= tc 120) #t (if (= tc 88) #t (if (= tc 111) #t (if (= tc 98) #t (= tc 110)))))))
+                  #f)
+              (do
+                (if (not (null? prec))
+                  (Err raise (lit value) "Precision not allowed in integer format specifier" ())
+                  ())
+                (def m
+                  (if (if (= tc 120) #t (= tc 88))
+                    (%py-fmt-base w 16 (if (= tc 88) "0123456789ABCDEF" "0123456789abcdef"))
+                    (if (= tc 111) (%py-fmt-base w 8 "01234567")
+                      (if (= tc 98) (%py-fmt-base w 2 "01")
+                        (%py-fmt-int-mag w)))))
+                (def digits (if comma (%py-group3 (rest m)) (rest m)))
+                (def pfx (if alt (if (= tc 120) "0x" (if (= tc 88) "0X" (if (= tc 111) "0o" (if (= tc 98) "0b" "")))) ""))
+                (def sgn (Str8 append (%py-fmt-sign (first m) (Str8 =? sign "+") (Str8 =? sign " ")) pfx))
+                (%py-spec-pad digits width fill2 align2 ">" sgn))
+              ; floats -- and ints asked for a float type
+              (if (if (= tc 0) #t (if (= tc 101) #t (if (= tc 69) #t (if (= tc 102) #t (if (= tc 70) #t (if (= tc 103) #t (if (= tc 71) #t (if (= tc 110) #t (= tc 37)))))))))
+                (do
+                  (def fv (%py-fmt-float-of w))
+                  (def ex (%py-f-exact fv))
+                  (def ekind (first ex))
+                  (def neg (Str8 =? (first (rest ex)) "-"))
+                  (def upper (if (= tc 69) #t (if (= tc 70) #t (= tc 71))))
+                  (def sgn (%py-fmt-sign neg (Str8 =? sign "+") (Str8 =? sign " ")))
+                  (if (not (eq? ekind (lit num)))
+                    ; inf and nan pad like any number -- '{:06e}' of inf is
+                    ; 000inf (measured, not assumed)
+                    (let ((body0 (if (eq? ekind (lit inf)) "inf" "nan")))
+                      (let ((body (Str8 append (if upper (Str8 upcase body0) body0) (if (= tc 37) "%" ""))))
+                        (%py-spec-pad body width fill2 align2 ">" sgn)))
+                    (do
+                      (def D (first (rest (rest ex))))
+                      (def x10 (first (rest (rest (rest ex)))))
+                      (def p (if (null? prec) 6 prec))
+                      (def body
+                        (if (if (= tc 101) #t (= tc 69)) (%py-fmt-e D x10 p upper)
+                        (if (if (= tc 102) #t (= tc 70)) (%py-fmt-f D x10 p)
+                        (if (if (= tc 103) #t (if (= tc 71) #t (= tc 110))) (%py-fmt-g D x10 p upper alt)
+                        (if (= tc 37)
+                          ; percent: value * 100 in f notation, then %
+                          (let ((ex2 (%py-f-exact (* fv 100.0))))
+                            (Str8 append (%py-fmt-f (first (rest (rest ex2))) (first (rest (rest (rest ex2)))) p) "%"))
+                          ; the empty type: repr without precision; with
+                          ; precision like g, but a fixed result keeps at
+                          ; least one digit after the point
+                          (if (null? prec)
+                            (let ((r (%py-frepr fv))) (if neg (Str8 sub 1 (- (Str8 length r) 1) r) r))
+                            ; like g, but scientific already when the
+                            ; exponent reaches p-1 (format(0.0, '.1') is
+                            ; 0e+00), and fixed keeps one digit past the point
+                            (let ((sc (%py-fmt-sci D x10 (- p 1))))
+                              (let ((xa (first (rest (rest sc)))))
+                                (if (if (>= xa (- 0 4)) (< xa (- p 1)) #f)
+                                  (let ((g (%py-fmt-g D x10 p #f #f)))
+                                    (if (null? (Str8 index-of "." g)) (Str8 append g ".0") g))
+                                  (let ((fp (%py-fmt-strip0 (first (rest sc)))))
+                                    (Str8 append
+                                      (if (= (Str8 length fp) 0) (first sc)
+                                        (Str8 append (first sc) (Str8 append "." fp)))
+                                      (%py-fmt-exp-str xa #f))))))))))))
+                      (def body2 (if comma (%py-comma-float body) body))
+                      (%py-spec-pad body2 width fill2 align2 ">" sgn))))
+                (Err raise (lit value)
+                  (Str8 append "Unknown format code '"
+                    (Str8 append type
+                      (Str8 append "' for object of type '"
+                        (Str8 append (if (eq? kind (lit int)) "int" "float") "'")))) ()))))))))))
+
+; Grouping on a float body: only the integer digits before the point.
+(def %py-comma-float
+  (fn (_ body)
+    (let ((dot (Str8 index-of "." body)))
+      (if (null? dot)
+        (%py-group3 body)
+        (Str8 append (%py-group3 (Str8 sub 0 dot body))
+          (Str8 sub dot (- (Str8 length body) dot) body))))))
+
+; One field of an f-string or a .format template: conversion then spec.
+(def %py-fmtfield
+  (fn (_ v conv spec)
+    (let ((cv (if (Str8 =? conv "r") (%py-repr-of v)
+              (if (Str8 =? conv "s") (%py-str v)
+              (if (Str8 =? conv "a") (%py-repr-of v)
+              (if (Str8 =? conv "") v
+                (Err raise (lit value) "Unknown conversion specifier" ())))))))
+      (%py-format-spec cv spec))))
+
+(def %py-fjoin
+  (fn (_ parts)
+    (def go (fn (self ps acc) (if (null? ps) acc (self (rest ps) (Str8 append acc (first ps))))))
+    (go parts "")))
+
+; str.format: the same template grammar as an f-string, walked at RUNTIME
+; against positional arguments -- {} auto-numbers, {2} indexes, and a field's
+; .attr / [key] tail is followed.  A spec may itself contain fields
+; ({:{}} takes its width from the next argument).  Keyword fields wait on
+; keyword arguments.
+(def %py-strformat
+  (fn (_ tpl args)
+    (def n (Str8 length tpl))
+    (def auto (pair 0 ()))
+    (def argn (List length args))
+    (def arg-at
+      (fn (_ i)
+        (if (>= i argn)
+          (Err raise (lit index) "Replacement index out of range for positional args tuple" ())
+          (List ref i args))))
+    (def resolve
+      (fn (_ name)
+        ; name: "" | digits | identifier, followed by .attr / [key] tails
+        (def nn (Str8 length name))
+        (def head-end
+          (fn (self j)
+            (if (>= j nn) j
+              (let ((c (%py-spec-code name j)))
+                (if (if (= c 46) #t (= c 91)) j (self (+ j 1)))))))
+        (def he (head-end 0))
+        (def head (Str8 sub 0 he name))
+        (def base
+          (if (Str8 =? head "")
+            (let ((i (first auto))) (%set-first! auto (+ i 1)) (arg-at i))
+            (if (%py-fmt-digit? (%py-spec-code head 0))
+              (arg-at (%py-int-of-str head))
+              (Err raise (lit key) (Str8 append "keyword field not supported: " head) ()))))
+        (def head-end-from
+          (fn (_ j)
+            (def go (fn (self k) (if (>= k nn) k (let ((c (%py-spec-code name k))) (if (if (= c 46) #t (= c 91)) k (self (+ k 1)))))))
+            (go j)))
+        (def tail
+          (fn (self j v)
+            (if (>= j nn) v
+              (let ((c (%py-spec-code name j)))
+                (if (= c 46)
+                  (let ((e (head-end-from (+ j 1))))
+                    (self e (%py-getattr v (Str8 sub (+ j 1) (- e (+ j 1)) name))))
+                  (let ((close (Str8 index-of "]" (Str8 sub j (- nn j) name))))
+                    (if (null? close)
+                      (Err raise (lit value) "Missing ']' in format string" ())
+                      (let ((key (Str8 sub (+ j 1) (- close 1) name)))
+                        (self (+ j close 1)
+                          (%py-index v
+                            (if (%py-fmt-digit? (%py-spec-code key 0)) (%py-int-of-str key) key)))))))))))
+        (tail he base)))
+    (def go
+      (fn (self i acc)
+        (if (>= i n)
+          acc
+          (let ((c (%py-spec-code tpl i)))
+            (if (= c 123)
+              (if (if (< (+ i 1) n) (= (%py-spec-code tpl (+ i 1)) 123) #f)
+                (self (+ i 2) (Str8 append acc "{"))
+                (let ((close (%py-fs-close tpl (+ i 1) 0)))
+                  (let ((field (Str8 sub (+ i 1) (- close (+ i 1)) tpl)))
+                    (def fn0 (Str8 length field))
+                    (def at (%py-fs-split field 0 0))
+                    (def name (if (null? at) field (Str8 sub 0 at field)))
+                    (def tl (if (null? at) "" (Str8 sub at (- fn0 at) field)))
+                    (def conv
+                      (if (if (> (Str8 length tl) 1) (= (%py-spec-code tl 0) 33) #f)
+                        (Str8 sub 1 1 tl) ""))
+                    (def after (if (Str8 =? conv "") tl (Str8 sub 2 (- (Str8 length tl) 2) tl)))
+                    (def spec0
+                      (if (if (> (Str8 length after) 0) (= (%py-spec-code after 0) 58) #f)
+                        (Str8 sub 1 (- (Str8 length after) 1) after) ""))
+                    ; the VALUE takes its auto-number before a nested spec
+                    ; draws width or precision from the args that follow it
+                    (def v (resolve name))
+                    (def spec (if (null? (Str8 index-of "{" spec0)) spec0 (%py-strformat-sub spec0 args auto)))
+                    (self (+ close 1) (Str8 append acc (%py-fmtfield v conv spec))))))
+              (if (= c 125)
+                (if (if (< (+ i 1) n) (= (%py-spec-code tpl (+ i 1)) 125) #f)
+                  (self (+ i 2) (Str8 append acc "}"))
+                  (Err raise (lit value) "Single '}' encountered in format string" ()))
+                (self (+ i 1) (Str8 append acc (Str8 sub i 1 tpl)))))))))
+    (go 0 "")))
+
+; A nested spec shares the caller's auto-counter: {:{}} consumes the next
+; positional argument for its width.
+(def %py-strformat-sub
+  (fn (_ tpl args auto)
+    (def n (Str8 length tpl))
+    (def argn (List length args))
+    (def go
+      (fn (self i acc)
+        (if (>= i n)
+          acc
+          (let ((c (%py-spec-code tpl i)))
+            (if (= c 123)
+              (let ((close (%py-fs-close tpl (+ i 1) 0)))
+                (let ((name (Str8 sub (+ i 1) (- close (+ i 1)) tpl)))
+                  (let ((v (if (Str8 =? name "")
+                             (let ((k (first auto))) (%set-first! auto (+ k 1))
+                               (if (>= k argn) (Err raise (lit index) "Replacement index out of range" ()) (List ref k args)))
+                             (List ref (%py-int-of-str name) args))))
+                    (self (+ close 1) (Str8 append acc (%py-str v))))))
+              (self (+ i 1) (Str8 append acc (Str8 sub i 1 tpl))))))))
+    (go 0 "")))
 
 (def %py-drop-last
   (fn (self lst)
@@ -1648,6 +1994,17 @@
 ; --- Tuples ------------------------------------------------------------------
 
 (def %py-mktuple (fn (_ . elems) (%py-tuple-new elems)))
+; A *rest parameter arrives as an x list and becomes the tuple Python hands
+; the function; a *spread at a call site concatenates argument segments.
+(def %py-tuple-of-list (fn (_ l) (%py-tuple-new l)))
+(def %py-splat
+  (fn (_ . segs)
+    (def cat
+      (fn (self ss)
+        (if (null? ss) ()
+          (if (null? (first ss)) (self (rest ss))
+            (pair (first (first ss)) (self (pair (rest (first ss)) (rest ss))))))))
+    (cat segs)))
 (def %py-tuple? (fn (_ v) (%py-tuple-is v)))
 
 ; UNPACKING IS A LENGTH CHECK AND A WALK.  `a, b = f()` is the reason tuples
@@ -1730,6 +2087,9 @@
   (fn (_ v)
     (if (str? v)
       v
+      (if (null? v) "None"
+      (if (eq? v #t) "True"
+      (if (eq? v #f) "False"
       (if (%py-float-is v)
         (%py-frepr v)
       (if (%py-complex-is v)
@@ -1739,15 +2099,18 @@
           (v msg)
           (if (%py-obj-is v)
             (%py-obj-str v)
-            (%py-write-to-str v))))))))
+            (%py-write-to-str v)))))))))))
 
 (def %py-repr-of
   (fn (_ v)
+    (if (null? v) "None"
+    (if (eq? v #t) "True"
+    (if (eq? v #f) "False"
     (if (str? v)
       (Str8 append (Str8 append "'" v) "'")
       (if (%py-float-is v) (%py-frepr v)
         (if (%py-complex-is v) (%py-crepr v)
-          (if (%py-obj-is v) (%py-obj-repr v) (%py-write-to-str v)))))))
+          (if (%py-obj-is v) (%py-obj-repr v) (%py-write-to-str v))))))))))
 
 ; str(o) and repr(o) for an object: __str__ (falling back to __repr__) and
 ; __repr__, each answering a string; an exception instance's str is its
