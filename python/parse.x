@@ -451,13 +451,30 @@
       #f
       (if (%py-op-is? (first toks) ",") #t (self (rest toks))))))
 
+; A CONDITIONAL EXPRESSION sits above `or`: `a if c else b`, right-
+; associative, the value chosen by %py-truthy like every condition.  This is
+; the entry for a full expression; a comprehension's iterable and a for
+; loop's stay on %py-or-e, because there `if` opens a clause -- Python's own
+; grammar draws the line in the same place.
+(def %py-test
+  (fn (self toks)
+    (let ((r (%py-or-e toks)))
+      (if (%py-name-is? (if (null? (rest r)) () (first (rest r))) "if")
+        (let ((c (%py-or-e (rest (rest r)))))
+          (if (not (%py-name-is? (if (null? (rest c)) () (first (rest c))) "else"))
+            (Err raise (lit syntax) "expected else after a conditional expression" ())
+            (let ((e (self (rest (rest c)))))
+              (pair (list (lit if) (list (lit %py-truthy) (first c)) (first r) (first e))
+                (rest e)))))
+        r))))
+
 ; One complete expression from a complete token list -- anything left over is a
 ; syntax error HERE, where the bracket that bounded it is known.
 (def %py-expr-of
   (fn (_ toks)
     (if (null? toks)
       (Err raise (lit syntax) "expected an expression" ())
-      (let ((r (%py-or-e toks)))
+      (let ((r (%py-test toks)))
         (if (null? (rest r))
           (first r)
           (Err raise (lit syntax) "unexpected token after an expression" ()))))))
@@ -683,7 +700,7 @@
 
 (def %py-listcomp
   (fn (_ elems)
-    (let ((r (%py-or-e elems)))
+    (let ((r (%py-test elems)))
       (if (not (%py-name-is? (if (null? (rest r)) () (first (rest r))) "for"))
         (Err raise (lit syntax) "expected for in comprehension" ())
         (let ((cls (%py-comp-clauses (rest r) ())))
@@ -700,10 +717,10 @@
 
 (def %py-dictcomp
   (fn (_ elems)
-    (let ((k (%py-or-e elems)))
+    (let ((k (%py-test elems)))
       (if (not (%py-op-is? (if (null? (rest k)) () (first (rest k))) ":"))
         (Err raise (lit syntax) "expected : in dict comprehension" ())
-        (let ((v (%py-or-e (rest (rest k)))))
+        (let ((v (%py-test (rest (rest k)))))
           (if (not (%py-name-is? (if (null? (rest v)) () (first (rest v))) "for"))
             (Err raise (lit syntax) "expected for in comprehension" ())
             (let ((cls (%py-comp-clauses (rest v) ())))
@@ -724,14 +741,14 @@
           (if (eq? (%py-tag (first toks)) (lit tok-newline)) #t
             (%py-block? (first toks))))
       (pair (List reverse acc) toks)
-      (let ((r (%py-or-e toks)))
+      (let ((r (%py-test toks)))
         (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ",")
           (self (rest (rest r)) (pair (first r) acc))
           (pair (List reverse (pair (first r) acc)) (rest r)))))))
 
 (def %py-exprlist
   (fn (_ toks)
-    (let ((r (%py-or-e toks)))
+    (let ((r (%py-test toks)))
       (if (not (%py-op-is? (if (null? (rest r)) () (first (rest r))) ","))
         r
         (let ((m (%py-exprlist-rest (rest (rest r)) (list (first r)))))
@@ -1010,7 +1027,7 @@
     (let ((r (%look %py-builtins)))
       (if (pair? r) (first r) r))))
 
-(def python-parse-expr (fn (_ toks) (%py-or-e toks)))
+(def python-parse-expr (fn (_ toks) (%py-test toks)))
 
 ; --- Statements --------------------------------------------------------------
 ;
@@ -1132,7 +1149,7 @@
       ; non-nil value to x, so the bare value in an x `if` was silently wrong.
       ; bool() stated the rule once in %py-truthy; conditions now ask it.
       (if (%py-name-is? t "if")
-        (let ((c (%py-or-e (rest toks))))
+        (let ((c (%py-test (rest toks))))
           (let ((b (%py-block (rest c))))
             (let ((e (%py-else (rest b))))
               (pair
@@ -1142,7 +1159,7 @@
         (if (%py-name-is? t "for")
           (%py-for (rest toks))
         (if (%py-name-is? t "while")
-          (let ((c (%py-or-e (rest toks))))
+          (let ((c (%py-test (rest toks))))
             (let ((b (%py-block (rest c))))
               (pair
                 (list
@@ -1181,7 +1198,7 @@
               ; parser.
               (if (if (%py-op-is? t "-") #t
                     (if (%py-op-is? t "+") #t (%py-op-is? t "~")))
-                (%py-or-e toks)
+                (%py-test toks)
                 ; ASSIGNMENT IS DECIDED BY WHAT FOLLOWS A TARGET, not by the
                 ; shape of the first token.  Parse a postfix expression -- a
                 ; name, a subscript, an attribute, a call -- and then look.
@@ -1196,12 +1213,12 @@
                         (pair (%py-store (first tgt) (first r)) (rest r)))
                       (let ((aug (%py-op-sym nxt %py-aug-ops)))
                         (if (null? aug)
-                          (%py-or-e toks)
+                          (%py-test toks)
                           ; `t op= v` is `t = t op v`.  The target is evaluated
                           ; twice for a subscript, which is wrong for an
                           ; expression with side effects and right for every
                           ; case this handles today.
-                          (let ((r (%py-or-e (rest (rest tgt)))))
+                          (let ((r (%py-test (rest (rest tgt)))))
                             (pair
                               (%py-store (first tgt)
                                 (list aug (first tgt) (first r)))
@@ -1682,7 +1699,7 @@
           (let ((b (%py-block (rest t))))
             (pair (first b) (rest b)))
           (if (%py-name-is? (first t) "elif")
-            (let ((c (%py-or-e (rest t))))
+            (let ((c (%py-test (rest t))))
               (let ((b (%py-block (rest c))))
                 (let ((e (%py-else (rest b))))
                   (pair
