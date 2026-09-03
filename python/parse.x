@@ -900,7 +900,12 @@
           (if (eq? (%py-tag t) (lit tok-fstring))
             (pair (%py-fstring-form (%py-val t)) (rest toks))
             (if (%py-super-call? toks)
-              ; `super()` -- the group is consumed with the name
+              ; `super()` -- the group is consumed with the name.  With
+              ; ARGUMENTS it is the explicit two-argument form, which this
+              ; runtime does not implement: Python rejects the bad ones with
+              ; a TypeError at call time, so that check is a runtime one.
+              (if (not (null? (%py-group-of (first (rest toks)))))
+                (pair (list (lit %py-super-args)) (rest (rest toks)))
               (if (null? (first %py-current-class))
                 (Err raise (lit syntax) "super() outside a class" ())
                 (if (null? (first %py-current-self))
@@ -908,7 +913,7 @@
                   (pair
                     (list (lit %py-super)
                       (first %py-current-class) (first %py-current-self))
-                    (rest (rest toks)))))
+                    (rest (rest toks))))))
             (if (eq? (%py-tag t) (lit tok-name))
               (pair (%py-name->sym (%py-val t)) (rest toks))
               (if (%py-group? t "{")
@@ -1087,7 +1092,7 @@
         (list "dict"    (lit %py-cls-dict))
         (list "tuple"   (lit %py-cls-tuple))
         (list "isinstance" (lit %py-isinstance))
-        (list "pow"       (lit %py-pow))
+        (list "pow"       (lit %py-pow3))
         (list "abs"       (lit %py-abs))
         (list "round"     (lit %py-round))
         (list "min"       (lit %py-min))
@@ -1110,6 +1115,19 @@
         (list "iter"           (lit %py-iter))
         (list "set"            (lit %py-cls-set))
         (list "frozenset"      (lit %py-cls-frozenset))
+        (list "bin"            (lit %py-bin))
+        (list "hex"            (lit %py-hex))
+        (list "oct"            (lit %py-oct))
+        (list "divmod"         (lit %py-divmod))
+        (list "callable"       (lit %py-callable))
+        (list "id"             (lit %py-id))
+        (list "getattr"        (lit %py-getattr3))
+        (list "setattr"        (lit %py-setattr3))
+        (list "delattr"        (lit %py-delattr))
+        (list "issubclass"     (lit %py-issubclass))
+        (list "enumerate"      (lit %py-enumerate))
+        (list "filter"         (lit %py-filter))
+        (list "reversed"       (lit %py-reversed))
         (list "SystemExit"     (lit %py-exc-SystemExit))
         ; The builtin exceptions are ordinary names bound to ordinary class
         ; values, so `except ValueError` and `except MyError` take one path.
@@ -1710,7 +1728,15 @@
           (if (%py-name-is? (first t) "pass")
             (self (rest t) acc)
             (if (not (%py-name-is? (first t) "def"))
-              (Err raise (lit syntax) "a class body takes defs and pass only" ())
+              ; NAME = EXPR is a class attribute: one more entry in the same
+              ; alist the methods live in, read back unbound (runtime.x).
+              (if (if (eq? (%py-tag (first t)) (lit tok-name))
+                    (%py-op-is? (if (null? (rest t)) () (first (rest t))) "=")
+                    #f)
+                (let ((v (%py-exprlist (rest (rest t)))))
+                  (self (rest v)
+                    (pair (list (lit pair) (%py-val (first t)) (first v)) acc)))
+                (Err raise (lit syntax) "a class body takes defs, assignments and pass only" ()))
               (let ((nm (if (null? (rest t)) () (first (rest t)))))
                 (if (not (eq? (%py-tag nm) (lit tok-name)))
                   (Err raise (lit syntax) "expected a method name after def" ())
@@ -1725,12 +1751,18 @@
   (fn (_ toks)
     (if (not (%py-op-is? (if (null? toks) () (first toks)) ":"))
       (Err raise (lit syntax) "expected : after a class header" ())
+      ; `class A: pass` on the header line is a body too
+      (if (if (null? (rest toks)) #f
+            (if (eq? (%py-tag (first (rest toks))) (lit tok-newline)) #f
+              (not (%py-block? (first (rest toks))))))
+        (let ((sp (%py-line-of (rest toks) ())))
+          (pair (first (%py-class-methods-of (first sp) ())) (rest sp)))
       (let ((t (%py-skip-nl (rest toks))))
         (if (not (%py-block? (if (null? t) () (first t))))
           (Err raise (lit syntax) "expected an indented class body" ())
           (pair
             (first (%py-class-methods-of (%py-block-toks (first t)) ()))
-            (rest t)))))))
+            (rest t))))))))
 
 (def %py-class-stmt
   (fn (_ toks)

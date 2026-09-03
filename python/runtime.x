@@ -256,6 +256,20 @@
 
 ; FLOOR DIVISION OF FLOATS IS A FLOAT: 1.0 // 2 is 0.0 in Python, floor of
 ; the true quotient, where Num quotient wants exact operands.
+; THE SIGNATURE REGISTRY, EARLY: a builtin registers its parameter names
+; at LOAD time (min, max, sorted, enumerate), so these four must be
+; defined above the first of them, not with the rest of the keyword
+; machinery further down.
+(def %py-sigs (pair () ()))
+(def %py-sig!
+  (fn (_ f name names nreq has-rest)
+    (%set-first! %py-sigs (pair (pair f (list name names nreq has-rest)) (first %py-sigs)))
+    f))
+(def %py-dflt (list (lit %py-default)))
+(def %py-opt
+  (fn (_ more i dflt)
+    (if (>= i (List length more)) dflt
+      (let ((v (List ref i more))) (if (same? v %py-dflt) dflt v)))))
 (def %py-floordiv
   (fn (_ a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
@@ -266,7 +280,10 @@
         (Err raise (lit type) "can't take floor of complex number." ())
       (if (if (%py-float-is a) #t (%py-float-is b))
         (Float floor (/ (* a 1.0) b))
-        (Num quotient a b)))))))
+        ; PYTHON FLOORS, `Num quotient` TRUNCATES: -7 // 2 is -4, not -3.
+        ; Subtracting the (already floored) modulo leaves an exact multiple,
+        ; so the quotient of that is the floor with no float in the path.
+        (Num quotient (- a (Num modulo a b)) b)))))))
 ; A STRING ON THE LEFT OF % IS FORMATTING, not arithmetic -- str.__mod__ --
 ; and the check comes before the zero test because the right operand of a
 ; format is a tuple as often as a number.
@@ -293,6 +310,29 @@
 ; A FLOAT ANYWHERE MAKES IT libm's pow: Num expt squares its way through
 ; integer exponents and has no answer for 2 ** 0.5, inf or nan.  Python's
 ; one refusal on this path is 0.0 to a negative power.
+; pow(a, b, m): modular exponentiation by squaring, with Python's sign rule
+; (the result takes the modulus's sign).
+(def %py-powmod
+  (fn (_ a b m)
+    (if (= m 0)
+      (Err raise (lit value) "pow() 3rd argument cannot be 0" ())
+      (if (< b 0)
+        (Err raise (lit value) "base is not invertible for the given modulus" ())
+        (do
+          (def go
+            (fn (self base e acc)
+              (if (= e 0) acc
+                (self (Num modulo (* base base) m) (Num quotient e 2)
+                  (if (= (Num modulo e 2) 1) (Num modulo (* acc base) m) acc)))))
+          (go (Num modulo a m) b (Num modulo 1 m)))))))
+(def %py-pow3
+  (fn (_ a b . m)
+    (if (null? m)
+      (%py-pow a b)
+      (if (if (%py-num? a) (if (%py-num? b) (%py-num? (first m)) #f) #f)
+        (%py-powmod (%py-boolnorm a) (%py-boolnorm b) (%py-boolnorm (first m)))
+        (Err raise (lit type) "pow() requires integers" ())))))
+
 (def %py-pow
   (fn (_ a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
@@ -459,13 +499,28 @@
           (if (< v 0) (- 0 v) v)
           (Err raise (lit type) "bad operand type for abs()" ()))))))
 
+; rounding an int to a negative number of digits: half goes to EVEN, so
+; round(125, -1) is 120 and round(15, -1) is 20
+(def %py-round-int
+  (fn (_ v nd)
+    (def p (%py-ipow10 (- 0 nd) 1))
+    (def q (Num quotient (- v (Num modulo v p)) p))
+    (def rr (Num modulo v p))
+    (if (> (* rr 2) p) (* (+ q 1) p)
+      (if (< (* rr 2) p) (* q p)
+        (if (= (Num modulo q 2) 0) (* q p) (* (+ q 1) p))))))
+(def %py-ipow10
+  (fn (self n acc) (if (= n 0) acc (self (- n 1) (* acc 10)))))
+
 (def %py-round
   (fn (_ . a)
     (def v (%py-boolnorm (first a)))
     (def nd (if (null? (rest a)) () (first (rest a))))
     (if (not (%py-float-is v))
       (if (eq? (%py-num-kind v) (lit int))
-        v
+        (if (if (null? nd) #f (< (%py-boolnorm nd) 0))
+          (%py-round-int v (%py-boolnorm nd))
+          v)
         (Err raise (lit type) "type cannot be rounded" ()))
       (do
         (def ex (%py-f-exact v))
@@ -503,14 +558,48 @@
               (self (if (pick (first l) best) (first l) best) (rest l)))))
         (go (first vs) (rest vs))))))
 
-(def %py-min
-  (fn (_ . a)
+; min/max take either several values or one iterable, plus key= and
+; default= as keywords -- and a keyword call is recognisable because
+; %py-kw-args pads its slots with the %py-dflt sentinel, which no user
+; value can be.
+(def %py-has-dflt?
+  (fn (self l) (if (null? l) #f (if (same? (first l) %py-dflt) #t (self (rest l))))))
+(def %py-minmax-call
+  (fn (_ a which pick)
+    (def key ())
+    (def dflt %py-dflt)
     (def vs (if (null? (rest a)) (%py-iter-elems (first a)) a))
-    (%py-minmax vs (fn (_ x y) (%py-lt x y)) "min")))
-(def %py-max
-  (fn (_ . a)
-    (def vs (if (null? (rest a)) (%py-iter-elems (first a)) a))
-    (%py-minmax vs (fn (_ x y) (%py-gt x y)) "max")))
+    (if (null? vs)
+      (if (same? dflt %py-dflt)
+        (Err raise (lit value) (Str8 append which "() arg is an empty sequence") ())
+        dflt)
+      (let ((k (if (null? key) %py-ident key)))
+        (%py-minmax-by vs pick k)))))
+(def %py-minmax-by
+  (fn (_ vs pick key)
+    (def go
+      (fn (self best bk l)
+        (if (null? l) best
+          (let ((v (first l)))
+            (let ((vk (key v)))
+              (if (%py-truthy (pick vk bk)) (self v vk (rest l)) (self best bk (rest l))))))))
+    (go (first vs) (key (first vs)) (rest vs))))
+(def %py-min (fn (_ . a) (%py-minmax-call a "min" (fn (_ x y) (%py-lt x y)))))
+(def %py-max (fn (_ . a) (%py-minmax-call a "max" (fn (_ x y) (%py-gt x y)))))
+; the keyword form: every positional is a VALUE (or the one iterable), and
+; key=/default= come from the keywords
+(def %py-minmax-kw
+  (fn (_ f pos kws)
+    (def which (if (same? f %py-min) "min" "max"))
+    (def pick (if (same? f %py-min) (fn (_ x y) (%py-lt x y)) (fn (_ x y) (%py-gt x y))))
+    (def key (let ((e (%py-alist-find "key" kws))) (if (null? e) () (rest e))))
+    (def dflt (let ((e (%py-alist-find "default" kws))) (if (null? e) %py-dflt (rest e))))
+    (def vs (if (null? (rest pos)) (%py-iter-elems (first pos)) pos))
+    (if (null? vs)
+      (if (same? dflt %py-dflt)
+        (Err raise (lit value) (Str8 append which "() arg is an empty sequence") ())
+        dflt)
+      (%py-minmax-by vs pick (if (null? key) %py-ident key)))))
 
 ; --- Bytes seams -------------------------------------------------------------
 (def %py-mkbytes (fn (_ s) (%py-bytes-new s)))
@@ -643,6 +732,7 @@
     (if (str? b) #f
     (if (%py-bytes-is a) (if (%py-bytes-is b) (Str8 =? (%py-bytes-str a) (%py-bytes-str b)) #f)
     (if (%py-bytes-is b) #f
+    (if (if (%py-fn-is a) #t (%py-fn-is b)) (same? a b)
     (if (%py-set-is a)
       (if (%py-set-is b) (%py-set-eq? (%py-set-elems a) (%py-set-elems b)) #f)
     (if (%py-set-is b) #f
@@ -652,7 +742,7 @@
       ; and a nil in a printed comparison reads as None
       (if (= (if (eq? a #t) 1 (if (eq? a #f) 0 a))
              (if (eq? b #t) 1 (if (eq? b #f) 0 b)))
-        #t #f))))))))))))
+        #t #f)))))))))))))
 (def %py-ne
   (fn (_ a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
@@ -1410,17 +1500,23 @@
 ; the one-character string built the way the tokenizer builds strings.
 (def %py-int->char (prim-ref (lit int) (lit ->char)))
 (def %py-chr
-  (fn (_ n)
-    (if (eq? (%py-num-kind (if (eq? n #t) 1 (if (eq? n #f) 0 n))) (lit int))
-      (%py-list->string (list (%py-int->char (if (eq? n #t) 1 (if (eq? n #f) 0 n)))))
-      (Err raise (lit type) "an integer is required" ()))))
+  (fn (_ n0)
+    (def n (%py-boolnorm n0))
+    (if (not (eq? (%py-num-kind n) (lit int)))
+      (Err raise (lit type) "an integer is required" ())
+      (if (if (< n 0) #t (> n 1114111))
+        (Err raise (lit value) "chr() arg not in range(0x110000)" ())
+        (%py-list->string (list (%py-int->char n)))))))
 ; ord() counts CODE POINTS, not bytes: chr(955) is a two-byte string that
 ; is one character, so the utf-8-aware Str class measures and indexes it.
 (def %py-ord
   (fn (_ s)
     (if (if (str? s) (= (Str length s) 1) #f)
       (%py-char-code (Str ref 0 s))
-      (Err raise (lit type) "ord() expected a character" ()))))
+      ; a one-byte bytes answers that BYTE's value, so ord(b'\xff') is 255
+      (if (if (%py-bytes-is s) (= (Str8 length (%py-bytes-str s)) 1) #f)
+        (%py-char-code (%str-ref (%py-bytes-str s) 0))
+        (Err raise (lit type) "ord() expected a character" ())))))
 
 ; --- The format-spec mini-language -------------------------------------------
 ;
@@ -2214,7 +2310,12 @@
       (if (%py-set-frozen? v)
         (%py-set-hash (%py-set-elems v) 0)
         (Err raise (lit type) "unhashable type: 'set'" ()))
-      (Err raise (lit type) "unhashable type" ())))))))))))
+    ; a function, generator or class hashes by identity, as in Python
+    (if (if (%py-fn-is v) #t (if (%py-gen-is v) #t (%py-class-is v)))
+      (%py-id v)
+    (if (%py-tuple-is v)
+      (%py-set-hash (%py-tuple-elems v) 0)
+      (Err raise (lit type) "unhashable type" ())))))))))))))
 
 ; Is v a machine float?  The type-handle compare %py-num-kind uses, taken
 ; directly so the writer below can ask cheaply.
@@ -2501,6 +2602,8 @@
       (if (not (null? e))
         (rest e)
         (let ((m (%py-method-find (%py-obj-class obj) name)))
+          (if (if (null? m) #f (not (%py-fn-is m)))
+            m
           (if (null? m)
             ; the last resort is the class's own __getattr__, as in Python
             (let ((ga (%py-method-find (%py-obj-class obj) "__getattr__")))
@@ -2513,7 +2616,7 @@
                     (Str8 append name "'"))
                   ())
                 (ga obj name)))
-            (%py-bind-method m obj)))))))
+            (%py-bind-method m obj))))))))
 
 ; obj(...) is __call__, through the PY-OBJ type's call handler.
 (set! %py-obj-call
@@ -2801,17 +2904,38 @@
 
 ; map(f, it) is LAZY -- a generator pulling from its source -- so a
 ; StopIteration raised by f ends it where a yield from expects
+; APPLY WANTS A CLOSURE: a class is called through its own door, so
+; map(tuple, ...) and sorted(key=SomeClass) work like any other callable.
+(def %py-apply-any
+  (fn (_ f args)
+    (if (%py-class-is f)
+      (%py-instantiate f args)
+      (if (%py-obj-is f)
+        (let ((m (%py-dunder f "__call__")))
+          (if (null? m) (Err raise (lit type) "object is not callable" ()) (apply m args)))
+        (apply f args)))))
+
+; map(f, a, b, ...) walks the sources in step and stops with the shortest
+(def %py-pull-all
+  (fn (self srcs acc)
+    (if (null? srcs) (List reverse acc)
+      (let ((v (%py-iter-pull! (first srcs))))
+        (if (same? v %py-gen-done) %py-gen-done (self (rest srcs) (pair v acc)))))))
 (def %py-map
-  (fn (_ f it)
+  (fn (_ f . its)
     (%py-gen-new
       (fn (_ g)
-        (def src (%py-iter-open it))
+        (def srcs (%py-open-all its ()))
         (def go
           (fn (self)
-            (let ((v (%py-iter-pull! src)))
-              (if (same? v %py-gen-done) () (%seq (%py-yield g (f v)) (self))))))
+            (let ((vs (%py-pull-all srcs ())))
+              (if (same? vs %py-gen-done) ()
+                (%seq (%py-yield g (%py-apply-any f vs)) (self))))))
         (go))
       "map")))
+(def %py-open-all
+  (fn (self its acc)
+    (if (null? its) (List reverse acc) (self (rest its) (pair (%py-iter-open (first its)) acc)))))
 (def %py-zip
   (fn (_ . its)
     (def lists (fn (self l) (if (null? l) () (pair (%py-iter-elems (first l)) (self (rest l))))))
@@ -2849,7 +2973,28 @@
         (if (%py-truthy (%py-lt (first b) (first a)))
           (pair (first b) (self a (rest b)))
           (pair (first a) (self (rest a) b)))))))
-(def %py-sorted (fn (_ it) (%py-list-new (%py-msort (%py-iter-elems it)))))
+(def %py-msort-by
+  (fn (self l key)
+    (if (if (null? l) #t (null? (rest l))) l
+      (let ((h (%py-split-half l (List length l))))
+        (%py-merge-by (self (first h) key) (self (rest h) key) key)))))
+(def %py-merge-by
+  (fn (self a b key)
+    (if (null? a) b
+      (if (null? b) a
+        (if (%py-truthy (%py-lt (key (first b)) (key (first a))))
+          (pair (first b) (self a (rest b) key))
+          (pair (first a) (self (rest a) b key)))))))
+(def %py-ident (fn (_ v) v))
+(def %py-sorted
+  (%py-sig!
+    (fn (_ it . a)
+      (if (= (List length a) 1)
+        (Err raise (lit type) "sorted expected 1 argument, got 2" ())
+        (let ((key (%py-opt a 0 ())) (rev (%py-opt a 1 #f)))
+          (let ((l (%py-msort-by (%py-iter-elems it) (if (null? key) %py-ident key))))
+            (%py-list-new (if (%py-truthy rev) (List reverse l) l))))))
+    "sorted" (list "iterable" "key" "reverse") 1 #f))
 
 ; next(it[, default]) and iter(x)
 (def %py-next
@@ -2917,11 +3062,6 @@
 ; up, arranges the keywords into positional slots, and applies.  A slot left
 ; empty between given arguments carries %py-dflt, which the callee's %py-opt
 ; prelude reads as "take the default".
-(def %py-sigs (pair () ()))
-(def %py-sig!
-  (fn (_ f name names nreq has-rest)
-    (%set-first! %py-sigs (pair (pair f (list name names nreq has-rest)) (first %py-sigs)))
-    f))
 (def %py-sig-of
   (fn (_ f)
     (def go
@@ -2935,11 +3075,6 @@
 (def %py-sig-shift
   (fn (_ sig)
     (list (first sig) (rest (List ref 1 sig)) (- (List ref 2 sig) 1) (List ref 3 sig))))
-(def %py-dflt (list (lit %py-default)))
-(def %py-opt
-  (fn (_ more i dflt)
-    (if (>= i (List length more)) dflt
-      (let ((v (List ref i more))) (if (same? v %py-dflt) dflt v)))))
 (def %py-drop
   (fn (self l k) (if (= k 0) l (if (null? l) () (self (rest l) (- k 1))))))
 (def %py-list-cat
@@ -3008,6 +3143,8 @@
   (fn (_ f pos kws)
     (if (same? f %py-print)
       (%py-print-kw pos kws)
+    (if (if (same? f %py-min) #t (same? f %py-max))
+      (%py-minmax-kw f pos kws)
       (if (%py-class-is f)
         (let ((init (%py-method-find f "__init__")))
           (let ((sig (if (null? init) () (%py-sig-of init))))
@@ -3019,7 +3156,7 @@
         (let ((sig (%py-sig-of f)))
           (if (null? sig)
             (Err raise (lit type) "this callable takes no keyword arguments" ())
-            (apply f (%py-kw-args sig pos kws))))))))
+            (apply f (%py-kw-args sig pos kws)))))))))
 ; the str methods that take keywords, and their parameter names; a slot a
 ; keyword call leaves empty is None, which is every one of these defaults
 (def %py-str-kw-names
@@ -3219,6 +3356,163 @@
 
 ; `list(x)` takes anything iterable, which is exactly what `for` already asks
 ; for -- so it is the same function, wrapped.
+; --- More builtins -----------------------------------------------------------
+;
+; bin/hex/oct share the format engine's base conversion, so the digits and
+; the bigint path are stated once.  The SIGN GOES BEFORE THE PREFIX:
+; bin(-15) is -0b1111, not 0b-1111.
+(def %py-based-str
+  (fn (_ v base tbl pfx)
+    (if (not (eq? (%py-num-kind (%py-boolnorm v)) (lit int)))
+      (Err raise (lit type) "an integer is required" ())
+      (let ((m (%py-fmt-base (%py-boolnorm v) base tbl)))
+        (Str8 append (if (first m) "-" "") (Str8 append pfx (rest m)))))))
+(def %py-bin (fn (_ v) (%py-based-str v 2 "01" "0b")))
+(def %py-hex (fn (_ v) (%py-based-str v 16 "0123456789abcdef" "0x")))
+(def %py-oct (fn (_ v) (%py-based-str v 8 "01234567" "0o")))
+
+(def %py-num? (fn (_ v) (not (null? (%py-num-kind (%py-boolnorm v))))))
+(def %py-divmod
+  (fn (_ a b)
+    (if (if (%py-num? a) (%py-num? b) #f)
+      (%py-tuple-new (list (%py-floordiv a b) (%py-mod a b)))
+      (Err raise (lit type) "unsupported operand type(s) for divmod()" ()))))
+
+; A CLOSURE HAS NO PREDICATE, so its type handle is taken from one built
+; here and compared -- the same trick the arithmetic seams use for float.
+(def %py-th-fn (%py-typeof-prim (fn (_) ())))
+(def %py-fn-is (fn (_ v) (eq? (%py-typeof-prim v) %py-th-fn)))
+(def %py-callable
+  (fn (_ v)
+    (if (%py-fn-is v) #t
+      (if (%py-class-is v) #t
+        (if (%py-obj-is v) (not (null? (%py-dunder v "__call__"))) #f)))))
+
+; id() is an IDENTITY TABLE, not an address: the engine hands out no
+; addresses, and what Python promises is only that the number is unique and
+; stable while the object lives.  Values are compared with same?, so two
+; equal lists get two ids and one list gets one.
+(def %py-ids (pair () ()))
+(def %py-id
+  (fn (_ v)
+    (def go
+      (fn (self rows)
+        (if (null? rows) ()
+          (if (same? (first (first rows)) v) (rest (first rows)) (self (rest rows))))))
+    (let ((found (go (first %py-ids))))
+      (if (not (null? found))
+        found
+        (let ((n (+ 4300000000 (* 16 (List length (first %py-ids))))))
+          (%seq (%set-first! %py-ids (pair (pair v n) (first %py-ids))) n))))))
+
+; getattr's default catches ONLY AttributeError, as in Python
+(def %py-attr-name!
+  (fn (_ n)
+    (if (str? n) n (Err raise (lit type) "attribute name must be string" ()))))
+(def %py-getattr3
+  (fn (_ o n . d)
+    (%py-attr-name! n)
+    (if (null? d)
+      (%py-getattr o n)
+      (guard (e (if (%py-exc-match e %py-exc-AttributeError) (first d) (error e)))
+        (%py-getattr o n)))))
+(def %py-setattr3
+  (fn (_ o n v)
+    (%py-attr-name! n)
+    (if (%py-obj-is o)
+      (%py-setattr o n v)
+      (Err raise (lit attribute) "object has no settable attributes" ()))))
+(def %py-delattr
+  (fn (_ o n)
+    (%py-attr-name! n)
+    (if (not (%py-obj-is o))
+      (Err raise (lit attribute) "object has no deletable attributes" ())
+      (let ((as (%py-obj-attrs o)))
+        (if (null? (%py-alist-find n as))
+          (Err raise (lit attribute)
+            (Str8 append (Str8 append "'" n) "'") ())
+          (%py-obj-set-attrs! o (%py-attr-drop as n)))))))
+(def %py-attr-drop
+  (fn (self as n)
+    (if (null? as) ()
+      (if (Str8 =? (first (first as)) n)
+        (self (rest as) n)
+        (pair (first as) (self (rest as) n))))))
+
+; the explicit super(type, obj) form: unimplemented, and every argument
+; shape the corpus passes is one Python itself rejects
+(def %py-super-args
+  (fn (_ . a)
+    (Err raise (lit type) "super() argument 1 must be a type" ())))
+
+(def %py-issubclass
+  (fn (_ c b)
+    (if (not (%py-class-is c))
+      (Err raise (lit type) "issubclass() arg 1 must be a class" ())
+      (if (%py-tuple-is b)
+        (%py-any-subclass? c (%py-tuple-elems b))
+        (if (%py-class-is b)
+          (%py-subclass? c b)
+          (Err raise (lit type)
+            "issubclass() arg 2 must be a class or tuple of classes" ()))))))
+(def %py-any-subclass?
+  (fn (self c bs)
+    (if (null? bs) #f
+      (if (not (%py-class-is (first bs)))
+        (Err raise (lit type) "issubclass() arg 2 must be a class or tuple of classes" ())
+        (if (%py-subclass? c (first bs)) #t (self c (rest bs)))))))
+
+; enumerate and filter are LAZY, like map: a generator pulling its source.
+(def %py-enumerate
+  (%py-sig!
+    (fn (_ . a)
+      (let ((it (%py-opt a 0 ())) (st (%py-opt a 1 0)))
+        (%py-gen-new
+          (fn (_ g)
+            (def src (%py-iter-open it))
+            (def go
+              (fn (self i)
+                (let ((v (%py-iter-pull! src)))
+                  (if (same? v %py-gen-done) ()
+                    (%seq (%py-yield g (%py-tuple-new (list i v))) (self (+ i 1)))))))
+            (go st))
+          "enumerate")))
+    "enumerate" (list "iterable" "start") 1 #f))
+; filter(None, it) keeps the truthy elements
+(def %py-filter
+  (fn (_ f it)
+    (%py-gen-new
+      (fn (_ g)
+        (def src (%py-iter-open it))
+        (def go
+          (fn (self)
+            (let ((v (%py-iter-pull! src)))
+              (if (same? v %py-gen-done) ()
+                (%seq
+                  (if (%py-truthy (if (null? f) v (f v))) (%py-yield g v) ())
+                  (self))))))
+        (go))
+      "filter")))
+
+; reversed(): __reversed__ first, then the length/getitem protocol, then
+; anything materialisable
+(def %py-rev-index
+  (fn (self g i acc)
+    (if (< i 0) (List reverse acc) (self g (- i 1) (pair (g i) acc)))))
+(def %py-reversed
+  (fn (_ v)
+    (if (%py-obj-is v)
+      (let ((m (%py-dunder v "__reversed__")))
+        (if (not (null? m))
+          (m)
+          (let ((l (%py-dunder v "__len__")))
+            (let ((g (%py-dunder v "__getitem__")))
+              (if (if (null? l) #t (null? g))
+                (Err raise (lit type) "object is not reversible" ())
+                ; %py-rev-index already walks from the end
+                (%py-list-new (%py-rev-index g (- (l) 1) ())))))))
+      (%py-list-new (List reverse (%py-iter-elems v))))))
+
 ; --- Sets --------------------------------------------------------------------
 ;
 ; Membership is Python's equality, so `{False, True, 0, 1, 2}` holds three
@@ -3381,7 +3675,10 @@
 ; raise?", not a separate lookup, so anything reachable by attribute access is
 ; reachable here and the two can never disagree.
 (def %py-hasattr
-  (fn (_ o name) (guard (_ #f) (%seq (%py-getattr o name) #t))))
+  (fn (_ o name)
+    (%py-attr-name! name)
+    (guard (e (if (%py-exc-match e %py-exc-AttributeError) #f (error e)))
+      (%seq (%py-getattr o name) #t))))
 
 ; --- Type objects ------------------------------------------------------------
 ;
