@@ -72,8 +72,15 @@ jobs:
           make             # x-bin at the repo root -- `make engine` does not build it
           make boot        # the launcher-free amalgams the harness loads
 
-      - name: Run the Python specs
-        run: X="$PWD/.x-lang/x.sh" sh tests/spec-runner.sh
+      # TEMPORARY, to locate a CI-only death: the suite dies immediately
+      # after 37-operator-objects on every run and reproduces on no local
+      # lane (including a v0.10.0 tree built exactly as above).  Running
+      # the later half FIRST says whether the boundary is that FILE or a
+      # cumulative budget.  Reverted once it answers.
+      - name: Run the Python specs (38 onward, first)
+        run: X="$PWD/.x-lang/x.sh" sh tests/spec-runner.sh tests/specs/[3-9]*.spec.md
+      - name: Run the Python specs (through 37)
+        run: X="$PWD/.x-lang/x.sh" sh tests/spec-runner.sh tests/specs/[0-2]*.spec.md
 
   relocatable:
     # THE RULE THAT ACTUALLY KILLED THE LAST GENERATION, as a gate -- and it
