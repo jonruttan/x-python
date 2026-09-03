@@ -10,66 +10,11 @@ expectation is a real CPython output; two of them corrected assumptions
 (specials zero-fill under format() too; the empty type goes scientific at
 exponent p-1).
 
-## star parameters and call spread
-
-### a *rest parameter is a tuple; *xs spreads at a call, anywhere in the list
-
-```python
-(python-run "def f(a, *rest):\n    return (a, rest, len(rest))\nprint(f(1))\nprint(f(1, 2, 3))\nxs = [4, 5]\nprint(f(0, *xs))\nprint(f(*xs))\nprint(f(*xs, 9))\ndef g(*a):\n    return a\nprint(g(), g(1), g(*[1, 2], *(3, 4)))")
-```
----
-```output
-(1, (), 0)
-(1, (2, 3), 2)
-(0, (4, 5), 2)
-(4, (5,), 1)
-(4, (5, 9), 2)
-() (1,) (1, 2, 3, 4)
-```
-
-## str.format
-
-### auto-numbering, indexes, conversions, escapes, string precision
-
-```python
-(python-run "print('{} {} {}'.format(1, 'two', 3.0))\nprint('{0} {1} {0}'.format('a', 'b'))\nprint('{!r} {!s}'.format('q', 'q'))\nprint('{{literal}} {}'.format(0))\nprint('{:.3}'.format('abcdef'), '{:5.3}|'.format('abcdef'))\nprint('{}'.format(None), '{}'.format([1, 2]), '{}'.format((1,)))")
-```
----
-```output
-1 two 3.0
-a b a
-'q' q
-{literal} 0
-abc abc  |
-None [1, 2] (1,)
-```
-
-### fill, alignment, sign, zero, grouping, bases
-
-```python
-(python-run "print('{:>8}|{:<8}|{:^8}|{:*^9}|{:08.3f}|{:+d}|{: d}|{:,}'.format('r', 'l', 'c', 'mid', 3.14159, 5, 5, 1234567))\nprint('{:x} {:X} {:o} {:b} {:#x} {:#o}'.format(255, 255, 8, 5, 255, 8))")
-```
----
-```output
-       r|l       |   c    |***mid***|0003.142|+5| 5|1,234,567
-ff FF 10 101 0xff 0o10
-```
-
-### field tails: attributes and items
-
-```python
-(python-run "class P:\n    def __init__(self):\n        self.real = 7\n        self.d = {'k': 'v'}\nprint('{0.real} {0.d[k]} {1[1]}'.format(P(), [9, 8]))")
-```
----
-    7 v 8
-
-### nested fields take their width and precision from the following args
-
-```python
-(python-run "print('{:{}}|{:{}.{}}'.format('ab', 5, 3.14159, 8, 3))")
-```
----
-    ab   |    3.14
+SPLIT FOUR WAYS to localise a CI-only death: this file, and only this
+file, killed the CI host with exit 143 on every run, at the same
+boundary, while passing locally on a v0.10.0 tree built exactly as CI
+builds it.  Smaller processes also cost less, which is the standing
+reason other heavy specs here are split.
 
 ## the float presentation types
 
@@ -139,36 +84,3 @@ ValueError
 ---
          100.0 1.0 1e+20 0e+00
 
-## f-strings
-
-### expressions, conversions, specs, escaped braces
-
-```python
-(python-run "x = 42\nname = 'w'\nprint(f'x={x} {name!r} {x:04d} {x*2} {{x}} {x:>6}|')\nprint(f'{1+1}{\"s\"}')")
-```
----
-```output
-x=42 'w' 0042 84 {x}     42|
-2s
-```
-
-### nested replacement fields in the spec
-
-```python
-(python-run "space = 5\nprec = 2\nprint(f'{3.14:{space}.{prec}}')\nspace_prec = '5.2'\nprint(f'{3.14:{space_prec}}')")
-```
----
-```output
-  3.1
-  3.1
-```
-
-## characters
-
-### the c type, chr and ord, code points not bytes
-
-```python
-(python-run "print(('{:c}'.format(65), '{:c}{:c}'.format(104, 105), chr(97), ord('A'), ord(chr(955)), '{:>3c}|'.format(66)))")
-```
----
-    ('A', 'hi', 'a', 65, 955, '  B|')

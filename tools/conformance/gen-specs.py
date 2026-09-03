@@ -210,7 +210,8 @@ def main():
       # generator keeps every continuation's stack copy alive, and a set
       # program rebuilds whole element lists.  Those groups get a smaller
       # cap than the byte budget alone would give them.
-      cap = {"gen": 1, "generator": 1, "set": 3, "frozenset": 3}.get(group, CHUNK)
+      cap = {"gen": 1, "generator": 1, "set": 3, "frozenset": 3,
+             "builtin": 5}.get(group, CHUNK)
       for c in cases:
           if cur and (len(cur) >= cap or size + len(c[1]) > BUDGET):
               chunks.append(cur)
