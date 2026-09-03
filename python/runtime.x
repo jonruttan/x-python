@@ -39,7 +39,7 @@
   %py-mkclass %py-setattr %py-super
   %py-str %py-repr-of %py-mklist-of %py-hasattr
   %py-cls-type %py-cls-int %py-cls-float %py-cls-bool %py-cls-str
-  %py-cls-list %py-cls-dict %py-cls-tuple %py-cls-NoneType
+  %py-cls-list %py-cls-dict %py-cls-tuple %py-cls-NoneType %py-cls-set %py-cls-frozenset
   %py-type-of %py-isinstance %py-truthy %py-slice %py-defg
   %py-exc-Exception %py-exc-ArithmeticError %py-exc-LookupError
   %py-exc-ZeroDivisionError %py-exc-IndexError %py-exc-KeyError
@@ -127,11 +127,13 @@
   (fn (_ a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (%py-binop a b "__sub__" "__rsub__" "-")
+    (if (if (%py-set-is a) #t (%py-set-is b))
+      (%py-set-sub a b)
     (if (if (eq? (%py-typeof-prim a) %py-th-complex) #t
           (eq? (%py-typeof-prim b) %py-th-complex))
       (%py-cx-arith a b "-" 1)
       (- (if (eq? a #t) 1 (if (eq? a #f) 0 a))
-         (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))
+         (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))))
 
 ; THE TYPE HANDLES, EARLY: the arithmetic seams below consult them, and
 ; %py-f-2p64 is computed through %py-mul at LOAD time -- so these must be
@@ -378,19 +380,25 @@
 
 (def %py-bitor
   (fn (_ a b)
+    (if (if (%py-set-is a) #t (%py-set-is b))
+      (%py-set-or a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (%py-binop a b "__or__" "__ror__" "|")
-      (%py-bit2 a b "|" (fn (_ x y) (if x #t y))))))
+      (%py-bit2 a b "|" (fn (_ x y) (if x #t y)))))))
 (def %py-bitxor
   (fn (_ a b)
+    (if (if (%py-set-is a) #t (%py-set-is b))
+      (%py-set-xor a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (%py-binop a b "__xor__" "__rxor__" "^")
-      (%py-bit2 a b "^" (fn (_ x y) (if x (not y) y))))))
+      (%py-bit2 a b "^" (fn (_ x y) (if x (not y) y)))))))
 (def %py-bitand
   (fn (_ a b)
+    (if (if (%py-set-is a) #t (%py-set-is b))
+      (%py-set-and a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (%py-binop a b "__and__" "__rand__" "&")
-      (%py-bit2 a b "&" (fn (_ x y) (if x y #f))))))
+      (%py-bit2 a b "&" (fn (_ x y) (if x y #f)))))))
 
 ; --- Membership --------------------------------------------------------------
 ; `a in b`: substring for strings, element walk with Python's equality for
@@ -416,6 +424,8 @@
         (Str8 includes? a b)
         (Err raise (lit type)
           "'in <string>' requires string as left operand" ()))
+      (if (%py-set-is b)
+        (%py-set-has? a (%py-set-elems b))
       (if (%py-list? b)
         (%py-in-walk a (%py-list-elems b))
         (if (%py-tuple-is b)
@@ -426,7 +436,7 @@
                 (fn (self es acc)
                   (if (null? es) acc (self (rest es) (pair (first (first es)) acc)))))
               (%py-in-walk a (keys (%py-dict-entries b) ())))
-            (Err raise (lit type) "argument is not iterable" ())))))))))
+            (Err raise (lit type) "argument is not iterable" ()))))))))))
 
 ; --- Numeric builtins --------------------------------------------------------
 ; abs clears the SIGN BIT for floats (the arithmetic spelling turns -0.0
@@ -633,13 +643,16 @@
     (if (str? b) #f
     (if (%py-bytes-is a) (if (%py-bytes-is b) (Str8 =? (%py-bytes-str a) (%py-bytes-str b)) #f)
     (if (%py-bytes-is b) #f
+    (if (%py-set-is a)
+      (if (%py-set-is b) (%py-set-eq? (%py-set-elems a) (%py-set-elems b)) #f)
+    (if (%py-set-is b) #f
     (if (%py-class-is a) (eq? a b)
     (if (%py-class-is b) #f
       ; a BOOL, always: the tower's `=` answers nil for an unequal complex,
       ; and a nil in a printed comparison reads as None
       (if (= (if (eq? a #t) 1 (if (eq? a #f) 0 a))
              (if (eq? b #t) 1 (if (eq? b #f) 0 b)))
-        #t #f))))))))))
+        #t #f))))))))))))
 (def %py-ne
   (fn (_ a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
@@ -681,10 +694,12 @@
 
 (def %py-lt
   (fn (_ a b)
+    (if (if (%py-set-is a) #t (%py-set-is b))
+      (%py-set-cmp a b "<")
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (let ((r (%py-cmp2 a b "__lt__" "__gt__")))
         (if (eq? r %py-NotImplemented) (%py-ord-refuse "<") r))
-    (%py-lt-num a b))))
+    (%py-lt-num a b)))))
 (def %py-lt-num
   (fn (_ a b)
     (%py-cmp-refuse a b "<")
@@ -694,10 +709,12 @@
          (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
 (def %py-gt
   (fn (_ a b)
+    (if (if (%py-set-is a) #t (%py-set-is b))
+      (%py-set-cmp a b ">")
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (let ((r (%py-cmp2 a b "__gt__" "__lt__")))
         (if (eq? r %py-NotImplemented) (%py-ord-refuse ">") r))
-    (%py-gt-num a b))))
+    (%py-gt-num a b)))))
 (def %py-gt-num
   (fn (_ a b)
     (%py-cmp-refuse a b ">")
@@ -707,20 +724,24 @@
          (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
 (def %py-le
   (fn (_ a b)
+    (if (if (%py-set-is a) #t (%py-set-is b))
+      (%py-set-cmp a b "<=")
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (let ((r (%py-cmp2 a b "__le__" "__ge__")))
         (if (eq? r %py-NotImplemented) (%py-ord-refuse "<=") r))
     (if (if (str? a) (str? b) #f)
       (<= (%py-strcmp a b 0) 0)
-      (if (%py-lt a b) #t (%py-eq a b))))))
+      (if (%py-lt a b) #t (%py-eq a b)))))))
 (def %py-ge
   (fn (_ a b)
+    (if (if (%py-set-is a) #t (%py-set-is b))
+      (%py-set-cmp a b ">=")
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (let ((r (%py-cmp2 a b "__ge__" "__le__")))
         (if (eq? r %py-NotImplemented) (%py-ord-refuse ">=") r))
     (if (if (str? a) (str? b) #f)
       (>= (%py-strcmp a b 0) 0)
-      (if (%py-gt a b) #t (%py-eq a b))))))
+      (if (%py-gt a b) #t (%py-eq a b)))))))
 
 ; --- Lists ------------------------------------------------------------------
 ;
@@ -743,12 +764,14 @@
       (List length (%py-tuple-elems v))
     (if (%py-list? v)
       (List length (%py-list-elems v))
+      (if (%py-set-is v)
+        (List length (%py-set-elems v))
       (if (str? v)
         ; CODE POINTS, not bytes: len('\xff') is 1
         (Str length v)
       (if (%py-bytes-is v)
         (Str8 length (%py-bytes-str v))
-        (Err raise (lit type) "object of this type has no len()" ())))))))))
+        (Err raise (lit type) "object of this type has no len()" ()))))))))))
 
 ; NEGATIVE INDICES COUNT FROM THE END, which is Python and not x.  -1 is the
 ; last element, and an index past either end raises IndexError rather than
@@ -878,6 +901,8 @@
       (%py-tuple-elems v)
     (if (%py-list? v)
       (%py-list-elems v)
+      (if (%py-set-is v)
+        (%py-set-elems v)
       (if (str? v)
         (%py-str-chars v 0 (Str8 length v))
       ; iterating bytes yields ints
@@ -886,7 +911,7 @@
       ; a generator runs to its end; every consumer here wants the whole list
       (if (%py-gen-is v)
         (%py-gen-drain v ())
-        (Err raise (lit type) "object is not iterable" ()))))))))))
+        (Err raise (lit type) "object is not iterable" ())))))))))))
 
 ; range(stop) / range(start, stop) / range(start, stop, step)
 ;
@@ -929,7 +954,11 @@
 ; parser calls and what Python's rules say.
 (def %py-dict? (fn (_ v) (%py-dict-is v)))
 
-(def %py-mkdict (fn (_ . entries) (%py-dict-new entries)))
+(def %py-mkdict
+  (fn (_ . entries)
+    (def check (fn (self es) (if (null? es) () (%seq (%py-check-hashable! (first (first es))) (self (rest es))))))
+    (check entries)
+    (%py-dict-new entries)))
 
 (def %py-dfind
   (fn (self k entries)
@@ -997,6 +1026,10 @@
     (if (%py-list? obj)
       (if (Str8 =? name "append")
         (fn (_ v) (%py-list-set! obj (%py-append-elem (%py-list-elems obj) v)))
+        (if (Str8 =? name "sort")
+          (fn (_) (%py-list-set! obj (%py-msort (%py-list-elems obj))))
+        (if (Str8 =? name "reverse")
+          (fn (_) (%py-list-set! obj (List reverse (%py-list-elems obj))))
         (if (Str8 =? name "pop")
           (fn (_ . a)
             (let ((n (List length (%py-list-elems obj))))
@@ -1006,13 +1039,15 @@
                   (%seq (%py-list-set! obj (%py-drop-last (%py-list-elems obj))) v)))))
           (Err raise (lit attribute)
             (Str8 append (Str8 append "'list' object has no attribute '" name) "'")
-            ())))
+            ())))))
       (if (%py-dict? obj)
         (%py-dict-attr obj name)
       (if (str? obj)
         (%py-str-method obj name)
       (if (%py-bytes-is obj)
         (%py-bytes-attr obj name)
+      (if (%py-set-is obj)
+        (%py-set-attr obj name)
       (if (%py-gen-is obj)
         (%py-gen-attr obj name)
       (if (%py-obj-is obj)
@@ -1032,7 +1067,7 @@
           (if (if (null? sig) #f (Str8 =? name "__name__"))
             (first sig)
             (Err raise (lit attribute)
-              (Str8 append (Str8 append "object has no attribute '" name) "'")()))))))))))))))
+              (Str8 append (Str8 append "object has no attribute '" name) "'")())))))))))))))))
 
 ; str.upper is the method as a function of its receiver -- str.upper("abc")
 ; -- and a user class's attribute is its function, unbound, callable with an
@@ -2156,6 +2191,10 @@
 ; hash(): ints are their own hash (Python folds them modulo 2^61-1, which
 ; only shows past 2^61), bools 0 and 1, integral floats their int, other
 ; floats their bit pattern, complex CPython's real + 1000003 * imag.
+; order must not matter, so the element hashes are summed
+(def %py-set-hash
+  (fn (self es acc)
+    (if (null? es) acc (self (rest es) (+ acc (%py-hash (first es)))))))
 (def %py-hash
   (fn (_ v)
     (if (eq? v #t) 1
@@ -2170,7 +2209,12 @@
       (Hash fnv-1a v)
     (if (%py-obj-is v)
       (let ((m (%py-dunder v "__hash__"))) (if (null? m) 0 (m)))
-      (Err raise (lit type) "unhashable type" ()))))))))))
+    ; a frozenset hashes on its elements; a set is unhashable
+    (if (%py-set-is v)
+      (if (%py-set-frozen? v)
+        (%py-set-hash (%py-set-elems v) 0)
+        (Err raise (lit type) "unhashable type: 'set'" ()))
+      (Err raise (lit type) "unhashable type" ())))))))))))
 
 ; Is v a machine float?  The type-handle compare %py-num-kind uses, taken
 ; directly so the writer below can ask cheaply.
@@ -3175,6 +3219,161 @@
 
 ; `list(x)` takes anything iterable, which is exactly what `for` already asks
 ; for -- so it is the same function, wrapped.
+; --- Sets --------------------------------------------------------------------
+;
+; Membership is Python's equality, so `{False, True, 0, 1, 2}` holds three
+; elements and the FIRST of an equal pair is the one kept -- which is why
+; every builder folds through %py-set-put rather than filtering afterwards.
+(def %py-set-has?
+  (fn (self v es)
+    (if (null? es) #f (if (%py-truthy (%py-eq v (first es))) #t (self v (rest es))))))
+; a set, list or dict cannot be a set element or a dict key; a frozenset can
+(def %py-hashable?
+  (fn (_ v)
+    (if (%py-list-is v) #f
+      (if (%py-dict-is v) #f
+        (if (%py-set-is v) (%py-set-frozen? v) #t)))))
+(def %py-check-hashable!
+  (fn (_ v)
+    (if (%py-hashable? v) ()
+      (Err raise (lit type)
+        (Str8 append (Str8 append "unhashable type: '" (%py-type-name v)) "'") ()))))
+(def %py-type-name
+  (fn (_ v)
+    (if (%py-list-is v) "list"
+      (if (%py-dict-is v) "dict" (if (%py-set-is v) "set" "object")))))
+; append v unless an equal element is already there
+(def %py-set-put
+  (fn (_ es v)
+    (%py-check-hashable! v)
+    (if (%py-set-has? v es) es (%py-append-elem es v))))
+(def %py-set-fold
+  (fn (self es vs)
+    (if (null? vs) es (self (%py-set-put es (first vs)) (rest vs)))))
+(def %py-set-of (fn (_ frozen vs) (%py-set-new frozen (%py-set-fold () vs))))
+(def %py-mkset (fn (_ . vs) (%py-set-of #f vs)))
+; set(x) / frozenset(x): from any iterable, or empty
+(def %py-set-ctor
+  (fn (_ . a) (%py-set-of #f (if (null? a) () (%py-iter-elems (first a))))))
+(def %py-frozenset-ctor
+  (fn (_ . a) (%py-set-of #t (if (null? a) () (%py-iter-elems (first a))))))
+; the elements of any iterable, as a plain list
+(def %py-set-args
+  (fn (self as acc)
+    (if (null? as) acc (self (rest as) (%py-append acc (%py-iter-elems (first as)))))))
+(def %py-set-minus
+  (fn (self es drop)
+    (if (null? es) ()
+      (if (%py-set-has? (first es) drop)
+        (self (rest es) drop)
+        (pair (first es) (self (rest es) drop))))))
+(def %py-set-keep
+  (fn (self es keep)
+    (if (null? es) ()
+      (if (%py-set-has? (first es) keep)
+        (pair (first es) (self (rest es) keep))
+        (self (rest es) keep)))))
+(def %py-set-subset?
+  (fn (self es other)
+    (if (null? es) #t
+      (if (%py-set-has? (first es) other) (self (rest es) other) #f))))
+(def %py-set-eq?
+  (fn (_ a b)
+    (if (= (List length a) (List length b)) (%py-set-subset? a b) #f)))
+; a mutating method on a frozenset is simply absent, as in Python
+(def %py-set-mutate!
+  (fn (_ s name new)
+    (if (%py-set-frozen? s)
+      (Err raise (lit attribute)
+        (Str8 append (Str8 append "'frozenset' object has no attribute '" name) "'") ())
+      (%py-set-set! s new))))
+
+; The operators, which Python spells for sets only -- `{1} | [2]` is a
+; TypeError there, so the mixed cases refuse rather than convert.  The
+; result takes the LEFT operand's frozen bit, as in Python.
+(def %py-set-binop
+  (fn (_ a b op body)
+    (if (if (%py-set-is a) (%py-set-is b) #f)
+      (%py-set-new (%py-set-frozen? a) (body (%py-set-elems a) (%py-set-elems b)))
+      (Err raise (lit type)
+        (Str8 append (Str8 append "unsupported operand type(s) for " op) ": set") ()))))
+(def %py-set-or  (fn (_ a b) (%py-set-binop a b "|" (fn (_ x y) (%py-set-fold x y)))))
+(def %py-set-and (fn (_ a b) (%py-set-binop a b "&" (fn (_ x y) (%py-set-keep x y)))))
+(def %py-set-sub (fn (_ a b) (%py-set-binop a b "-" (fn (_ x y) (%py-set-minus x y)))))
+(def %py-set-xor
+  (fn (_ a b)
+    (%py-set-binop a b "^"
+      (fn (_ x y) (%py-set-fold (%py-set-minus x y) (%py-set-minus y x))))))
+; <= is subset, < is proper subset (and the mirror for >= and >
+(def %py-set-cmp
+  (fn (_ a b op)
+    (if (if (%py-set-is a) (%py-set-is b) #f)
+      (let ((x (%py-set-elems a)) (y (%py-set-elems b)))
+        (if (Str8 =? op "<=") (%py-set-subset? x y)
+          (if (Str8 =? op "<") (if (%py-set-subset? x y) (< (List length x) (List length y)) #f)
+            (if (Str8 =? op ">=") (%py-set-subset? y x)
+              (if (%py-set-subset? y x) (> (List length x) (List length y)) #f)))))
+      (%py-ord-refuse op))))
+
+(def %py-set-attr
+  (fn (_ s name)
+    (def es (fn (_) (%py-set-elems s)))
+    (def frozen (%py-set-frozen? s))
+    (def like (fn (_ l) (%py-set-new frozen l)))
+    (if (Str8 =? name "add")
+      (fn (_ v) (%py-set-mutate! s "add" (%py-set-put (es) v)))
+    (if (Str8 =? name "discard")
+      (fn (_ v) (%py-set-mutate! s "discard" (%py-set-minus (es) (list v))))
+    (if (Str8 =? name "remove")
+      (fn (_ v)
+        (if (not (%py-set-has? v (es)))
+          (error (%py-instantiate %py-exc-KeyError (list v)))
+          (%py-set-mutate! s "remove" (%py-set-minus (es) (list v)))))
+    (if (Str8 =? name "pop")
+      (fn (_)
+        (if (null? (es))
+          (error (%py-instantiate %py-exc-KeyError (list "pop from an empty set")))
+          (let ((v (first (es))))
+            (%seq (%py-set-mutate! s "pop" (rest (es))) v))))
+    (if (Str8 =? name "clear")
+      (fn (_) (%py-set-mutate! s "clear" ()))
+    (if (Str8 =? name "copy")
+      (fn (_) (like (es)))
+    (if (Str8 =? name "union")
+      (fn (_ . a) (%py-set-new frozen (%py-set-fold (es) (%py-set-args a ()))))
+    (if (Str8 =? name "intersection")
+      (fn (_ . a) (like (%py-set-keep (es) (%py-set-args a ()))))
+    (if (Str8 =? name "difference")
+      (fn (_ . a) (like (%py-set-minus (es) (%py-set-args a ()))))
+    (if (Str8 =? name "symmetric_difference")
+      (fn (_ o)
+        (let ((os (%py-iter-elems o)))
+          (like (%py-set-fold (%py-set-minus (es) os) (%py-set-minus os (es))))))
+    (if (Str8 =? name "update")
+      (fn (_ . a) (%py-set-mutate! s "update" (%py-set-fold (es) (%py-set-args a ()))))
+    (if (Str8 =? name "intersection_update")
+      (fn (_ . a) (%py-set-mutate! s "intersection_update" (%py-set-keep (es) (%py-set-args a ()))))
+    (if (Str8 =? name "difference_update")
+      (fn (_ . a) (%py-set-mutate! s "difference_update" (%py-set-minus (es) (%py-set-args a ()))))
+    (if (Str8 =? name "symmetric_difference_update")
+      (fn (_ o)
+        (let ((os (%py-iter-elems o)))
+          (%py-set-mutate! s "symmetric_difference_update"
+            (%py-set-fold (%py-set-minus (es) os) (%py-set-minus os (es))))))
+    (if (Str8 =? name "issubset")
+      (fn (_ o) (%py-set-subset? (es) (%py-iter-elems o)))
+    (if (Str8 =? name "issuperset")
+      (fn (_ o) (%py-set-subset? (%py-iter-elems o) (es)))
+    (if (Str8 =? name "isdisjoint")
+      (fn (_ o) (null? (%py-set-keep (es) (%py-iter-elems o))))
+    (if (Str8 =? name "__contains__")
+      (fn (_ v) (%py-set-has? v (es)))
+      (Err raise (lit attribute)
+        (Str8 append
+          (Str8 append (Str8 append "'" (if frozen "frozenset" "set")) "' object has no attribute '")
+          (Str8 append name "'"))
+        ())))))))))))))))))))))
+
 (def %py-mklist-of
   (fn (_ v) (%py-list-new (%py-iter-elems v))))
 
@@ -3425,6 +3624,7 @@
     (if (null? v) #f
     (if (str? v) (> (Str8 length v) 0)
     (if (%py-list-is v) (not (null? (%py-list-elems v)))
+    (if (%py-set-is v) (not (null? (%py-set-elems v)))
     (if (%py-dict-is v) (not (null? (%py-dict-entries v)))
     (if (%py-tuple-is v) (not (null? (%py-tuple-elems v)))
     (if (%py-obj-is v)
@@ -3434,7 +3634,7 @@
           (let ((l (%py-dunder v "__len__")))
             (if (null? l) #t (not (= (l) 0))))))
     (if (%py-class-is v) #t
-      (not (= v 0)))))))))))))
+      (not (= v 0))))))))))))))
 
 (def %py-bool-ctor
   (fn (_ . a) (if (null? a) #f (%py-truthy (first a)))))
@@ -3486,6 +3686,10 @@
   (%py-class-new "str" () (list (pair "%ctor" %py-str-ctor)) "str"))
 (def %py-cls-list
   (%py-class-new "list" () (list (pair "%ctor" %py-list-ctor)) "list"))
+(def %py-cls-set
+  (%py-class-new "set" () (list (pair "%ctor" %py-set-ctor)) "set"))
+(def %py-cls-frozenset
+  (%py-class-new "frozenset" () (list (pair "%ctor" %py-frozenset-ctor)) "frozenset"))
 (def %py-cls-dict
   (%py-class-new "dict" () (list (pair "%ctor" %py-dict-ctor)) "dict"))
 (def %py-cls-tuple
@@ -3502,6 +3706,7 @@
     (if (null? v) %py-cls-NoneType
     (if (str? v) %py-cls-str
     (if (%py-list-is v) %py-cls-list
+    (if (%py-set-is v) (if (%py-set-frozen? v) %py-cls-frozenset %py-cls-set)
     (if (%py-dict-is v) %py-cls-dict
     (if (%py-tuple-is v) %py-cls-tuple
     (if (%py-obj-is v) (%py-obj-class v)
@@ -3510,7 +3715,7 @@
         (if (eq? k (lit int)) %py-cls-int
         (if (eq? k (lit float)) %py-cls-float
         (if (eq? k (lit complex)) %py-cls-complex
-          (Err raise (lit type) "type: unsupported value" ()))))))))))))))))
+          (Err raise (lit type) "type: unsupported value")))))))))))))))))
 
 ; isinstance walks the base chain with the same %py-subclass? the exception
 ; matcher uses, so user classes, user exceptions and builtins all answer from

@@ -209,8 +209,11 @@ b
 
 ### a key must be followed by a colon
 
+Braces with no colon at all are a SET now, so the missing colon has to be
+the SECOND entry's for this to still be a dict.
+
 ```python
-(python-run "print({'a' 1})")
+(python-run "print({'a': 1, 'b' 2})")
 ```
 ---
     Error: #<err:syntax expected : after a dict key>
