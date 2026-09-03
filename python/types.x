@@ -45,6 +45,7 @@
 
 (provide python/types
   %py-bytes %py-bytes-new %py-bytes-is %py-bytes-str
+  %py-gen %py-gen-new %py-gen-is %py-gen-state
   %py-list %py-list-new %py-list-is %py-list-elems %py-list-set!
   %py-dict %py-dict-new %py-dict-is %py-dict-entries %py-dict-set! %py-dict-get
   %py-repr %py-equal %py-repeat
@@ -428,6 +429,22 @@
       (pair (lit write)
         (fn (_ self) (display (%py-bytes-repr (first self)))))
       (pair (lit length) (fn (_ self) (Str8 length (first self)))))))
+
+; --- PY-GEN ------------------------------------------------------------------
+; A generator is its body (a closure taking the generator itself, whose
+; `yield`s call %py-yield on it), its name, the two continuations that pass
+; control back and forth (runtime.x owns the protocol), and a status.
+; The state is a mutable list: (body name k-gen k-caller status).
+(def %py-gen ())
+(def %py-gen-new (fn (_ body name) (%make-instance %py-gen (list body name () () (lit created)))))
+(def %py-gen-is (fn (_ v) (%type? v %py-gen)))
+(def %py-gen-state (fn (_ g) (first g)))
+(set! %py-gen
+  (%make-type
+    "PY-GEN"
+    (list
+      (pair (lit write)
+        (fn (_ self) (display "<generator object " (List ref 1 (first self)) ">"))))))
 
 (def %py-tuple-new (fn (_ elems) (%make-instance %py-tuple elems)))
 (def %py-tuple-is (fn (_ v) (%type? v %py-tuple)))

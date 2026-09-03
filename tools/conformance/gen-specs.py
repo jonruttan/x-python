@@ -205,8 +205,11 @@ def main():
     for (suite, group), cases in sorted(groups.items()):
       chunks = []
       cur, size = [], 0
+      # generator programs each keep every continuation's stack copy alive
+      # in the no-GC batch, so those groups run one case per process
+      solo = group in ("gen", "generator")
       for c in cases:
-          if cur and (len(cur) >= CHUNK or size + len(c[1]) > BUDGET):
+          if cur and (solo or len(cur) >= CHUNK or size + len(c[1]) > BUDGET):
               chunks.append(cur)
               cur, size = [], 0
           cur.append(c)
