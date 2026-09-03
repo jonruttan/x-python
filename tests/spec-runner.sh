@@ -107,7 +107,14 @@ export SPEC_SEAM_COLLECT=0
 # boot the slow lane actually pays.  A timeout kill here also strands an
 # orphan engine at full spin -- observed taking a CI host down (exit 143)
 # -- so a ceiling nothing legitimate hits is safer than a tight one.
-export TIMEOUT_UNIT_SECS="${TIMEOUT_UNIT_SECS:-120}"
+# RAISED AGAIN, 120 -> 300, for the reason the paragraph above gives.  CI
+# runners vary by ~30% run to run (measured: identical specs at 21s and
+# 26s, 38s and 49s, on two runs of the same suite days apart), and this
+# bundle boots the whole tower per file.  A file that fits in 120s on a
+# fast runner does not on a slow one, and the kill takes the HOST down
+# rather than failing one case -- twice, at the same file boundary, with
+# "Terminate orphan process (timeout)" in the cleanup and exit 143.
+export TIMEOUT_UNIT_SECS="${TIMEOUT_UNIT_SECS:-300}"
 
 # SIZE THE CEILING FOR THE CONFORMANCE BATCHES ONLY, as the platform
 # runner's own comment instructs a seam-collect opt-out to do.  With no
