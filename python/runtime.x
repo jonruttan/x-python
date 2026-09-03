@@ -281,9 +281,18 @@
       (if (if (%py-float-is a) #t (%py-float-is b))
         (Float floor (/ (* a 1.0) b))
         ; PYTHON FLOORS, `Num quotient` TRUNCATES: -7 // 2 is -4, not -3.
-        ; Subtracting the (already floored) modulo leaves an exact multiple,
-        ; so the quotient of that is the floor with no float in the path.
-        (Num quotient (- a (Num modulo a b)) b)))))))
+        ; TRUNCATE THEN ADJUST, rather than subtracting a modulo: for a
+        ; non-negative numerator this is EXACTLY `Num quotient`, the value
+        ; and the representation callers had before floors were fixed.  The
+        ; subtracting form handed back a bigint zero under the promoting
+        ; lane, and python/format.x's digit loop tests its counter with
+        ; eq?, so base conversion span forever and took the CI host with it.
+        (let ((q (Num quotient a b)))
+          (if (if (not (= (- a (* q b)) 0))
+                (if (< (- a (* q b)) 0) (> b 0) (< b 0))
+                #f)
+            (- q 1)
+            q))))))))
 ; A STRING ON THE LEFT OF % IS FORMATTING, not arithmetic -- str.__mod__ --
 ; and the check comes before the zero test because the right operand of a
 ; format is a tuple as often as a number.

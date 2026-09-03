@@ -107,13 +107,15 @@
     (def dig ())
     (set! dig
       (fn (_ n acc)
-        (if (eq? n 0)
+        ; `=`, NOT eq?: a bigint zero is not eq? to the literal 0, and this
+        ; loop then never ends
+        (if (= n 0)
           acc
           (dig (%py-floordiv n base)
             (Str8 append (Str8 sub (%py-mod n base) 1 tbl) acc)))))
     ; back through the decimal spelling so bigints work without a cell walk
     (def n (%py-int-of-str (rest m)))
-    (pair (first m) (if (eq? n 0) "0" (dig n "")))))
+    (pair (first m) (if (= n 0) "0" (dig n "")))))
 
 ; --- Float digit machinery ---------------------------------------------------
 ; Everything below speaks (D x10): every digit, and the power of ten of the
