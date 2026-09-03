@@ -149,14 +149,27 @@ a flat table cannot fake.
 
 ## what a class body accepts
 
-### only defs and pass
+### defs, assignments and pass
 
-A class attribute — `count = 0` in the body — is real Python and belongs to the
-CLASS rather than an instance. There is nowhere to put it yet, so it is refused
-rather than bound somewhere surprising.
+A class attribute — `count = 0` in the body — belongs to the CLASS, and an
+instance reads it through the class until it shadows it.
 
 ```python
-(python-run "class C:\n    count = 0\nprint(C())")
+(python-run "class C:\n    count = 0\nc = C()\nprint(C.count, c.count)\nc.count = 5\nprint(C.count, c.count)")
 ```
 ---
-    Error: #<err:syntax a class body takes defs and pass only>
+```output
+0 0
+0 5
+```
+
+### and nothing else
+
+Anything that is not a def, an assignment or `pass` is refused rather than
+silently ignored.
+
+```python
+(python-run "class C:\n    if 1:\n        pass\nprint(C())")
+```
+---
+    Error: #<err:syntax a class body takes defs, assignments and pass only>
