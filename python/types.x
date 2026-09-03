@@ -46,6 +46,7 @@
 (provide python/types
   %py-bytes %py-bytes-new %py-bytes-is %py-bytes-str
   %py-gen %py-gen-new %py-gen-is %py-gen-state
+  %py-set %py-set-new %py-set-is %py-set-elems %py-set-set! %py-set-frozen?
   %py-list %py-list-new %py-list-is %py-list-elems %py-list-set!
   %py-dict %py-dict-new %py-dict-is %py-dict-entries %py-dict-set! %py-dict-get
   %py-repr %py-equal %py-repeat
@@ -159,6 +160,53 @@
 ; Each entry is a (key . value) pair, and updating a value mutates THAT pair --
 ; so the entry list itself only changes when a key is added, and the cell is
 ; what makes that visible to every reference.
+
+; --- PY-SET ------------------------------------------------------------------
+;
+; A set is a LIST OF DISTINCT ELEMENTS in insertion order, shaped exactly like
+; PY-DICT: a (flag . elements) pair behind the instance, so the cell is what
+; makes a mutation visible to every reference.  The flag is the frozen bit --
+; a frozenset is the same type with mutation refused and hashing allowed.
+;
+; INSERTION ORDER IS NOT AN IMPLEMENTATION DETAIL HERE.  CPython's iteration
+; order is its hash table's, which for the small non-negative ints the corpus
+; uses IS ascending -- and `set(range(N))` then pops 0, 1, 2 ... in order.
+; Insertion order reproduces that, and every other case in the corpus sorts
+; before printing.  Membership uses Python's equality (%py-eq in runtime.x),
+; which is why construction lives there: `{False, 0}` is one element.
+(def %py-set ())
+(def %py-set-frozen? (fn (_ v) (first (first v))))
+(def %py-set-elems (fn (_ v) (rest (first v))))
+(def %py-set-set! (fn (_ v new) (%seq (%set-rest! (first v) new) ())))
+(def %py-set-new (fn (_ frozen elems) (%make-instance %py-set (pair frozen elems))))
+(def %py-set-is (fn (_ v) (%type? v %py-set)))
+(def %py-set-step (fn (_ st) (if (null? st) () (pair (first st) (rest st)))))
+
+(set! %py-set
+  (%make-type
+    "PY-SET"
+    (list
+      ; an empty one has no braces to print: set() and frozenset()
+      (pair
+        (lit write)
+        (fn (_ self)
+          (def frozen (first (first self)))
+          (def es (rest (first self)))
+          (if (null? es)
+            (display (if frozen "frozenset()" "set()"))
+            (do
+              (display (if frozen "frozenset({" "{"))
+              (def go
+                (fn (recur l sep)
+                  (if (not (null? l))
+                    (do
+                      (if sep (display ", "))
+                      (%py-repr (first l))
+                      (recur (rest l) #t)))))
+              (go es #f)
+              (display (if frozen "})" "}"))))))
+      (pair (lit length) (fn (_ self) (List length (rest (first self)))))
+      (pair (lit iter) (fn (_ self) (%i-make %py-set-step (rest (first self))))))))
 
 (def %py-dict ())
 

@@ -205,11 +205,14 @@ def main():
     for (suite, group), cases in sorted(groups.items()):
       chunks = []
       cur, size = [], 0
-      # generator programs each keep every continuation's stack copy alive
-      # in the no-GC batch, so those groups run one case per process
-      solo = group in ("gen", "generator")
+      # SOME GROUPS COST FAR MORE THAN THEIR SOURCE BYTES.  The batch runs a
+      # file in one process that never collects, so cost accumulates: a
+      # generator keeps every continuation's stack copy alive, and a set
+      # program rebuilds whole element lists.  Those groups get a smaller
+      # cap than the byte budget alone would give them.
+      cap = {"gen": 1, "generator": 1, "set": 3, "frozenset": 3}.get(group, CHUNK)
       for c in cases:
-          if cur and (solo or len(cur) >= CHUNK or size + len(c[1]) > BUDGET):
+          if cur and (len(cur) >= cap or size + len(c[1]) > BUDGET):
               chunks.append(cur)
               cur, size = [], 0
           cur.append(c)

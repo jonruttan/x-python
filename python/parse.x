@@ -729,6 +729,13 @@
             (if (null? (rest (rest segs))) ()
               (first (rest (rest segs))))))))))
 
+(def %py-top-colon?
+  (fn (self toks)
+    (if (null? toks) #f
+      (if (%py-name-is? (first toks) "lambda")
+        (self (rest (%py-lambda-head toks ())))
+        (if (%py-op-is? (first toks) ":") #t (self (rest toks)))))))
+
 (def %py-comp?
   (fn (self toks)
     (if (null? toks)
@@ -817,6 +824,20 @@
                 (list (lit List) (lit reverse)
                   (list (lit first) (lit %py-acc)))))))))))
 
+(def %py-setcomp
+  (fn (_ elems)
+    (let ((r (%py-test elems)))
+      (if (not (%py-name-is? (if (null? (rest r)) () (first (rest r))) "for"))
+        (Err raise (lit syntax) "expected for in comprehension" ())
+        (let ((cls (%py-comp-clauses (rest r) ())))
+          (list (lit let)
+            (list (list (lit %py-acc) (list (lit pair) () ())))
+            (list (lit %seq)
+              (%py-comp-fold cls
+                (list (lit %set-first!) (lit %py-acc)
+                  (list (lit %py-set-put) (list (lit first) (lit %py-acc)) (first r))))
+              (list (lit %py-set-new) #f (list (lit first) (lit %py-acc))))))))))
+
 (def %py-dictcomp
   (fn (_ elems)
     (let ((k (%py-test elems)))
@@ -891,12 +912,16 @@
             (if (eq? (%py-tag t) (lit tok-name))
               (pair (%py-name->sym (%py-val t)) (rest toks))
               (if (%py-group? t "{")
-                (if (%py-comp? (%py-group-of t))
-                  (pair (%py-dictcomp (%py-group-of t)) (rest toks))
-                  (pair
-                    (pair (lit %py-mkdict)
-                      (%py-entries-of (%py-comma-split (%py-group-of t) () ()) ()))
-                    (rest toks)))
+                ; BRACES ARE A DICT ONLY WITH A COLON (or empty): {1, 2} is a
+                ; set, {a for a in x} a set comprehension, {k: v} a dict.
+                (let ((g (%py-group-of t)))
+                  (if (%py-comp? g)
+                    (pair (if (%py-top-colon? g) (%py-dictcomp g) (%py-setcomp g)) (rest toks))
+                    (if (if (null? g) #t (%py-top-colon? g))
+                      (pair
+                        (pair (lit %py-mkdict) (%py-entries-of (%py-comma-split g () ()) ()))
+                        (rest toks))
+                      (pair (pair (lit %py-mkset) (%py-group-exprs g)) (rest toks)))))
               (if (%py-group? t "[")
                 (if (%py-comp? (%py-group-of t))
                   (pair (%py-listcomp (%py-group-of t)) (rest toks))
@@ -1083,6 +1108,8 @@
         (list "any"            (lit %py-any))
         (list "sorted"         (lit %py-sorted))
         (list "iter"           (lit %py-iter))
+        (list "set"            (lit %py-cls-set))
+        (list "frozenset"      (lit %py-cls-frozenset))
         (list "SystemExit"     (lit %py-exc-SystemExit))
         ; The builtin exceptions are ordinary names bound to ordinary class
         ; values, so `except ValueError` and `except MyError` take one path.
@@ -1385,7 +1412,7 @@
       (Err raise (lit syntax) "expected a name after for" ())
       (let ((n (%py-for-names toks ())))
         (let ((syms (%py-syms-of (first n) ())))
-          (let ((it (%py-or-e (rest n))))
+          (let ((it (%py-exprlist (rest n))))
             (let ((b (%py-block (rest it))))
               ; THE LOOP PULLS ONE ITEM AT A TIME from %py-iter-open's source:
               ; a generator yields lazily (its prints interleave with the
