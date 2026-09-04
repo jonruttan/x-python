@@ -47,6 +47,7 @@
   %py-bytes %py-bytes-new %py-bytes-is %py-bytes-str
   %py-gen %py-gen-new %py-gen-is %py-gen-state
   %py-set %py-set-new %py-set-is %py-set-elems %py-set-set! %py-set-frozen?
+  %py-view %py-view-new %py-view-is %py-view-kind %py-view-elems
   %py-list %py-list-new %py-list-is %py-list-elems %py-list-set!
   %py-dict %py-dict-new %py-dict-is %py-dict-entries %py-dict-set! %py-dict-get
   %py-repr %py-equal %py-repeat
@@ -207,6 +208,36 @@
               (display (if frozen "})" "}"))))))
       (pair (lit length) (fn (_ self) (List length (rest (first self)))))
       (pair (lit iter) (fn (_ self) (%i-make %py-set-step (rest (first self))))))))
+
+; --- PY-VIEW -----------------------------------------------------------------
+; What d.keys(), d.values() and d.items() answer: a named sequence that
+; prints as dict_keys([...]), has a length and a truth, and iterates.  A
+; SNAPSHOT rather than CPython's live window -- the corpus prints them and
+; lists them, and a live view would need the dict to publish changes.
+(def %py-view ())
+(def %py-view-kind (fn (_ v) (first (first v))))
+(def %py-view-elems (fn (_ v) (rest (first v))))
+(def %py-view-new (fn (_ kind elems) (%make-instance %py-view (pair kind elems))))
+(def %py-view-is (fn (_ v) (%type? v %py-view)))
+(def %py-view-step (fn (_ st) (if (null? st) () (pair (first st) (rest st)))))
+(set! %py-view
+  (%make-type
+    "PY-VIEW"
+    (list
+      (pair (lit write)
+        (fn (_ self)
+          (display (first (first self)) "([")
+          (def go
+            (fn (recur l sep)
+              (if (not (null? l))
+                (do
+                  (if sep (display ", "))
+                  (%py-repr (first l))
+                  (recur (rest l) #t)))))
+          (go (rest (first self)) #f)
+          (display "])")))
+      (pair (lit length) (fn (_ self) (List length (rest (first self)))))
+      (pair (lit iter) (fn (_ self) (%i-make %py-view-step (rest (first self))))))))
 
 (def %py-dict ())
 

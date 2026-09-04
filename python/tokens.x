@@ -777,12 +777,14 @@
     (if (= b 61)
       (if (= a 61) #t (if (= a 33) #t (if (= a 60) #t (if (= a 62) #t
         (if (= a 43) #t (if (= a 45) #t (if (= a 42) #t
-          (if (= a 47) #t (= a 37)))))))))
+          (if (= a 47) #t (if (= a 37) #t
+            ; |= &= ^= -- the bitwise augmented forms
+            (if (= a 124) #t (if (= a 38) #t (= a 94)))))))))))
       (if (if (= a 47) (= b 47) #f) #t
         (if (if (= a 42) (= b 42) #f) #t
           ; << and >> -- the shifts
           (if (if (= a 60) (= b 60) #f) #t
-            (if (= a 62) (= b 62) #f)))))))
+            (if (= a 62) (= b 62) #f))))))))
 
 ; ONLY THE SIX CHARACTERS THAT CAN BEGIN A TWO-CHARACTER OPERATOR look ahead.
 ; Everything else accepts on the spot.
@@ -803,7 +805,9 @@
   (fn (_ c)
     (if (= c 61) #t (if (= c 33) #t (if (= c 60) #t (if (= c 62) #t
       (if (= c 47) #t (if (= c 42) #t
-        (if (= c 43) #t (if (= c 45) #t (= c 37))))))))))) 
+        (if (= c 43) #t (if (= c 45) #t (if (= c 37) #t
+          ; |= &= ^= join the lookahead set for the same reason
+          (if (= c 124) #t (if (= c 38) #t (= c 94)))))))))))))) 
 
 (def %py-op-second
   (fn (_ c1)

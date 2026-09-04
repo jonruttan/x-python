@@ -190,9 +190,12 @@
 
 ; Augmented assignment: the operator that folds the old value with the new.
 (def %py-aug-ops
-  (list (list "+=" (lit %py-add)) (list "-=" (lit %py-sub))
+  (list (list "+=" (lit %py-iadd)) (list "-=" (lit %py-sub))
         (list "*=" (lit %py-mul)) (list "/=" (lit %py-div))
-        (list "%=" (lit %py-mod))))
+        (list "%=" (lit %py-mod))
+        ; two characters only: the tokenizer pairs, it does not triple
+        (list "|=" (lit %py-bitor)) (list "&=" (lit %py-bitand))
+        (list "^=" (lit %py-bitxor))))
 
 (def %py-cmp-ops
   (list (list "==" (lit %py-eq)) (list "!=" (lit %py-ne))
@@ -1300,6 +1303,17 @@
         ; the declaration itself does nothing; %py-def reads it to leave the
         ; names out of the local hoist, so assignment reaches the module's
         (let ((sp (%py-line-of (rest toks) ()))) (pair () (rest sp)))
+      ; `del NAME[k]`, `del NAME[a:b]`: the subscript form decides which
+      (if (%py-name-is? t "del")
+        (let ((r (%py-postfix (rest toks))))
+          (let ((tgt (first r)))
+            (if (not (pair? tgt))
+              (Err raise (lit syntax) "cannot delete this target" ())
+              (if (eq? (first tgt) (lit %py-index))
+                (pair (pair (lit %py-delindex) (rest tgt)) (rest r))
+                (if (eq? (first tgt) (lit %py-slice))
+                  (pair (pair (lit %py-delslice) (rest tgt)) (rest r))
+                  (Err raise (lit syntax) "cannot delete this target" ()))))))
       (if (%py-name-is? t "try")
         (%py-try (rest toks))
       (if (%py-name-is? t "raise")
@@ -1382,7 +1396,7 @@
                             (pair
                               (%py-store (first tgt)
                                 (list aug (first tgt) (first r)))
-                              (rest r)))))))))))))))))))))))
+                              (rest r))))))))))))))))))))))))
 
 ; `else:` after an if.  `elif` is `else: if ...`, which is what Python's own
 ; grammar says it is, so it needs no separate shape.
@@ -1867,7 +1881,10 @@
       (if (eq? (first target) (lit %py-getattr))
         (list (lit %py-setattr) (first (rest target))
               (first (rest (rest target))) value)
-        (Err raise (lit syntax) "cannot assign to this target" ())))
+      ; `l[1:3] = xs` replaces that span, and may change the length
+      (if (eq? (first target) (lit %py-slice))
+        (pair (lit %py-setslice) (%py-append (rest target) (list value)))
+        (Err raise (lit syntax) "cannot assign to this target" ()))))
       (list (lit set!) target value))))
 
 (def %py-else
