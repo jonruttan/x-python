@@ -42,20 +42,15 @@ it would have been, and from there both match identically.
 
 ### a sibling does not catch
 
-IndexError and KeyError share a base; neither derives from the other.
-
-The uncaught line here is the `Err` form rather than `KeyError: a`, and that is
-a real inconsistency rather than an accident of this case: a raise from Python
-source makes an instance and prints `Name: message`, while a raise from this
-runtime stays an `Err` and prints the platform's `#<err:kind msg>`. Both are
-CAUGHT identically — that is what the kind table is for — but they still print
-differently when nothing catches them. Python shows one form for both.
+IndexError and KeyError share a base; neither derives from the other. The
+uncaught line prints as Python does: a missing key is a KeyError carrying the
+key, whether the raise came from Python source or from this runtime.
 
 ```python
 (python-run "try:\n    print({}['a'])\nexcept IndexError:\n    print('wrong')")
 ```
 ---
-    Error: #<err:key key not found>
+    Error: KeyError: 'a'
 
 ### Exception is no longer a special case, just the root
 

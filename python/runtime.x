@@ -2784,11 +2784,21 @@
       (display (%py-class-name (%py-obj-class o)) ": " (%py-exc-msg o))
       (display "<" (%py-class-qualname (%py-obj-class o)) " object>"))))
 
-; The message an exception carries, for print(e) and str(e).
+; The message an exception carries, for print(e) and str(e).  A KeyError
+; with ONE argument answers that argument's REPR -- Python prints a missing
+; string key as `KeyError: 'z'` so the reader can tell the key from prose --
+; and everything else answers the str of its first argument.
 (def %py-exc-msg
   (fn (_ e)
-    (let ((a (%py-alist-find "__msg__" (%py-obj-attrs e))))
-      (if (null? a) "" (%py-str (rest a))))))
+    (let ((a (%py-alist-find "__msg__" (%py-obj-attrs e)))
+          (args (%py-alist-find "args" (%py-obj-attrs e))))
+      (if (null? a)
+        ""
+        (if (if (%py-subclass? (%py-obj-class e) %py-exc-KeyError)
+              (if (null? args) #f (null? (rest (%py-tuple-elems (rest args)))))
+              #f)
+          (%py-repr-of (rest a))
+          (%py-str (rest a)))))))
 
 ; --- Classes -----------------------------------------------------------------
 ;

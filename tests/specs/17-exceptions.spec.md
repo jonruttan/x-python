@@ -97,7 +97,7 @@ than computed. When classes arrive, this is the entry that grows a parent link.
 (python-run "try:\n    raise KeyError('k')\nexcept ValueError:\n    print('wrong')")
 ```
 ---
-    Error: KeyError: k
+    Error: KeyError: 'k'
 
 ### a try that does not raise runs no handler
 
