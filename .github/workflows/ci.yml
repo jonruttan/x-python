@@ -25,7 +25,7 @@ on:
 
 jobs:
   specs:
-    name: specs @ x-lang ${{ matrix.x-lang }}
+    name: specs @ x-lang ${{ matrix.x-lang }} (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     continue-on-error: ${{ matrix.x-lang == 'main' }}
     strategy:
@@ -38,6 +38,15 @@ jobs:
         # (requires-release ...) VERBATIM -- they are one fact, and the check
         # below fails the build if they drift.
         x-lang: ['v0.10.0', 'main']
+        # FOUR SHARDS, BECAUSE THE BOOT IS THE COST.  Each spec file boots the
+        # whole tower in its own process (tests/spec-runner.sh says why), and
+        # measured on these runners that boot is ~26s of a ~38s file: a
+        # one-job sweep was 41 minutes, two thirds of it booting.  The boots
+        # are independent, so four runners pay them at once -- ~11 minutes
+        # of wall time for the same work, and no file runs on two of them.
+        # The runner's SPEC_SHARD=i/n knob does the split; the shard count
+        # here and the `/4` in the two lines that name it are one fact.
+        shard: [0, 1, 2, 3]
 
     steps:
       - uses: actions/checkout@v4
@@ -72,8 +81,8 @@ jobs:
           make             # x-bin at the repo root -- `make engine` does not build it
           make boot        # the launcher-free amalgams the harness loads
 
-      - name: Run the Python specs
-        run: X="$PWD/.x-lang/x.sh" sh tests/spec-runner.sh
+      - name: Run the Python specs (shard ${{ matrix.shard }} of 4)
+        run: SPEC_SHARD="${{ matrix.shard }}/4" X="$PWD/.x-lang/x.sh" sh tests/spec-runner.sh
 
   relocatable:
     # THE RULE THAT ACTUALLY KILLED THE LAST GENERATION, as a gate -- and it
