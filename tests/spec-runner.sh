@@ -85,6 +85,34 @@ if [ "$#" -eq 0 ]; then
 	set -- "$SPEC_PATH"/*.spec.md
 fi
 
+# SHARDS, BECAUSE THE BOOT IS THE COST.  Measured on CI: 65 files, 41 minutes,
+# and the EMPTY harness spec takes 26s -- so two thirds of the wall time is the
+# tower booting 65 times over, and no single file is the problem.  Those boots
+# are independent, so the honest speedup is to pay them on more machines at
+# once: SPEC_SHARD=i/n keeps every n-th file starting at the i-th (0-based),
+# and n jobs given 0/n .. n-1/n run the whole suite between them with nothing
+# shared and nothing skipped.  Round-robin rather than contiguous ranges, so
+# the heavy files that cluster by number spread across shards.  Unset means
+# one shard of one, the runner's old behaviour, which is what a local run and
+# the release gate want.
+case "${SPEC_SHARD:-}" in
+	"") ;;
+	*/*)
+		i="${SPEC_SHARD%/*}"; n="${SPEC_SHARD#*/}"
+		k=0
+		for f in "$@"; do
+			if [ $((k % n)) -eq "$i" ]; then set -- "$@" "$f"; fi
+			k=$((k + 1))
+			shift
+		done
+		[ "$#" -gt 0 ] || { echo "x-python: shard $SPEC_SHARD selects no files" >&2; exit 1; }
+		;;
+	*)
+		echo "x-python: SPEC_SHARD must be i/n, got '$SPEC_SHARD'" >&2
+		exit 1
+		;;
+esac
+
 # NO COLLECT AT SNIPPET SEAMS.  python-run builds an isolated tokenizer base,
 # which is C-held state the collector's mark cannot see (the x-lang#283 rooting
 # family) -- so the platform runner's per-seam collect (x-lang#568) frees it
