@@ -82,7 +82,7 @@ it — the same identity argument that makes list `append` work.
 (python-run "d = {'a': 1}\nprint(d['z'])")
 ```
 ---
-    Error: #<err:key key not found>
+    Error: KeyError: 'z'
 
 ### get returns None for a missing key
 
@@ -187,7 +187,7 @@ b
 (python-run "print({'a': 1, 'b': 2}.keys())")
 ```
 ---
-    ['a', 'b']
+    dict_keys(['a', 'b'])
 
 ### values
 
@@ -195,7 +195,7 @@ b
 (python-run "print({'a': 1, 'b': 2}.values())")
 ```
 ---
-    [1, 2]
+    dict_values([1, 2])
 
 ## dicts errors
 
@@ -296,7 +296,7 @@ None
 (python-run "print({'a': 1}['b'])")
 ```
 ---
-    Error: #<err:key key not found>
+    Error: KeyError: 'b'
 
 ### len of a dict
 

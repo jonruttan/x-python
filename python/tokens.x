@@ -775,35 +775,18 @@
 (def %py-op-pair?
   (fn (_ a b)
     (if (= b 61)
-      (if (= a 61) #t (if (= a 33) #t (if (= a 60) #t (if (= a 62) #t
-        (if (= a 43) #t (if (= a 45) #t (if (= a 42) #t
-          (if (= a 47) #t (= a 37)))))))))
+      ; ==  !=  <=  >=  +=  -=  *=  /=  %=  |=  &=  ^=
+      (if (= a 61) #t (if (= a 33) #t (if (= a 60) #t (if (= a 62) #t (if (= a 43) #t (if (= a 45) #t (if (= a 42) #t (if (= a 47) #t (if (= a 37) #t (if (= a 124) #t (if (= a 38) #t (= a 94))))))))))))
+      ; // ** << >>
       (if (if (= a 47) (= b 47) #f) #t
         (if (if (= a 42) (= b 42) #f) #t
-          ; << and >> -- the shifts
           (if (if (= a 60) (= b 60) #f) #t
             (if (= a 62) (= b 62) #f)))))))
 
-; ONLY THE SIX CHARACTERS THAT CAN BEGIN A TWO-CHARACTER OPERATOR look ahead.
-; Everything else accepts on the spot.
-;
-; This is the fix for `1+2` reading as (('tok-number "1") 2) -- the `+` lost and
-; the `2` unwrapped. PY-NUMBER ends `1` by giving `+` back with %buffer-unread;
-; PY-OP then took `+`, entered a lookahead state, saw `2`, and unread AGAIN.
-; Two rewinds around one character is one too many, and the token in between
-; disappeared. `-3` at the start of input worked precisely because nothing had
-; unread before it, which is what made this look like a sign-handling bug for
-; three rounds of investigation.
-;
-; ash's SH-OP has the same split -- `(` and `)` accept immediately, the rest
-; look ahead -- and this is why.
-; The augmented-assignment operators put + - * % into the lookahead set too:
-; `+=` must beat `+`, the same way `==` beats `=`.
 (def %py-op-pairable?
   (fn (_ c)
-    (if (= c 61) #t (if (= c 33) #t (if (= c 60) #t (if (= c 62) #t
-      (if (= c 47) #t (if (= c 42) #t
-        (if (= c 43) #t (if (= c 45) #t (= c 37))))))))))) 
+    ; = ! < > / * + - %, and | & ^ for |= &= ^=
+    (if (= c 61) #t (if (= c 33) #t (if (= c 60) #t (if (= c 62) #t (if (= c 47) #t (if (= c 42) #t (if (= c 43) #t (if (= c 45) #t (if (= c 37) #t (if (= c 124) #t (if (= c 38) #t (= c 94))))))))))))))
 
 (def %py-op-second
   (fn (_ c1)
