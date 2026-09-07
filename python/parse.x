@@ -202,9 +202,13 @@
   (list (list "+=" (lit %py-iadd)) (list "-=" (lit %py-isub))
         (list "*=" (lit %py-imul)) (list "/=" (lit %py-idiv))
         (list "%=" (lit %py-imod))
-        ; two characters only: the tokenizer pairs, it does not triple
         (list "|=" (lit %py-ibitor)) (list "&=" (lit %py-ibitand))
-        (list "^=" (lit %py-ibitxor))))
+        (list "^=" (lit %py-ibitxor))
+        ; the three-character forms; the tokenizer reads a third `=` after
+        ; the doubled operators, which is what these need (tokens.x,
+        ; %py-op-triple?)
+        (list "//=" (lit %py-ifloordiv)) (list "**=" (lit %py-ipow))
+        (list "<<=" (lit %py-ilshift))   (list ">>=" (lit %py-irshift))))
 
 (def %py-cmp-ops
   (list (list "==" (lit %py-eq)) (list "!=" (lit %py-ne))

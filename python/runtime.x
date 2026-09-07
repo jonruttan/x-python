@@ -125,6 +125,13 @@
 (def %py-ibitor  (fn (_ a b) (%py-inplace "__ior__" %py-bitor a b)))
 (def %py-ibitand (fn (_ a b) (%py-inplace "__iand__" %py-bitand a b)))
 (def %py-ibitxor (fn (_ a b) (%py-inplace "__ixor__" %py-bitxor a b)))
+; The three-character forms, once the tokenizer could read them: `//=` `**=`
+; `>>=` `<<=` are the same rule, and Python names their dunders after the
+; binary op the same way.
+(def %py-ifloordiv (fn (_ a b) (%py-inplace "__ifloordiv__" %py-floordiv a b)))
+(def %py-ipow      (fn (_ a b) (%py-inplace "__ipow__" %py-pow a b)))
+(def %py-ilshift   (fn (_ a b) (%py-inplace "__ilshift__" %py-lshift a b)))
+(def %py-irshift   (fn (_ a b) (%py-inplace "__irshift__" %py-rshift a b)))
 
 (def %py-add
   (fn (_ a b)
