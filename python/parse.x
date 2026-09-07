@@ -1094,6 +1094,10 @@
         (list "list"    (lit %py-cls-list))
         (list "hasattr" (lit %py-hasattr))
         (list "object"  (lit %py-cls-object))
+        ; the three that make a decorated def mean something
+        (list "staticmethod" (lit %py-staticmethod))
+        (list "classmethod"  (lit %py-classmethod))
+        (list "property"     (lit %py-property))
         (list "type"    (lit %py-cls-type))
         (list "int"     (lit %py-cls-int))
         (list "float"   (lit %py-cls-float))
@@ -1353,6 +1357,19 @@
                       (list (lit %seq) (first b) (list (lit self)))
                       ())))
                 (rest b))))
+          (if (%py-op-is? t "@")
+            ; A DECORATED def AT STATEMENT LEVEL is the same def with the call
+            ; around its function: %py-def emits (def SYM FN), so the wrap goes
+            ; on FN and the binding stays one form.
+            (let ((ds (%py-decos-of toks ())))
+              (let ((t2 (rest ds)))
+                (if (not (%py-name-is? (if (null? t2) () (first t2)) "def"))
+                  (Err raise (lit syntax) "a decorator must be followed by a def" ())
+                  (let ((r (%py-def (rest t2))))
+                    (pair
+                      (list (lit def) (first (rest (first r)))
+                        (%py-wrap-decos (first ds) (first (rest (rest (first r))))))
+                      (rest r))))))
           (if (%py-name-is? t "def")
             (%py-def (rest toks))
             (if (%py-name-is? t "return")
@@ -1407,7 +1424,7 @@
                             (pair
                               (%py-store (first tgt)
                                 (list aug (first tgt) (first r)))
-                              (rest r))))))))))))))))))))))))
+                              (rest r)))))))))))))))))))))))))
 
 ; `else:` after an if.  `elif` is `else: if ...`, which is what Python's own
 ; grammar says it is, so it needs no separate shape.
@@ -1730,6 +1747,30 @@
               (list (lit %py-raise) (list (lit %py-exc-instance) (%py-name->sym (%py-val n)) ()))
               (rest toks))))))))
 
+; --- decorators --------------------------------------------------------------
+;
+; `@deco` before a def is a CALL: Python's rule is f = deco(f), applied bottom
+; up, so @a @b def f leaves a(b(f)).  Nothing here needs to know which
+; decorator it is -- staticmethod, classmethod and property are ordinary
+; builtins that answer descriptors, and a user-written decorator is a function
+; like any other.
+
+(def %py-decos-of ())
+(set! %py-decos-of
+  ; answers (DECORATOR-EXPRS . TOKENS-AFTER), source order, at the def
+  (fn (self toks acc)
+    (let ((t (%py-skip-nl toks)))
+      (if (if (null? t) #f (%py-op-is? (first t) "@"))
+        (let ((d (%py-exprlist (rest t))))
+          (self (rest d) (pair (first d) acc)))
+        (pair (List reverse acc) t)))))
+
+(def %py-wrap-decos ())
+(set! %py-wrap-decos
+  ; (a b) over F is (a (b F)) -- the decorator nearest the def runs first
+  (fn (self ds f)
+    (if (null? ds) f (list (first ds) (self (rest ds) f)))))
+
 ; --- class -------------------------------------------------------------------
 ;
 ; A class body is a run of `def`s.  Each one is parsed by %py-def, which emits
@@ -1748,8 +1789,24 @@
     (let ((t (%py-skip-nl toks)))
       (if (null? t)
         (pair (List reverse acc) t)
-        (if #f
-          ()
+        ; A DECORATED METHOD is the same entry with a call around its function:
+        ; the decorators are collected, the def is parsed as it always was, and
+        ; what goes in the alist is deco(fn) rather than fn.
+        (if (%py-op-is? (first t) "@")
+          (let ((ds (%py-decos-of t ())))
+            (let ((t2 (rest ds)))
+              (if (not (%py-name-is? (if (null? t2) () (first t2)) "def"))
+                (Err raise (lit syntax) "a decorator must be followed by a def" ())
+                (let ((nm (if (null? (rest t2)) () (first (rest t2)))))
+                  (if (not (eq? (%py-tag nm) (lit tok-name)))
+                    (Err raise (lit syntax) "expected a method name after def" ())
+                    (let ((r (%py-def (rest t2))))
+                      (self (rest r)
+                        (pair
+                          (list (lit pair) (%py-val nm)
+                            (%py-wrap-decos (first ds)
+                              (first (rest (rest (first r))))))
+                          acc))))))))
           (if (%py-name-is? (first t) "pass")
             (self (rest t) acc)
             (if (not (%py-name-is? (first t) "def"))
@@ -1761,7 +1818,7 @@
                 (let ((v (%py-exprlist (rest (rest t)))))
                   (self (rest v)
                     (pair (list (lit pair) (%py-val (first t)) (first v)) acc)))
-                (Err raise (lit syntax) "a class body takes defs, assignments and pass only" ()))
+                (Err raise (lit syntax) "a class body takes defs, assignments, decorated defs and pass only" ()))
               (let ((nm (if (null? (rest t)) () (first (rest t)))))
                 (if (not (eq? (%py-tag nm) (lit tok-name)))
                   (Err raise (lit syntax) "expected a method name after def" ())

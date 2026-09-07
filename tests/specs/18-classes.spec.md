@@ -165,11 +165,11 @@ instance reads it through the class until it shadows it.
 
 ### and nothing else
 
-Anything that is not a def, an assignment or `pass` is refused rather than
-silently ignored.
+Anything that is not a def, an assignment, a decorated def or `pass` is
+refused rather than silently ignored.
 
 ```python
 (python-run "class C:\n    if 1:\n        pass\nprint(C())")
 ```
 ---
-    Error: #<err:syntax a class body takes defs, assignments and pass only>
+    Error: #<err:syntax a class body takes defs, assignments, decorated defs and pass only>
