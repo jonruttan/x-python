@@ -163,13 +163,19 @@ instance reads it through the class until it shadows it.
 0 5
 ```
 
-### and nothing else
+### and a statement it does not take
 
-Anything that is not a def, an assignment, a decorated def or `pass` is
-refused rather than silently ignored.
+A class body takes defs, decorated defs, assignments, `pass`, and a bare
+EXPRESSION -- which is how Python spells a docstring, and why the body no
+longer refuses one.
+
+A control-flow statement is still refused, and that IS a divergence: Python
+runs `if` inside a class body like any other suite.  The refusal comes from
+the expression parser now rather than from the body parser, so the message
+names the token rather than the shape.
 
 ```python
 (python-run "class C:\n    if 1:\n        pass\nprint(C())")
 ```
 ---
-    Error: #<err:syntax a class body takes defs, assignments, decorated defs and pass only>
+    Error: #<err:syntax unexpected token in expression>
