@@ -92,18 +92,100 @@ it reads two-character operators and stops.  The binary forms all work --
 ---
     Error: #<err:syntax unexpected token in expression>
 
-### a NUL byte is not representable
+### a NUL byte is refused in a literal, while the program is read
 
-A string on this platform ends at its first NUL, so `chr(0)` is already the
-empty string and `b"\x00"` is already empty -- a limit of the string layer,
-not of bytes.  The constructor REFUSES rather than answering a short bytes,
-because a silently shorter value is the worse of the two failures.
+A string on this platform is a C STRING, by an engine guarantee rather than an
+accident -- `str/nul-terminated`, in x-lang's `docs/engine-contract.md` -- so
+it ends at its first NUL and nothing this bundle can pass changes that.  There
+is no fix available here, only a choice of failure, and every spelling now
+makes the same one.  What they did instead, measured against CPython 3.14.7:
+
+| | CPython | here, before |
+|---|---:|---:|
+| `len(chr(0))` | 1 | 0 |
+| `len(b'\x00')` | 1 | 0 |
+| `len('a' + chr(0) + 'b')` | 3 | 2 |
+| `repr(b'\x00')` | `b'\x00'` | `b''` |
+
+The value did not raise and did not survive -- it SHORTENED, silently, which
+is the worst of the three answers a runtime can give.
+`docs/nul-and-the-string-layer.md` is the decision, including why carrying a
+NUL in `bytes` alone was rejected: `bytes` is a wrapper and could have held a
+byte list, but a NUL-bearing `bytes` in a runtime whose `str` cannot hold one
+has nowhere to `.decode()` to, so the silent loss moves to the seam rather
+than going away.
+
+A literal is refused while the program is being READ, so it takes the whole
+program with it and no `try` in that program catches it -- the shape CPython
+gives a `SyntaxError`.  CPython prints `1` here.
 
 ```python
-(python-run "try:\n    bytes([0])\nexcept ValueError as e:\n    print(e)\nprint(len(b'\\x00'), len(chr(0)))")
+(python-run "print(len(b'\\x00'))")
+```
+---
+    Error: #<err:value a NUL byte is not representable here>
+
+### a str literal's NUL is refused the same way
+
+CPython prints `3`.
+
+```python
+(python-run "print(len('a\\x00b'))")
+```
+---
+    Error: #<err:value a NUL byte is not representable here>
+
+### octal names a NUL too
+
+`\0` and `\000` are the same byte by another spelling, in either kind of
+literal.  CPython prints `b'\x00' b'\x00'`.
+
+```python
+(python-run "print(b'\\0', b'\\000')")
+```
+---
+    Error: #<err:value a NUL byte is not representable here>
+
+### an f-string body is read like any other literal
+
+CPython prints the three-character string `x\x00y`.
+
+```python
+(python-run "print(f'x\\x00y')")
+```
+---
+    Error: #<err:value a NUL byte is not representable here>
+
+### at runtime it is a ValueError carrying the same sentence
+
+`chr(0)` is the one every other runtime path goes through -- `%c` and an
+f-string's `{chr(0)}` included -- and the two `bytes()` arms answer for
+themselves.  One sentence, five spellings, and `except ValueError` catches
+every one.  CPython raises none of them.
+
+```python
+(python-run "try:\n    chr(0)\nexcept ValueError as e:\n    print('chr', e)\ntry:\n    bytes([0])\nexcept ValueError as e:\n    print('list', e)\ntry:\n    bytes(3)\nexcept ValueError as e:\n    print('count', e)\ntry:\n    '%c' % 0\nexcept ValueError as e:\n    print('pct', e)\ntry:\n    f'{chr(0)}'\nexcept ValueError as e:\n    print('fstr', e)")
 ```
 ---
 ```output
-a NUL byte is not representable here
-0 0
+chr a NUL byte is not representable here
+list a NUL byte is not representable here
+count a NUL byte is not representable here
+pct a NUL byte is not representable here
+fstr a NUL byte is not representable here
+```
+
+### nothing that stops short of a NUL is touched
+
+`bytes(0)` is the empty bytes rather than a refusal, a raw string decodes no
+escape at all so `r'\x00'` is the four characters CPython says it is, and
+every other byte still round-trips.  A real CPython output.
+
+```python
+(python-run "print(bytes(0), bytes([65]), chr(65), b'\\x01\\xff', '\\x41')\nprint(repr(r'\\x00'), len(r'\\x00'))")
+```
+---
+```output
+b'' b'A' A b'\x01\xff' A
+'\\x00' 4
 ```
