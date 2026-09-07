@@ -94,6 +94,24 @@ if [ "${IMG:-1}" = 0 ]; then
 	:
 else
 	_builder="$X_ROOT/tools/dev/image-build.sh"
+	# NOT EVERY PLATFORM CAN CARRY THIS BUNDLE'"'"'S IMAGE, and the failure is a
+	# SIGSEGV rather than a wrong answer.  tool/asm-compile.x held its JIT
+	# trampoline addresses as plain integers resolved by dlsym at module load,
+	# and an integer names nothing: an image carries the WRITER process'"'"'s
+	# addresses, so a compile on the far side of a load emits calls into them.
+	# This bundle compiles -- 29-compiled-analysers swaps a compiled analyser
+	# in on purpose, and %py-jit fires on any big enough program -- so the
+	# whole suite is gated, not that one file.  Seen on x-python#43'"'"'s CI: the
+	# v0.12.0 leg died at exit 139 ("interpreter died mid-batch") on the swap
+	# while the main leg was green.  x-lang 41b93185 made those addresses
+	# transients the recache hook remakes; it is unreleased at v0.12.0, so the
+	# probe is for the FIX rather than for a version, and the pinned leg picks
+	# images up by itself the release after it lands.
+	_asm="$X_ROOT/lib/x/tool/asm-compile.x"
+	if [ -f "$_asm" ] && ! grep -q "image-transients" "$_asm"; then
+		echo "x-python: platform images the JIT trampoline addresses (pre-41b93185) -- the suite boots from source" >&2
+		_builder=""
+	fi
 	if [ -f "$_builder" ]; then
 		if X_BIN="$X_BIN" sh "$_builder" "$LANG_LIB" "$BUNDLE/tests/lib/.images" "$BUNDLE/python"; then
 			X_IMG_DIR="$BUNDLE/tests/lib/.images"; export X_IMG_DIR
