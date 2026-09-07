@@ -55,6 +55,11 @@
 ; ONE default base, built once.  It carries the sexp types, which is exactly
 ; what is wanted here and exactly what is not wanted for Python's own source.
 (def %py-sexp-base (Base make))
+; Process state, like the tokenizer base: its own chain, so the image writer
+; carries it as nil and the recache hook makes it again after a load.
+(set! %image-transients (pair (lit %py-sexp-base) %image-transients))
+(set! %image-recache-hooks
+  (pair (fn (_) (set! %py-sexp-base (Base make))) %image-recache-hooks))
 
 (def %py-char->int (prim-ref (lit char) (lit ->int)))
 

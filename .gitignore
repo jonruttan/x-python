@@ -9,3 +9,7 @@ deps/
 # embeds the output of whichever CPython happened to be the oracle.
 tests/lib/
 tests/conformance/
+
+# The boot image: `x --image -l python` (the install above) writes it beside
+# the bundle, and `x -l python` boots from it while its key still matches.
+.images/

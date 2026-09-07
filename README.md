@@ -144,6 +144,16 @@ x -l python -f program.py    # batch
 x-lang boots the dialect `lang.xon` declares, arms this bundle's module root,
 and loads `run.x` on top — which is why nothing here needs to know a path.
 
+**It boots from a state image when one is present.** `make install` ends with
+`x --image -l python`, which writes the booted lang to `.images/` beside the
+bundle; `x -l python` then loads that instead of re-reading the sources (0.9s
+against 10.8s here) for as long as the image's key still matches the library
+and engine. Two things in this bundle are process state and cannot travel in
+an image — the tokenizer base and the parser's sexp base, each `(Base make)`d
+on a chain of its own — so `python/tokens.x` and `python/parse.x` name them as
+transients and remake them after a load. `x --no-image -l python` boots from
+source.
+
 **Xenon boots slower than the light dialects**, and that is a deliberate cost:
 eight runtime `cc` compilations for the numeric analysers, bought so that
 `2 ** 200` is right. See [Why xenon](#why-xenon).

@@ -52,7 +52,26 @@
 ; (Base make-tok) is the isolated, type-free base -- 2024's make-token-base.
 (import x/reader/indent)
 
-(def %py-base (Base make-tok))
+; THE TOKENIZER BASE IS PROCESS STATE.  (Base make-tok) allocates it on a
+; chain of its own, so a state image cannot carry it: the writer images
+; %py-base as nil and %py-tok-reset! (end of file) remakes it after a load,
+; exactly as it makes it here.  Each type RECORDS itself in this table as its
+; handlers are defined, and %py-tok-base-make walks the table in that order --
+; the one registration list, read at load and after every image load alike.
+(def %py-tok-types (pair () ()))   ; ((name . handlers) ...), newest first
+(def %py-tok-type!
+  (fn (_ nm hs)
+    (%set-first! %py-tok-types (pair (pair nm hs) (first %py-tok-types)))))
+(def %py-tok-base-make
+  (fn (_)
+    (let ((b (Base make-tok)))
+      ((fn (self l)
+         (if (null? l) ()
+           (do (self (rest l))
+               (Base make-type b (first (first l)) (rest (first l))))))
+       (first %py-tok-types))
+      b)))
+(def %py-base ())
 
 ; The platform owns the tokenizer intrinsics (lib/x/reader/intrinsics.x); these
 ; run per character, so they are the platform's own tested versions rather than
@@ -115,7 +134,7 @@
         (if (if (= chr #\space) #t (= chr #\tab))
           (%seq (%score-set score (- 0 1) buffer) %py-ws-continue)
           ())))))
-(Base make-type %py-base "PY-WS" %py-t-ws)
+(%py-tok-type! "PY-WS" %py-t-ws)
 
 ; --- PY-COMMENT: # to end of line, discarded ---------------------------------
 ; The newline is given back, because it is a NEWLINE token and a comment must
@@ -134,7 +153,7 @@
         (if (= chr 35)
           (%seq (%score-set score (- 0 1) buffer) %py-comment-body)
           ())))))
-(Base make-type %py-base "PY-COMMENT" %py-t-comment)
+(%py-tok-type! "PY-COMMENT" %py-t-comment)
 
 ; --- PY-NL: the newline AND the indentation that follows it ------------------
 ;
@@ -275,7 +294,7 @@
     (pair (lit analyse)
       (fn (_ buffer score chr)
         (if (= chr #\newline) %py-blank-ws ())))))
-(Base make-type %py-base "PY-BLANK" %py-t-blank)
+(%py-tok-type! "PY-BLANK" %py-t-blank)
 
 (def %py-t-nl
   (list
@@ -304,7 +323,7 @@
               ; to consume it; the block structure now says everything the
               ; column said, so emitting it would be dead data.
               (mk-tok-newline))))))))))
-(Base make-type %py-base "PY-NL" %py-t-nl)
+(%py-tok-type! "PY-NL" %py-t-nl)
 
 ; --- PY-NAME: identifiers and keywords ---------------------------------------
 ; Keywords are NOT distinguished here.  `if` is a name to the tokenizer and a
@@ -325,7 +344,7 @@
         (if (%py-name-start? chr) %py-name-body ())))
     (pair (lit read)
       (fn (_ . args) (mk-tok-name (%buffer-token (first args)))))))
-(Base make-type %py-base "PY-NAME" %py-t-name)
+(%py-tok-type! "PY-NAME" %py-t-name)
 
 ; --- PY-NUMBER: integers and floats ------------------------------------------
 ; The value is kept as its SOURCE TEXT.  Python's int is arbitrary-precision and
@@ -461,7 +480,7 @@
             (if (if (= chr 43) #t (= chr 45)) %py-number-signed ()))))))
     (pair (lit read)
       (fn (_ . args) (mk-tok-number (%buffer-token (first args)))))))
-(Base make-type %py-base "PY-NUMBER" %py-t-number)
+(%py-tok-type! "PY-NUMBER" %py-t-number)
 
 ; --- PY-STRING: 'single' and "double" ----------------------------------------
 ; TWO FIXED STATES, one per quote, rather than one state closed over the quote
@@ -603,14 +622,14 @@
     (pair (lit analyse)
       (fn (_ buffer score chr) (if (= chr 39) %py-sq-body ())))
     (pair (lit read) %py-string-read)))
-(Base make-type %py-base "PY-SQ" %py-t-sq)
+(%py-tok-type! "PY-SQ" %py-t-sq)
 
 (def %py-t-dq
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr) (if (= chr 34) %py-dq-body ())))
     (pair (lit read) %py-string-read)))
-(Base make-type %py-base "PY-DQ" %py-t-dq)
+(%py-tok-type! "PY-DQ" %py-t-dq)
 
 ; --- PY-PSQ / PY-PDQ: prefixed literals, r u b f in either case ---------------
 ; ONE type per quote for every one-letter prefix: the prefix letter and the
@@ -678,8 +697,8 @@
     (pair (lit analyse)
       (fn (_ buffer score chr) (if (%py-prefix-char? chr) %py-bdq-start ())))
     (pair (lit read) %py-prefixed-read)))
-(Base make-type %py-base "PY-PSQ" %py-t-psq)
-(Base make-type %py-base "PY-PDQ" %py-t-pdq)
+(%py-tok-type! "PY-PSQ" %py-t-psq)
+(%py-tok-type! "PY-PDQ" %py-t-pdq)
 
 ; --- PY-TSQ / PY-TDQ: triple-quoted strings ----------------------------------
 ; Three quotes open, three close, anything at all in between -- newlines
@@ -739,8 +758,8 @@
     (pair (lit analyse)
       (fn (_ buffer score chr) (if (= chr 34) %py-tdq-o2 ())))
     (pair (lit read) %py-triple-read)))
-(Base make-type %py-base "PY-TSQ" %py-t-tsq)
-(Base make-type %py-base "PY-TDQ" %py-t-tdq)
+(%py-tok-type! "PY-TSQ" %py-t-tsq)
+(%py-tok-type! "PY-TDQ" %py-t-tdq)
 
 ; --- PY-OP: operators and delimiters -----------------------------------------
 ; LONGEST MATCH MATTERS AND IS EASY TO GET WRONG.  `//` is floor division and
@@ -806,7 +825,7 @@
           ())))
     (pair (lit read)
       (fn (_ . args) (mk-tok-op (%buffer-token (first args)))))))
-(Base make-type %py-base "PY-OP" %py-t-op)
+(%py-tok-type! "PY-OP" %py-t-op)
 
 ; --- Compiled analysers ------------------------------------------------------
 ;
@@ -853,7 +872,7 @@
 (def %py-jit (pair (lit off) ()))        ; off | active | failed
 (def %py-jit-bytes (pair 0 ()))
 (def %py-jit-threshold (pair 51200 ()))  ; bytes of source before one attempt
-(def %py-active-raw (pair (Base raw-of %py-base) ()))  ; what python-tokenize reads
+(def %py-active-raw (pair () ()))         ; what python-tokenize reads; %py-tok-reset! fills it
 (def %py-cbase (pair () ()))             ; roots the compiled base's wrapper
 
 (def %py-hdl-of
@@ -1146,7 +1165,7 @@
         (if (%py-close? chr) (%score-set score 1 buffer) ())))
     (pair (lit read)
       (fn (_ . args) (list (lit tok-close) (%buffer-token (first args)))))))
-(Base make-type %py-base "PY-CLOSE" %py-t-close)
+(%py-tok-type! "PY-CLOSE" %py-t-close)
 
 (def %py-group-close? (fn (_ t) (if (pair? t) (eq? (first t) (lit tok-close)) #f)))
 (def %py-group-nl? (fn (_ t) (if (pair? t) (eq? (first t) (lit tok-newline)) #f)))
@@ -1178,4 +1197,25 @@
         (let ((elems (go ())))
           (%set-first! %py-in-group (- (first %py-in-group) 1))
           (mk-tok-group open elems))))))
-(Base make-type %py-base "PY-OPEN" %py-t-open)
+(%py-tok-type! "PY-OPEN" %py-t-open)
+
+; --- the base itself: made here, and remade after an image load -------------
+; One door.  The image writer runs the transient thunk in the child (the
+; base, the raw it reads through, and any compiled second base go to nil --
+; a compiled base is native code in this process's pages); the recache hook
+; runs this same reset once the loader is done.
+(def %py-tok-reset!
+  (fn (_)
+    (set! %py-base (%py-tok-base-make))
+    (%set-first! %py-active-raw (Base raw-of %py-base))
+    (%set-first! %py-cbase ())
+    (%set-first! %py-jit (lit off))
+    (%set-first! %py-jit-bytes 0)))
+(%py-tok-reset!)
+(set! %image-transients
+  (pair (fn (_)
+          (set! %py-base ())
+          (%set-first! %py-active-raw ())
+          (%set-first! %py-cbase ()))
+        %image-transients))
+(set! %image-recache-hooks (pair (fn (_) (%py-tok-reset!)) %image-recache-hooks))
