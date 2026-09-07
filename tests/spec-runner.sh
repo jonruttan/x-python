@@ -59,6 +59,52 @@ sh "$BUNDLE/tests/gen-harness.sh" "$X_ROOT" "$BUNDLE"
 LANG_LIB="$BUNDLE/tests/lib/harness.gen.x"
 SPEC_PATH="${SPEC_PATH:-$BUNDLE/tests/specs}"
 
+# THE SUITE BOOTS FROM A STATE IMAGE OF THE HARNESS, when the platform can
+# write one -- and for this bundle the boot IS the suite's cost.  Measured on
+# CI: 65 spec files, 41 minutes on one job, and the EMPTY harness spec takes
+# 26 seconds, so two thirds of the wall clock is the tower and this runtime
+# being read from source once per file.  Nothing about a file is slow; the
+# boot is, 65 times over.
+#
+# tools/dev/image-build.sh images a child base that loaded the harness and
+# keys the image on everything it depends on -- the harness, the platform's
+# lib/, its engine, and python/ (the KEY-PATH) -- so an edit to any of them
+# rewrites it (a few seconds) and a current one is skipped.  What makes this
+# possible here at all is the transient work in #42: a second base is its own
+# chain and holds words no image can name, so until %py-base and %py-sexp-base
+# were nilled in a transient thunk and remade on load, this library was
+# REFUSED by the writer.  The bundle's own boot measured 0.9s from the image
+# against 10.8s from source there; the image this writes holds 193,455 objects
+# and reports `unnameable: 0`, which is that work showing up as a number.
+#
+# MEASURED HERE, three files against themselves (00-harness, 01-tokenizer,
+# 15-operators, same machine, same 47 cases green either way): 54s from
+# source, 27s including the image write, 7s from a current image.  The whole
+# suite from the image is 609 cases green in 7m24s.
+#
+# The writer lives in a CHECKOUT only; an installed tree boots from source and
+# says so.  IMG=0 is the control: the same suite from source, for when the
+# image is the suspect -- and it is the FIRST thing to try against a failure
+# that reproduces nowhere else, because a stale or wrong image is invisible in
+# a diff.
+if [ "${IMG:-1}" = 0 ]; then
+	# Nothing to undo: this runner already names its spec files explicitly, so
+	# it is one process per file either way and the boot is the ONLY thing
+	# that differs between the control and the image run.
+	:
+else
+	_builder="$X_ROOT/tools/dev/image-build.sh"
+	if [ -f "$_builder" ]; then
+		if X_BIN="$X_BIN" sh "$_builder" "$LANG_LIB" "$BUNDLE/tests/lib/.images" "$BUNDLE/python"; then
+			X_IMG_DIR="$BUNDLE/tests/lib/.images"; export X_IMG_DIR
+		else
+			echo "x-python: no state image (image-build exit $?) -- the suite boots from source" >&2
+		fi
+	else
+		echo "x-python: no image writer at $_builder (not a checkout) -- the suite boots from source" >&2
+	fi
+fi
+
 [ -d "$SPEC_PATH" ] || {
 	echo "x-python: no specs at $SPEC_PATH" >&2
 	echo "  for the conformance suite, run 'make gen' first" >&2
