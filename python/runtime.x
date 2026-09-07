@@ -1780,6 +1780,14 @@
 
 ; chr() and ord(): the engine's int->char door and the char->int one, with
 ; the one-character string built the way the tokenizer builds strings.
+;
+; chr(0) REFUSES, and so does every other spelling of a NUL -- the literals in
+; python/tokens.x, and bytes() below.  A string here is a C string by an engine
+; guarantee, so the one-character string chr(0) would answer measures zero and
+; disappears into the next append: 'a' + chr(0) + 'b' was 'ab' with nothing
+; said.  docs/nul-and-the-string-layer.md is the reason this is where
+; it stops rather than where a fix starts.  %c goes through here too
+; (python/format.x), and so does an f-string's {chr(0)}.
 (def %py-int->char (prim-ref (lit int) (lit ->char)))
 (def %py-chr
   (fn (_ n0)
@@ -1788,7 +1796,9 @@
       (Err raise (lit type) "an integer is required" ())
       (if (if (< n 0) #t (> n 1114111))
         (Err raise (lit value) "chr() arg not in range(0x110000)" ())
-        (%py-list->string (list (%py-int->char n)))))))
+        (if (= n 0)
+          (Err raise (lit value) "a NUL byte is not representable here" ())
+          (%py-list->string (list (%py-int->char n))))))))
 ; ord() counts CODE POINTS, not bytes: chr(955) is a two-byte string that
 ; is one character, so the utf-8-aware Str class measures and indexes it.
 (def %py-ord
@@ -4382,10 +4392,17 @@
                 (%py-bytes-new (%py-bytes-zeros v ""))))))))))
 
 ; A NUL BYTE CANNOT BE CARRIED HERE, and saying so is better than answering a
-; short bytes.  A string on this platform ends at its first NUL, so chr(0) is
-; already the empty string and b"\x00" is already empty -- a pre-existing
-; limit of the string layer, not of this constructor, which merely refuses to
-; hide it.
+; short bytes.  A string on this platform is a C STRING BY AN ENGINE GUARANTEE
+; -- `str/nul-terminated`, in docs/engine-contract.md -- so it ends at its
+; first NUL and there is no argument that changes that.  The limit is the
+; string layer's, not this constructor's; what this constructor does is refuse
+; to hide it.
+;
+; EVERY SPELLING REFUSES, with this sentence: the literals `'\x00'` and
+; `b'\x00'` in python/tokens.x, chr(0) and so `'%c' % 0` in %py-chr, and both
+; arms here.  docs/nul-and-the-string-layer.md is the decision and its cost --
+; including why carrying a NUL in bytes ALONE would move the silent loss to
+; .decode() rather than remove it.
 (def %py-bytes-of-codes
   (fn (self codes acc)
     (if (null? codes)

@@ -209,6 +209,11 @@ both.
   — why containers are tagged pairs today, the constraint that decides how they
   stop being (`make-instance` resolves the type in the *calling* base), and the
   shape that follows. Designed and proved, not built.
+- [A NUL byte is refused, not carried](docs/nul-and-the-string-layer.md)
+  — a string here is a C string by an engine *guarantee*, so a NUL used to
+  shorten a value silently: `len(b'\x00')` was 0. Why every spelling now
+  raises instead, and why fixing `bytes` alone would have moved the loss to
+  `.decode()` rather than removed it. Decided and built.
 
 ## Layout
 
