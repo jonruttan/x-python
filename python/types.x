@@ -672,4 +672,11 @@
   (%make-type
     "PY-SUPER"
     (list
-      (pair (lit write) (fn (_ self) (display "<super>"))))))
+      ; Python prints the class the walk starts BELOW and the object it is
+      ; bound to: <super: <class 'A'>, <A object>>.  The corpus slices the
+      ; first eighteen characters of it, so the shape has to be right and not
+      ; merely informative.
+      (pair (lit write)
+        (fn (_ self)
+          (display "<super: <class '" (%py-class-name (%py-super-from self)) "'>, <"
+            (%py-class-name (%py-obj-class (%py-super-self self))) " object>>"))))))
