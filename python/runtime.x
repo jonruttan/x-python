@@ -2938,16 +2938,21 @@
 ; string key as `KeyError: 'z'` so the reader can tell the key from prose --
 ; and everything else answers the str of its first argument.
 (def %py-exc-msg
+  ; WHAT str(e) IS, and Python decides it by the NUMBER of arguments: none is
+  ; the empty string, one is that argument, and more than one is the whole
+  ; args TUPLE -- `MyExc(100, "Some error")` prints (100, 'Some error').  A
+  ; KeyError with a single argument answers its REPR instead, so that a
+  ; missing string key reads as KeyError: 'z' the way it does in Python.
   (fn (_ e)
-    (let ((a (%py-alist-find "__msg__" (%py-obj-attrs e)))
-          (args (%py-alist-find "args" (%py-obj-attrs e))))
-      (if (null? a)
-        ""
-        (if (if (%py-subclass? (%py-obj-class e) %py-exc-KeyError)
-              (if (null? args) #f (null? (rest (%py-tuple-elems (rest args)))))
-              #f)
-          (%py-repr-of (rest a))
-          (%py-str (rest a)))))))
+    (let ((args (%py-alist-find "args" (%py-obj-attrs e))))
+      (let ((els (if (null? args) () (%py-tuple-elems (rest args)))))
+        (if (null? els)
+          ""
+          (if (null? (rest els))
+            (if (%py-subclass? (%py-obj-class e) %py-exc-KeyError)
+              (%py-repr-of (first els))
+              (%py-str (first els)))
+            (%py-repr-of (%py-tuple-of-list els))))))))
 
 ; --- Classes -----------------------------------------------------------------
 ;
@@ -3167,10 +3172,18 @@
                 (let ((bc (%py-inherited-ctor cls)))
                   (if (null? bc)
                     ()
+                    ; WHO CONSUMES THE ARGUMENTS: a class that writes its own
+                    ; __init__ BELOW the builtin does (it will call
+                    ; list.__init__ or set the fields itself), and otherwise
+                    ; the builtin's constructor does -- which is the only way
+                    ; an IMMUTABLE builtin can be built at all, since a tuple
+                    ; or str cannot be filled in afterwards.  Deciding by
+                    ; whether __init__ merely EXISTS stopped working the day
+                    ; object grew one: every class has one now.
                     (%py-obj-native! o
-                      (if (null? (%py-method-find cls "__init__"))
-                        (apply bc args)
-                        (bc)))))
+                      (if (%py-init-below-ctor? cls)
+                        (bc)
+                        (apply bc args)))))
                 (let ((init (%py-method-find cls "__init__")))
                   (if (null? init)
                     o
@@ -3196,6 +3209,24 @@
         (if (null? e)
           (%py-inherited-ctor-bases (%py-class-bases cls))
           (rest e))))))
+
+; Does a class BELOW the builtin write its own __init__?  The walk stops at
+; the class carrying the %ctor: that one and everything above it is the
+; builtin's own machinery, not the program's.
+(def %py-init-below-ctor?
+  (fn (self cls)
+    (if (null? cls)
+      #f
+      (if (not (null? (%py-alist-find "%ctor" (%py-class-methods cls))))
+        #f
+        (if (not (null? (%py-alist-find "__init__" (%py-class-methods cls))))
+          #t
+          (%py-init-below-ctor-bases? (%py-class-bases cls)))))))
+(def %py-init-below-ctor-bases?
+  (fn (self bs)
+    (if (null? bs)
+      #f
+      (if (%py-init-below-ctor? (first bs)) #t (self (rest bs))))))
 (def %py-inherited-ctor-bases
   (fn (self bs)
     (if (null? bs)
@@ -4574,8 +4605,24 @@
   (%py-class-new "float" %py-cls-object (list (pair "%ctor" %py-float-ctor)) "float"))
 (def %py-cls-complex
   (%py-class-new "complex" %py-cls-object (list (pair "%ctor" %py-complex-ctor)) "complex"))
+(def %py-str-methods
+  (list
+    (pair "%ctor" %py-str-ctor)
+    (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
+    (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
+    (pair "__iter__"     (fn (_ self) (%py-native-of self)))
+    (pair "__contains__" (fn (_ self x) (%py-in x (%py-native-of self))))
+    (pair "__eq__"       (fn (_ self o) (%py-eq (%py-native-of self) (%py-native-of o))))
+    (pair "__lt__"       (fn (_ self o) (%py-lt (%py-native-of self) (%py-native-of o))))
+    (pair "__gt__"       (fn (_ self o) (%py-gt (%py-native-of self) (%py-native-of o))))
+    (pair "__le__"       (fn (_ self o) (%py-le (%py-native-of self) (%py-native-of o))))
+    (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
+    (pair "__str__"      (fn (_ self) (%py-str (%py-native-of self))))
+    (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
+    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))))
+
 (def %py-cls-str
-  (%py-class-new "str" %py-cls-object (list (pair "%ctor" %py-str-ctor)) "str"))
+  (%py-class-new "str" %py-cls-object %py-str-methods "str"))
 ; THE BUILTIN TYPE OBJECT CARRIES THE PROTOCOL, which is what makes
 ; `class mylist(list)` work without teaching seventy dispatch sites about
 ; wrappers: a subclass inherits these through the base walk that was already
@@ -4613,10 +4660,43 @@
   (%py-class-new "set" %py-cls-object (list (pair "%ctor" %py-set-ctor)) "set"))
 (def %py-cls-frozenset
   (%py-class-new "frozenset" %py-cls-object (list (pair "%ctor" %py-frozenset-ctor)) "frozenset"))
+(def %py-dict-methods
+  (list
+    (pair "%ctor" %py-dict-ctor)
+    (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
+    (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
+    (pair "__iter__"     (fn (_ self) (%py-native-of self)))
+    (pair "__contains__" (fn (_ self x) (%py-in x (%py-native-of self))))
+    (pair "__eq__"       (fn (_ self o) (%py-eq (%py-native-of self) (%py-native-of o))))
+    (pair "__lt__"       (fn (_ self o) (%py-lt (%py-native-of self) (%py-native-of o))))
+    (pair "__gt__"       (fn (_ self o) (%py-gt (%py-native-of self) (%py-native-of o))))
+    (pair "__le__"       (fn (_ self o) (%py-le (%py-native-of self) (%py-native-of o))))
+    (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
+    (pair "__str__"      (fn (_ self) (%py-str (%py-native-of self))))
+    (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
+    (pair "__setitem__"  (fn (_ self i v) (%py-setindex (%py-native-of self) i v)))
+    (pair "__delitem__"  (fn (_ self i) (%py-delindex (%py-native-of self) i)))))
+
 (def %py-cls-dict
-  (%py-class-new "dict" %py-cls-object (list (pair "%ctor" %py-dict-ctor)) "dict"))
+  (%py-class-new "dict" %py-cls-object %py-dict-methods "dict"))
+(def %py-tuple-methods
+  (list
+    (pair "%ctor" %py-tuple-ctor)
+    (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
+    (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
+    (pair "__iter__"     (fn (_ self) (%py-native-of self)))
+    (pair "__contains__" (fn (_ self x) (%py-in x (%py-native-of self))))
+    (pair "__eq__"       (fn (_ self o) (%py-eq (%py-native-of self) (%py-native-of o))))
+    (pair "__lt__"       (fn (_ self o) (%py-lt (%py-native-of self) (%py-native-of o))))
+    (pair "__gt__"       (fn (_ self o) (%py-gt (%py-native-of self) (%py-native-of o))))
+    (pair "__le__"       (fn (_ self o) (%py-le (%py-native-of self) (%py-native-of o))))
+    (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
+    (pair "__str__"      (fn (_ self) (%py-str (%py-native-of self))))
+    (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
+    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))))
+
 (def %py-cls-tuple
-  (%py-class-new "tuple" %py-cls-object (list (pair "%ctor" %py-tuple-ctor)) "tuple"))
+  (%py-class-new "tuple" %py-cls-object %py-tuple-methods "tuple"))
 (def %py-cls-type
   (%py-class-new "type" %py-cls-object (list (pair "%ctor" %py-type-ctor)) "type"))
 (def %py-cls-NoneType
@@ -4679,8 +4759,24 @@
         acc
         (Err raise (lit value) "a NUL byte is not representable here" ())))))
 
+(def %py-bytes-methods
+  (list
+    (pair "%ctor" %py-bytes-ctor)
+    (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
+    (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
+    (pair "__iter__"     (fn (_ self) (%py-native-of self)))
+    (pair "__contains__" (fn (_ self x) (%py-in x (%py-native-of self))))
+    (pair "__eq__"       (fn (_ self o) (%py-eq (%py-native-of self) (%py-native-of o))))
+    (pair "__lt__"       (fn (_ self o) (%py-lt (%py-native-of self) (%py-native-of o))))
+    (pair "__gt__"       (fn (_ self o) (%py-gt (%py-native-of self) (%py-native-of o))))
+    (pair "__le__"       (fn (_ self o) (%py-le (%py-native-of self) (%py-native-of o))))
+    (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
+    (pair "__str__"      (fn (_ self) (%py-str (%py-native-of self))))
+    (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
+    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))))
+
 (def %py-cls-bytes
-  (%py-class-new "bytes" %py-cls-object (list (pair "%ctor" %py-bytes-ctor)) "bytes"))
+  (%py-class-new "bytes" %py-cls-object %py-bytes-methods "bytes"))
 
 (def %py-type-of
   (fn (_ v)
