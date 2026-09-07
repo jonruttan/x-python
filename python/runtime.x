@@ -1376,6 +1376,17 @@
 ; -- and a user class's attribute is its function, unbound, callable with an
 ; explicit self.  A builtin class other than str has no such surface yet.
 
+; A class's own alist, as dict rows -- minus the "%ctor" key, which is this
+; runtime's own and which no Python identifier can spell.
+(def %py-class-rows
+  (fn (self cls)
+    ((fn (go rows)
+       (if (null? rows) ()
+         (if (Str8 =? (first (first rows)) "%ctor")
+           (go (rest rows))
+           (pair (pair (first (first rows)) (rest (first rows))) (go (rest rows))))))
+     (%py-class-methods cls))))
+
 (def %py-class-attr
   (fn (_ cls name)
     ; dict.fromkeys is a CLASSMETHOD: it answers a new dict, so it hangs off
@@ -1385,16 +1396,27 @@
         %py-dict-fromkeys
         (Err raise (lit attribute)
           (Str8 append (Str8 append "type object 'dict' has no attribute '" name) "'") ()))
-    (if (eq? cls %py-cls-str)
-      ; validate the name NOW, so str.nosuch raises at access, not at call
-      (do (%py-str-attr "" name)
-          (fn (_ recv . args) (apply (%py-str-attr recv name) args)))
-      (let ((m (%py-method-find cls name)))
-        (if (null? m)
-          (Err raise (lit attribute)
-            (Str8 append (Str8 append "type object '" (%py-class-name cls))
-              (Str8 append "' has no attribute '" (Str8 append name "'"))) ())
-          m))))))
+      (if (eq? cls %py-cls-str)
+        ; validate the name NOW, so str.nosuch raises at access, not at call
+        (do (%py-str-attr "" name)
+            (fn (_ recv . args) (apply (%py-str-attr recv name) args)))
+        ; THE THREE A CLASS ANSWERS ABOUT ITSELF, read off the record rather
+        ; than stored: a class already knows its name, its base, and the alist
+        ; its methods and class attributes share.  Python spells them
+        ; __name__, __bases__ (a tuple, empty at object) and __dict__.
+        (if (Str8 =? name "__name__")
+          (%py-class-name cls)
+          (if (Str8 =? name "__bases__")
+            (%py-tuple-of-list
+              (let ((b (%py-class-base cls))) (if (null? b) () (list b))))
+            (if (Str8 =? name "__dict__")
+              (%py-dict-new (%py-class-rows cls))
+              (let ((m (%py-method-find cls name)))
+                (if (null? m)
+                  (Err raise (lit attribute)
+                    (Str8 append (Str8 append "type object '" (%py-class-name cls))
+                      (Str8 append "' has no attribute '" (Str8 append name "'"))) ())
+                  m)))))))))
 
 ; STRING METHODS MAP ONTO Str8, WHICH ALREADY HAS THEM -- upcase, downcase,
 ; trim, split, join, replace, starts?, ends?, index-of. The work here is the
@@ -2664,8 +2686,20 @@
 ; kind table below is the bridge: an Err's kind names the class it would have
 ; been, and from there both kinds of value match identically.
 
+; EVERY CLASS DESCENDS FROM object, and until now nothing here said so:
+; `class C(object)` named an unbound global, which this runtime binds to a
+; shim that raises when CALLED -- so the shim arrived as a BASE, method
+; lookup walked into a closure as though it were a class record, and the
+; interpreter died rather than saying anything.  A root class costs one
+; record and makes the ordinary path ordinary: it terminates the base chain
+; the way () did, `isinstance(x, object)` is the walk it already does, and
+; the guard in %py-mkclass turns any other non-class base into the TypeError
+; Python raises instead of a crash.
+(def %py-cls-object
+  (%py-class-new "object" () () "object"))
+
 (def %py-exc-Exception
-  (%py-class-new "Exception" ()
+  (%py-class-new "Exception" %py-cls-object
     ; Every exception gets a message, and this is where it is stored.  A user
     ; class that defines its own __init__ overrides this and gets no message
     ; unless it sets one -- Python would have it call super().__init__, which
@@ -2882,7 +2916,12 @@
 
 (def %py-mkclass
   (fn (_ name base methods)
-    (%py-class-new name base methods (Str8 append "__main__." name))))
+    ; A BASE THAT IS NOT A CLASS IS A TypeError, not a crash.  An undefined
+    ; name is bound to a shim that raises when called, and a shim reaching
+    ; method lookup as a base record is a walk into a closure's guts.
+    (if (if (null? base) #f (not (%py-class-is base)))
+      (Err raise (lit type) "a class base must be a class" ())
+      (%py-class-new name base methods (Str8 append "__main__." name)))))
 
 ; Construction: make the instance, then run __init__ if the class chain has one.
 ; Its return value is discarded -- Python returns the INSTANCE from a call to a
@@ -4240,29 +4279,29 @@
 ; int before bool, because bool derives from it.
 
 (def %py-cls-int
-  (%py-class-new "int" () (list (pair "%ctor" %py-int-ctor)) "int"))
+  (%py-class-new "int" %py-cls-object (list (pair "%ctor" %py-int-ctor)) "int"))
 (def %py-cls-bool
   (%py-class-new "bool" %py-cls-int (list (pair "%ctor" %py-bool-ctor)) "bool"))
 (def %py-cls-float
-  (%py-class-new "float" () (list (pair "%ctor" %py-float-ctor)) "float"))
+  (%py-class-new "float" %py-cls-object (list (pair "%ctor" %py-float-ctor)) "float"))
 (def %py-cls-complex
-  (%py-class-new "complex" () (list (pair "%ctor" %py-complex-ctor)) "complex"))
+  (%py-class-new "complex" %py-cls-object (list (pair "%ctor" %py-complex-ctor)) "complex"))
 (def %py-cls-str
-  (%py-class-new "str" () (list (pair "%ctor" %py-str-ctor)) "str"))
+  (%py-class-new "str" %py-cls-object (list (pair "%ctor" %py-str-ctor)) "str"))
 (def %py-cls-list
-  (%py-class-new "list" () (list (pair "%ctor" %py-list-ctor)) "list"))
+  (%py-class-new "list" %py-cls-object (list (pair "%ctor" %py-list-ctor)) "list"))
 (def %py-cls-set
-  (%py-class-new "set" () (list (pair "%ctor" %py-set-ctor)) "set"))
+  (%py-class-new "set" %py-cls-object (list (pair "%ctor" %py-set-ctor)) "set"))
 (def %py-cls-frozenset
-  (%py-class-new "frozenset" () (list (pair "%ctor" %py-frozenset-ctor)) "frozenset"))
+  (%py-class-new "frozenset" %py-cls-object (list (pair "%ctor" %py-frozenset-ctor)) "frozenset"))
 (def %py-cls-dict
-  (%py-class-new "dict" () (list (pair "%ctor" %py-dict-ctor)) "dict"))
+  (%py-class-new "dict" %py-cls-object (list (pair "%ctor" %py-dict-ctor)) "dict"))
 (def %py-cls-tuple
-  (%py-class-new "tuple" () (list (pair "%ctor" %py-tuple-ctor)) "tuple"))
+  (%py-class-new "tuple" %py-cls-object (list (pair "%ctor" %py-tuple-ctor)) "tuple"))
 (def %py-cls-type
-  (%py-class-new "type" () (list (pair "%ctor" %py-type-ctor)) "type"))
+  (%py-class-new "type" %py-cls-object (list (pair "%ctor" %py-type-ctor)) "type"))
 (def %py-cls-NoneType
-  (%py-class-new "NoneType" () () "NoneType"))
+  (%py-class-new "NoneType" %py-cls-object () "NoneType"))
 
 (def %py-type-of
   (fn (_ v)

@@ -1093,6 +1093,7 @@
         (list "repr"    (lit %py-repr-of))
         (list "list"    (lit %py-cls-list))
         (list "hasattr" (lit %py-hasattr))
+        (list "object"  (lit %py-cls-object))
         (list "type"    (lit %py-cls-type))
         (list "int"     (lit %py-cls-int))
         (list "float"   (lit %py-cls-float))
@@ -1318,7 +1319,12 @@
                 (pair (pair (lit %py-delindex) (rest tgt)) (rest r))
                 (if (eq? (first tgt) (lit %py-slice))
                   (pair (pair (lit %py-delslice) (rest tgt)) (rest r))
-                  (Err raise (lit syntax) "cannot delete this target" ()))))))
+                  ; `del obj.attr` -- the runtime already had %py-delattr for
+                  ; the builtin of that name; only the statement was missing,
+                  ; and the attribute node carries exactly its two arguments.
+                  (if (eq? (first tgt) (lit %py-getattr))
+                    (pair (pair (lit %py-delattr) (rest tgt)) (rest r))
+                    (Err raise (lit syntax) "cannot delete this target" ())))))))
       (if (%py-name-is? t "try")
         (%py-try (rest toks))
       (if (%py-name-is? t "raise")
@@ -1813,8 +1819,11 @@
               (let ((r (%py-class-block after)))
                 (%set-first! %py-current-class outer)
                 (pair
+                  ; NO BASE WRITTEN IS `object`, which is what CPython reports:
+                  ; `class A: pass` answers (object,) for A.__bases__, and the
+                  ; walk ends one class later than it used to either way.
                   (list (lit set!) (%py-name->sym (%py-val n))
-                    (list (lit %py-mkclass) (%py-val n) ()
+                    (list (lit %py-mkclass) (%py-val n) (lit %py-cls-object)
                       (pair (lit list) (first r))))
                   (rest r))))))))))
 
