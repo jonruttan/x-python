@@ -783,12 +783,12 @@
 ; one per character is not.
 (def %py-op-start?
   (fn (_ c)
-    (if (= c 43) #t (if (= c 45) #t (if (= c 42) #t (if (= c 47) #t
-      (if (= c 37) #t (if (= c 61) #t (if (= c 60) #t (if (= c 62) #t
-        (if (= c 33) #t
-          (if (= c 126) #t (if (= c 124) #t (if (= c 94) #t (if (= c 38) #t
-            (if (= c 44) #t (if (= c 58) #t (if (= c 46) #t
-              (= c 59)))))))))))))))))))
+    ; + - * / % = < > ! ~ | ^ & , : . ; and @, which is a decorator here
+    ; (Python's other @ is matrix multiply, which this runtime has no use
+    ; for).  GENERATED from the code list rather than hand-nested: a
+    ; mis-nested predicate of this shape is paren-balanced and silently
+    ; wrong, which is how x-python#40 reached CI red.
+    (if (= c 43) #t (if (= c 45) #t (if (= c 42) #t (if (= c 47) #t (if (= c 37) #t (if (= c 61) #t (if (= c 60) #t (if (= c 62) #t (if (= c 33) #t (if (= c 126) #t (if (= c 124) #t (if (= c 94) #t (if (= c 38) #t (if (= c 44) #t (if (= c 58) #t (if (= c 46) #t (if (= c 59) #t (= c 64))))))))))))))))))))
 
 ; Which pairs extend: == != <= >= // ** and += -= *= /= %=
 (def %py-op-pair?

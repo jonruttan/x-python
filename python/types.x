@@ -55,7 +55,8 @@
   %py-class %py-class-new %py-class-is %py-class-name %py-class-base
   %py-class-methods %py-class-qualname %py-instantiate %py-obj-write %py-obj-call
   %py-obj %py-obj-new %py-obj-is %py-obj-class %py-obj-attrs %py-obj-set-attrs!
-  %py-super-t %py-super-new %py-super-is %py-super-from %py-super-self)
+  %py-super-t %py-super-new %py-super-is %py-super-from %py-super-self
+  %py-desc %py-desc-new %py-desc-is %py-desc-kind %py-desc-fn)
 
 ; Fetch the type prims from the catalog (ns `type` is de-registered, R5).
 (def %make-type (prim-ref (lit type) (lit make)))
@@ -618,6 +619,25 @@
 ; again and recurse until the machine died.
 ;
 ; Immutable, so no cell.
+
+; A DECORATED METHOD IS A DESCRIPTOR, which is Python's own answer:
+; staticmethod, classmethod and property are objects that decide what an
+; attribute access ANSWERS, and this runtime looks methods up in an alist
+; where a raw closure means "bind self".  A dedicated type says which of the
+; three a method is without stealing a shape a class attribute might want --
+; a tagged pair would collide with a list attribute, since an instance is a
+; cell too.
+(def %py-desc ())
+(def %py-desc-new (fn (_ kind f) (%make-instance %py-desc (pair kind f))))
+(def %py-desc-is (fn (_ v) (%type? v %py-desc)))
+(def %py-desc-kind (fn (_ d) (first (first d))))
+(def %py-desc-fn (fn (_ d) (rest (first d))))
+(set! %py-desc
+  (%make-type
+    "PY-DESC"
+    (list
+      (pair (lit write)
+        (fn (_ self) (display "<" (%py-desc-kind self) " object>"))))))
 
 (def %py-super-t ())
 

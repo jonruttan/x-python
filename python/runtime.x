@@ -1416,7 +1416,19 @@
                   (Err raise (lit attribute)
                     (Str8 append (Str8 append "type object '" (%py-class-name cls))
                       (Str8 append "' has no attribute '" (Str8 append name "'"))) ())
-                  m)))))))))
+                  ; FROM THE CLASS there is no instance to bind: a staticmethod
+                  ; is its function, a classmethod binds THIS class -- which is
+                  ; what makes `cls` the child in `Sub.method()` -- and a
+                  ; property stays the descriptor, since `C.v` in Python is the
+                  ; property object, not a value it has no instance to compute.
+                  (if (%py-desc-is m)
+                    (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
+                      (if (eq? k (lit static))
+                        f
+                        (if (eq? k (lit classmethod))
+                          (%py-bind-method f cls)
+                          m)))
+                    m))))))))))
 
 ; STRING METHODS MAP ONTO Str8, WHICH ALREADY HAS THEM -- upcase, downcase,
 ; trim, split, join, replace, starts?, ends?, index-of. The work here is the
@@ -2871,21 +2883,32 @@
       (if (not (null? e))
         (rest e)
         (let ((m (%py-method-find (%py-obj-class obj) name)))
-          (if (if (null? m) #f (not (%py-fn-is m)))
-            m
-          (if (null? m)
-            ; the last resort is the class's own __getattr__, as in Python
-            (let ((ga (%py-method-find (%py-obj-class obj) "__getattr__")))
-              (if (null? ga)
-                (Err raise (lit attribute)
-                  (Str8 append
-                    (Str8 append
-                      (Str8 append "'" (%py-class-name (%py-obj-class obj)))
-                      "' object has no attribute '")
-                    (Str8 append name "'"))
-                  ())
-                (ga obj name)))
-            (%py-bind-method m obj))))))))
+          (if (%py-desc-is m)
+            ; WHAT A DESCRIPTOR ANSWERS FROM AN INSTANCE: a staticmethod is its
+            ; function untouched, a classmethod binds the CLASS where an
+            ; ordinary method binds the instance, and a property is CALLED here
+            ; -- `c.v` is the getter's result, not the getter.
+            (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
+              (if (eq? k (lit static))
+                f
+                (if (eq? k (lit classmethod))
+                  (%py-bind-method f (%py-obj-class obj))
+                  (f obj))))
+            (if (if (null? m) #f (not (%py-fn-is m)))
+              m
+              (if (null? m)
+                ; the last resort is the class's own __getattr__, as in Python
+                (let ((ga (%py-method-find (%py-obj-class obj) "__getattr__")))
+                  (if (null? ga)
+                    (Err raise (lit attribute)
+                      (Str8 append
+                        (Str8 append
+                          (Str8 append "'" (%py-class-name (%py-obj-class obj)))
+                          "' object has no attribute '")
+                        (Str8 append name "'"))
+                      ())
+                    (ga obj name)))
+                (%py-bind-method m obj)))))))))
 
 ; obj(...) is __call__, through the PY-OBJ type's call handler.
 (set! %py-obj-call
@@ -2913,6 +2936,15 @@
     (if (not (%py-obj-is obj))
       (Err raise (lit attribute) "object does not support attribute assignment" ())
       (%py-obj-set-attrs! obj (%py-attr-put (%py-obj-attrs obj) name v)))))
+
+; staticmethod, classmethod and property are FUNCTIONS in Python -- applying
+; a decorator IS calling it -- so they are ordinary builtins here, and
+; `@staticmethod` is the call the parser emits.  A user-written decorator then
+; needs nothing special: it is called the same way, and whatever it answers is
+; what the name becomes.
+(def %py-staticmethod (fn (_ f) (%py-desc-new (lit static) f)))
+(def %py-classmethod  (fn (_ f) (%py-desc-new (lit classmethod) f)))
+(def %py-property     (fn (_ f) (%py-desc-new (lit property) f)))
 
 (def %py-mkclass
   (fn (_ name base methods)
