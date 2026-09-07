@@ -37,7 +37,7 @@ jobs:
         # allowed to fail.  Keep the pinned row equal to lang.xon's
         # (requires-release ...) VERBATIM -- they are one fact, and the check
         # below fails the build if they drift.
-        x-lang: ['v0.12.0', 'main']
+        x-lang: ['v0.13.0', 'main']
         # FOUR SHARDS, BECAUSE THE BOOT IS THE COST.  Each spec file boots the
         # whole tower in its own process (tests/spec-runner.sh says why), and
         # measured on these runners that boot is ~26s of a ~38s file: a
