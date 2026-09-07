@@ -2764,8 +2764,14 @@
     (list (pair "__new__" (fn (_ cls . args) (%py-obj-new cls))))
     "object"))
 
-(def %py-exc-Exception
-  (%py-class-new "Exception" %py-cls-object
+(def %py-exc-BaseException
+  ; THE ROOT IS BaseException, as Python has it, and it is where the message
+  ; machinery lives -- Exception inherits every bit of this and adds nothing,
+  ; which is exactly what Python's own hierarchy says.  `except` is defined
+  ; against this class, which is what the message about catching a class that
+  ; does not inherit from BaseException always claimed while the check asked
+  ; about Exception.
+  (%py-class-new "BaseException" %py-cls-object
     ; Every exception gets a message, and this is where it is stored.  A user
     ; class that defines its own __init__ overrides this and gets no message
     ; unless it sets one -- Python would have it call super().__init__, which
@@ -2784,14 +2790,24 @@
               (fn (self l) (if (null? l) () (pair (%py-repr-of (first l)) (self (rest l))))))
             (Str8 append (%py-class-name (%py-obj-class self))
               (Str8 append "(" (Str8 append (Str8 join ", " (if (null? a) () (rs (%py-tuple-elems (rest a))))) ")")))))))
-    "Exception"))
+    "BaseException"))
 
 ; Exceptions print <class 'ValueError'> in Python, not <class '__main__....'>
 ; -- the builtins live in no module the program wrote, so the qualname is the
 ; bare name.  This fixes a recorded divergence in 19-exception-classes.
 (def %py-exc-new (fn (_ name base) (%py-class-new name base () name)))
 
+(def %py-exc-Exception       (%py-exc-new "Exception"       %py-exc-BaseException))
 (def %py-exc-ArithmeticError (%py-exc-new "ArithmeticError" %py-exc-Exception))
+; ImportError is the corpus's own feature probe, seventy times over: a test
+; that needs a module it may not have wraps the import and prints SKIP.  Left
+; undefined, every one of those raised "catching classes that do not inherit
+; from BaseException" from the except clause itself.
+(def %py-exc-ImportError     (%py-exc-new "ImportError"     %py-exc-Exception))
+(def %py-exc-MemoryError     (%py-exc-new "MemoryError"     %py-exc-Exception))
+(def %py-exc-OverflowError   (%py-exc-new "OverflowError"   %py-exc-ArithmeticError))
+(def %py-exc-StopAsyncIteration
+  (%py-exc-new "StopAsyncIteration" %py-exc-Exception))
 (def %py-exc-LookupError     (%py-exc-new "LookupError"     %py-exc-Exception))
 (def %py-exc-ZeroDivisionError
   (%py-exc-new "ZeroDivisionError" %py-exc-ArithmeticError))
@@ -2806,6 +2822,8 @@
 (def %py-exc-SystemExit      (%py-exc-new "SystemExit"      %py-exc-Exception))
 (def %py-exc-RuntimeError    (%py-exc-new "RuntimeError"    %py-exc-Exception))
 (def %py-exc-SyntaxError     (%py-exc-new "SyntaxError"     %py-exc-Exception))
+(def %py-exc-NotImplementedError
+  (%py-exc-new "NotImplementedError" %py-exc-RuntimeError))
 
 ; An Err's kind names the class it would have been.  A kind with no row -- one
 ; raised by the platform rather than by this runtime -- answers Exception, so
@@ -3012,7 +3030,14 @@
       (%py-class-methods-set! obj (%py-attr-put (%py-class-methods obj) name v))
       (if (not (%py-obj-is obj))
         (Err raise (lit attribute) "object does not support attribute assignment" ())
-        (%py-obj-set-attrs! obj (%py-attr-put (%py-obj-attrs obj) name v))))))
+        ; __setattr__ INTERCEPTS EVERY STORE, which is the point of it: a class
+        ; that defines one decides what `self.x = v` means, and gets no default
+        ; store unless it makes one itself.  __getattr__ was already a hook on
+        ; the read; this is the same rule on the write.
+        (let ((m (%py-dunder obj "__setattr__")))
+          (if (null? m)
+            (%py-obj-set-attrs! obj (%py-attr-put (%py-obj-attrs obj) name v))
+            (%seq (m name v) ())))))))
 
 ; staticmethod, classmethod and property are FUNCTIONS in Python -- applying
 ; a decorator IS calling it -- so they are ordinary builtins here, and
@@ -3850,11 +3875,15 @@
     (%py-attr-name! n)
     (if (not (%py-obj-is o))
       (Err raise (lit attribute) "object has no deletable attributes" ())
-      (let ((as (%py-obj-attrs o)))
-        (if (null? (%py-alist-find n as))
-          (Err raise (lit attribute)
-            (Str8 append (Str8 append "'" n) "'") ())
-          (%py-obj-set-attrs! o (%py-attr-drop as n)))))))
+      ; __delattr__ is the same hook on `del obj.x`
+      (let ((m (%py-dunder o "__delattr__")))
+        (if (not (null? m))
+          (%seq (m n) ())
+          (let ((as (%py-obj-attrs o)))
+            (if (null? (%py-alist-find n as))
+              (Err raise (lit attribute)
+                (Str8 append (Str8 append "'" n) "'") ())
+              (%py-obj-set-attrs! o (%py-attr-drop as n)))))))))
 (def %py-attr-drop
   (fn (self as n)
     (if (null? as) ()

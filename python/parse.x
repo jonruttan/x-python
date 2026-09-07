@@ -1153,7 +1153,13 @@
         (list "SystemExit"     (lit %py-exc-SystemExit))
         ; The builtin exceptions are ordinary names bound to ordinary class
         ; values, so `except ValueError` and `except MyError` take one path.
+        (list "BaseException"     (lit %py-exc-BaseException))
         (list "Exception"         (lit %py-exc-Exception))
+        (list "ImportError"       (lit %py-exc-ImportError))
+        (list "MemoryError"       (lit %py-exc-MemoryError))
+        (list "OverflowError"     (lit %py-exc-OverflowError))
+        (list "NotImplementedError" (lit %py-exc-NotImplementedError))
+        (list "StopAsyncIteration"  (lit %py-exc-StopAsyncIteration))
         (list "ArithmeticError"   (lit %py-exc-ArithmeticError))
         (list "LookupError"       (lit %py-exc-LookupError))
         (list "ZeroDivisionError" (lit %py-exc-ZeroDivisionError))
