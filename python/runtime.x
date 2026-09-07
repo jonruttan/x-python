@@ -1000,9 +1000,17 @@
 ; --- del and slice assignment ------------------------------------------------
 (def %py-delindex
   (fn (_ v i)
-    (if (%py-dict? v) (%py-ddel v i)
-      (if (%py-list? v) ((%py-list-attr v "__delitem__") i)
-        (Err raise (lit type) "object does not support item deletion" ())))))
+    ; __delitem__ was the one of the three item methods nothing dispatched:
+    ; __getitem__ and __setitem__ were already here, so `del c[k]` on a class
+    ; that defines it raised as though the class had said nothing.
+    (if (%py-obj-is v)
+      (let ((m (%py-dunder v "__delitem__")))
+        (if (null? m)
+          (Err raise (lit type) "object does not support item deletion" ())
+          (m i)))
+      (if (%py-dict? v) (%py-ddel v i)
+        (if (%py-list? v) ((%py-list-attr v "__delitem__") i)
+          (Err raise (lit type) "object does not support item deletion" ()))))))
 ; the indices a slice selects, as (lo . hi) on a step of 1
 (def %py-slice-span
   (fn (_ n start stop step)
@@ -2587,6 +2595,10 @@
   (fn (_ v)
     (if (eq? v #t) 1
     (if (eq? v #f) 0
+    ; NotImplemented is a singleton, and Python lets it be hashed.  It reaches
+    ; here as an ordinary pair that nothing else in this ladder claims, so it
+    ; fell through to "unhashable type".
+    (if (eq? v %py-NotImplemented) (%py-id v)
     (if (%py-float-is v)
       (if (= v (Float floor v)) (Float ->int v) (first v))
     (if (%py-complex-is v)
@@ -2612,7 +2624,7 @@
           (Str8 append (Str8 append "unhashable type: '" (%py-view-kind v)) "'") ()))
     (if (%py-tuple-is v)
       (%py-set-hash (%py-tuple-elems v) 0)
-      (Err raise (lit type) "unhashable type" ()))))))))))))))
+      (Err raise (lit type) "unhashable type" ())))))))))))))))
 
 ; Is v a machine float?  The type-handle compare %py-num-kind uses, taken
 ; directly so the writer below can ask cheaply.
@@ -3028,7 +3040,16 @@
               (let ((init (%py-method-find cls "__init__")))
                 (if (null? init)
                   o
-                  (%seq (apply init (pair o args)) o)))
+                  ; __init__ ANSWERS None, and Python raises when it does not
+                  ; -- the value is not merely discarded.  A Python function
+                  ; with no return already answers None here, so this catches
+                  ; the written `return 10` and nothing else.
+                  (let ((r (apply init (pair o args))))
+                    (if (null? r)
+                      o
+                      (Err raise (lit type)
+                        (Str8 append "__init__() should return None, not '"
+                          (Str8 append (%py-type-name r) "'")) ())))))
               o)))))))
 
 ; --- Tuples ------------------------------------------------------------------
