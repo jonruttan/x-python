@@ -2760,8 +2760,15 @@
   ; object.__new__ ALLOCATES, and having it here is what makes a user
   ; __new__ able to call super().__new__(cls) -- the bound self is the class,
   ; and the explicit cls argument arrives after it, so the extra is absorbed.
+  ;
+  ; object.__init__ ACCEPTS AND DOES NOTHING, which is what `super().__init__()`
+  ; reaches from a class whose base is object -- the commonest line in Python
+  ; that this runtime could not run, because the walk ended at a class with no
+  ; methods at all.  It answers None, as every __init__ must.
   (%py-class-new "object" ()
-    (list (pair "__new__" (fn (_ cls . args) (%py-obj-new cls))))
+    (list
+      (pair "__new__" (fn (_ cls . args) (%py-obj-new cls)))
+      (pair "__init__" (fn (_ self . args) ())))
     "object"))
 
 (def %py-exc-BaseException
@@ -3741,7 +3748,24 @@
               (Str8 append
                 (Str8 append "'super' object has no attribute '" name) "'")
               ())
-            (%py-bind-method m (%py-super-self sup))))))))
+            ; WHAT COMES BACK THROUGH super IS WHAT COMES BACK THROUGH THE
+            ; INSTANCE: a class ATTRIBUTE is its value, not a method to bind --
+            ; `super().bar` where bar = 123 answered #<fn> before, because
+            ; everything found was bound.  The three built-in descriptors keep
+            ; their meanings here too.
+            (if (%py-desc-is m)
+              (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
+                (if (eq? k (lit static))
+                  f
+                  (if (eq? k (lit classmethod))
+                    (%py-bind-method f (%py-obj-class (%py-super-self sup)))
+                    (f (%py-super-self sup)))))
+              (if (%py-desc-get? m)
+                ((%py-dunder m "__get__")
+                  (%py-super-self sup) (%py-obj-class (%py-super-self sup)))
+                (if (not (%py-fn-is m))
+                  m
+                  (%py-bind-method m (%py-super-self sup)))))))))))
 
 ; --- Builtins that render ----------------------------------------------------
 ;
