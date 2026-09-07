@@ -1855,6 +1855,22 @@
             (first (%py-class-methods-of (%py-block-toks (first t)) ()))
             (rest t))))))))
 
+; The body of every class header, whatever spelled its base: bind the current
+; class (so `super()` inside a method knows where it stands), parse the block,
+; and emit the one (set! NAME (%py-mkclass ...)).  It was written out three
+; times before, which is what made adding a fourth spelling a paren exercise.
+(def %py-class-of
+  (fn (_ n toks base)
+    (let ((outer (first %py-current-class)))
+      (%set-first! %py-current-class (%py-name->sym (%py-val n)))
+      (let ((r (%py-class-block toks)))
+        (%set-first! %py-current-class outer)
+        (pair
+          (list (lit set!) (%py-name->sym (%py-val n))
+            (list (lit %py-mkclass) (%py-val n) base
+              (pair (lit list) (first r))))
+          (rest r))))))
+
 (def %py-class-stmt
   (fn (_ toks)
     ; positioned just after the `class` keyword
@@ -1863,35 +1879,18 @@
         (Err raise (lit syntax) "expected a class name after class" ())
         (let ((after (rest toks)))
           (if (%py-group? (if (null? after) () (first after)) "(")
-            ; single inheritance: `class Dog(Animal):`
             (let ((b (let ((g (%py-group-of (first after))))
                        (if (null? g) () (first g)))))
-              (if (not (eq? (%py-tag b) (lit tok-name)))
-                (Err raise (lit syntax) "expected a base class name" ())
-                (if #f
-                  ()
-                  (let ((outer (first %py-current-class)))
-                    (%set-first! %py-current-class (%py-name->sym (%py-val n)))
-                    (let ((r (%py-class-block (rest after))))
-                      (%set-first! %py-current-class outer)
-                      (pair
-                        (list (lit set!) (%py-name->sym (%py-val n))
-                          (list (lit %py-mkclass) (%py-val n)
-                            (%py-name->sym (%py-val b))
-                            (pair (lit list) (first r))))
-                        (rest r)))))))
-            (let ((outer (first %py-current-class)))
-              (%set-first! %py-current-class (%py-name->sym (%py-val n)))
-              (let ((r (%py-class-block after)))
-                (%set-first! %py-current-class outer)
-                (pair
-                  ; NO BASE WRITTEN IS `object`, which is what CPython reports:
-                  ; `class A: pass` answers (object,) for A.__bases__, and the
-                  ; walk ends one class later than it used to either way.
-                  (list (lit set!) (%py-name->sym (%py-val n))
-                    (list (lit %py-mkclass) (%py-val n) (lit %py-cls-object)
-                      (pair (lit list) (first r))))
-                  (rest r))))))))))
+              ; `class C():` IS `class C:` -- empty parens are legal Python and
+              ; the corpus writes them; the base is object either way, which is
+              ; also what CPython reports for a bare class.
+              (if (null? b)
+                (%py-class-of n (rest after) (lit %py-cls-object))
+                (if (not (eq? (%py-tag b) (lit tok-name)))
+                  (Err raise (lit syntax) "expected a base class name" ())
+                  ; single inheritance: `class Dog(Animal):`
+                  (%py-class-of n (rest after) (%py-name->sym (%py-val b))))))
+            (%py-class-of n after (lit %py-cls-object))))))))
 
 ; --- tuple unpacking ---------------------------------------------------------
 ;
