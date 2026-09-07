@@ -24,6 +24,8 @@ install: ## Install into <share>/langs/python
 	mkdir -p "$(DEST)"
 	cp -R $(PAYLOAD) "$(DEST)/"
 	@echo "x-python: installed to $(DEST)"
+	@echo "x-python: writing the boot image"
+	"$(X)" --image -l python || true
 	@echo "x-python: try  x -l python"
 
 .PHONY: uninstall
