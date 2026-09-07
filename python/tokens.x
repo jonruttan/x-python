@@ -559,6 +559,32 @@
     (go 255 ())))
 (def %py-byte->str (fn (_ n) (List ref n %py-byte-strs)))
 
+; A NUL NAMED BY AN ESCAPE IS PARKED, NOT RAISED.  The reason is the one
+; %py-note-ind-error! gives above: a raise crossing the C reader boundary
+; reaches the guard with its payload gone, so a read handler cannot report
+; anything itself.  The escape decodes to the empty string it always decoded
+; to; what is new is the note, which python-tokenize turns into the ValueError
+; bytes() already raises -- once reading is over and x is driving again.
+;
+; WHY REFUSE AT ALL: a string on this platform is a C string, by an engine
+; GUARANTEE rather than an accident (str/nul-terminated), so `Str8 append`
+; drops a NUL and everything after it in the same literal.  b'\x00\x01' was
+; b'' and 'a\x00b' was 'ab', with nothing said.  docs/nul-and-the-string-layer.md
+; is why that is the end of it and not the start of a fix.
+(def %py-nul-error (pair () ()))
+(def %py-nul-reset! (fn (_) (%set-first! %py-nul-error ())))
+; Answers the empty string, so the decoder's shape is unchanged; `let` rather
+; than %seq because %py-esc-at is reached from a read handler and every form
+; it already uses is one the reader has proved safe.
+(def %py-nul-esc (fn (_) (let ((noted (%set-first! %py-nul-error #t))) "")))
+; One escape's text: the byte a bytes literal names, the code point a str
+; literal names, and a note instead of either when the value is zero.
+(def %py-esc-cp
+  (fn (_ v raw?)
+    (if (= v 0)
+      (%py-nul-esc)
+      (if raw? (%py-byte->str v) (%py-cp->str v)))))
+
 ; raw? decodes \xhh and octal escapes to raw bytes (bytes literals) rather
 ; than code points (str literals)
 (def %py-unescape
@@ -598,7 +624,7 @@
         (if (if (null? h1) #t (null? h2))
           (simple "\\x")
           (let ((v (+ (* h1 16) h2)))
-            (pair (+ i 4) (if raw? (%py-byte->str v) (%py-cp->str v))))))
+            (pair (+ i 4) (%py-esc-cp v raw?)))))
     (if (if (>= code 48) (<= code 55) #f)
       (let ((d1 (- code 48)))
         (let ((n2 (if (if (< (+ i 2) len) (if (>= (at (+ i 2)) 48) (<= (at (+ i 2)) 55) #f) #f) 1 0)))
@@ -606,7 +632,7 @@
             (let ((v (if (= n2 0) d1
                        (if (= n3 0) (+ (* d1 8) (- (at (+ i 2)) 48))
                          (+ (* (+ (* d1 8) (- (at (+ i 2)) 48)) 8) (- (at (+ i 3)) 48))))))
-              (pair (+ i (+ 2 (+ n2 n3))) (if raw? (%py-byte->str v) (%py-cp->str v)))))))
+              (pair (+ i (+ 2 (+ n2 n3))) (%py-esc-cp v raw?))))))
       ; unknown: keep the backslash and the character, Python's rule
       (pair (+ i 2) (Str8 sub i 2 s)))))))))))))))))
 (def %py-string-read
@@ -1129,14 +1155,20 @@
   (fn (_ input)
     (%py-jit-tick! (Str8 length input))
     (%py-ind-reset!)
+    (%py-nul-reset!)
     (let ((toks (%py-token-read-string (first %py-active-raw)
                   (Str8 append input " "))))
       ; Reading is over and x is driving again, so this is where an indentation
-      ; error can finally be raised.
-      (if (null? (first %py-ind-error))
-        toks
+      ; error can finally be raised -- and, for the same reason and out of the
+      ; same kind of parked note, a NUL named by an escape.  Indentation goes
+      ; first: it is a fact about the program's shape, and a file with both
+      ; problems has the structural one to fix before the literal.
+      (if (not (null? (first %py-ind-error)))
         (Err raise (lit indent)
-          "unindent does not match any outer indentation level" ())))))
+          "unindent does not match any outer indentation level" ())
+        (if (null? (first %py-nul-error))
+          toks
+          (Err raise (lit value) "a NUL byte is not representable here" ()))))))
 
 ; --- PY-OPEN / PY-CLOSE: brackets are READ AS GROUPS -------------------------
 ;
