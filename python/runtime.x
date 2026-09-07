@@ -2966,38 +2966,58 @@
 (def %py-bind-method
   (fn (_ m obj) (fn (_ . args) (apply m (pair obj args)))))
 
+; A USER DESCRIPTOR is any object whose class defines the hook -- Python has
+; no marker interface here, only the method.  staticmethod, classmethod and
+; property are this same idea with the runtime's own PY-DESC standing in for
+; the object; these three predicates are what lets a program write its own.
+(def %py-desc-get?
+  (fn (_ v) (if (%py-obj-is v) (not (null? (%py-method-find (%py-obj-class v) "__get__"))) #f)))
+(def %py-desc-set?
+  (fn (_ v) (if (%py-obj-is v) (not (null? (%py-method-find (%py-obj-class v) "__set__"))) #f)))
+(def %py-desc-delete?
+  (fn (_ v) (if (%py-obj-is v) (not (null? (%py-method-find (%py-obj-class v) "__delete__"))) #f)))
+
 (def %py-obj-attr
   (fn (_ obj name)
-    (let ((e (%py-alist-find name (%py-obj-attrs obj))))
-      (if (not (null? e))
-        (rest e)
-        (let ((m (%py-method-find (%py-obj-class obj) name)))
-          (if (%py-desc-is m)
-            ; WHAT A DESCRIPTOR ANSWERS FROM AN INSTANCE: a staticmethod is its
-            ; function untouched, a classmethod binds the CLASS where an
-            ; ordinary method binds the instance, and a property is CALLED here
-            ; -- `c.v` is the getter's result, not the getter.
-            (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
-              (if (eq? k (lit static))
-                f
-                (if (eq? k (lit classmethod))
-                  (%py-bind-method f (%py-obj-class obj))
-                  (f obj))))
-            (if (if (null? m) #f (not (%py-fn-is m)))
-              m
-              (if (null? m)
-                ; the last resort is the class's own __getattr__, as in Python
-                (let ((ga (%py-method-find (%py-obj-class obj) "__getattr__")))
-                  (if (null? ga)
-                    (Err raise (lit attribute)
-                      (Str8 append
-                        (Str8 append
-                          (Str8 append "'" (%py-class-name (%py-obj-class obj)))
-                          "' object has no attribute '")
-                        (Str8 append name "'"))
-                      ())
-                    (ga obj name)))
-                (%py-bind-method m obj)))))))))
+    ; __class__ is the instance's own class, which two of the corpus's
+    ; descriptor tests probe before they will run at all.
+    (if (Str8 =? name "__class__")
+      (%py-obj-class obj)
+      (let ((e (%py-alist-find name (%py-obj-attrs obj))))
+        (if (not (null? e))
+          (rest e)
+          (let ((m (%py-method-find (%py-obj-class obj) name)))
+            (if (%py-desc-is m)
+              ; WHAT A DESCRIPTOR ANSWERS FROM AN INSTANCE: a staticmethod is
+              ; its function untouched, a classmethod binds the CLASS where an
+              ; ordinary method binds the instance, and a property is CALLED
+              ; here -- `c.v` is the getter's result, not the getter.
+              (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
+                (if (eq? k (lit static))
+                  f
+                  (if (eq? k (lit classmethod))
+                    (%py-bind-method f (%py-obj-class obj))
+                    (f obj))))
+              ; A USER DESCRIPTOR answers through its own __get__, which takes
+              ; the instance and the class -- the same protocol property is a
+              ; special case of.
+              (if (%py-desc-get? m)
+                ((%py-dunder m "__get__") obj (%py-obj-class obj))
+                (if (if (null? m) #f (not (%py-fn-is m)))
+                  m
+                  (if (null? m)
+                    ; the last resort is the class's own __getattr__, as in Python
+                    (let ((ga (%py-method-find (%py-obj-class obj) "__getattr__")))
+                      (if (null? ga)
+                        (Err raise (lit attribute)
+                          (Str8 append
+                            (Str8 append
+                              (Str8 append "'" (%py-class-name (%py-obj-class obj)))
+                              "' object has no attribute '")
+                            (Str8 append name "'"))
+                          ())
+                        (ga obj name)))
+                    (%py-bind-method m obj)))))))))))
 
 ; obj(...) is __call__, through the PY-OBJ type's call handler.
 (set! %py-obj-call
@@ -3035,9 +3055,14 @@
         ; store unless it makes one itself.  __getattr__ was already a hook on
         ; the read; this is the same rule on the write.
         (let ((m (%py-dunder obj "__setattr__")))
-          (if (null? m)
-            (%py-obj-set-attrs! obj (%py-attr-put (%py-obj-attrs obj) name v))
-            (%seq (m name v) ())))))))
+          (if (not (null? m))
+            (%seq (m name v) ())
+            ; and a DESCRIPTOR on the class takes the store before the
+            ; instance does, which is what makes a data descriptor data
+            (let ((d (%py-method-find (%py-obj-class obj) name)))
+              (if (%py-desc-set? d)
+                (%seq ((%py-dunder d "__set__") obj v) ())
+                (%py-obj-set-attrs! obj (%py-attr-put (%py-obj-attrs obj) name v))))))))))
 
 ; staticmethod, classmethod and property are FUNCTIONS in Python -- applying
 ; a decorator IS calling it -- so they are ordinary builtins here, and
@@ -3055,8 +3080,24 @@
     ; method lookup as a base record is a walk into a closure's guts.  Every
     ; base is checked, since `class C(A, nosuch)` is the same mistake.
     (if (%py-all-classes? bases)
-      (%py-class-new name bases methods (Str8 append "__main__." name))
+      (let ((cls (%py-class-new name bases methods (Str8 append "__main__." name))))
+        ; __set_name__ IS CALLED AS THE CLASS IS MADE, once per attribute that
+        ; wants it, with the owner and the name it was written under -- which
+        ; is the only moment a descriptor can learn what it is called.
+        (%seq (%py-set-names cls methods) cls))
       (Err raise (lit type) "a class base must be a class" ()))))
+
+(def %py-set-names
+  (fn (self cls rows)
+    (if (null? rows)
+      ()
+      (let ((v (rest (first rows))))
+        (%seq
+          (if (%py-obj-is v)
+            (let ((m (%py-dunder v "__set_name__")))
+              (if (null? m) () (m cls (first (first rows)))))
+            ())
+          (self cls (rest rows)))))))
 
 (def %py-all-classes?
   (fn (self bs)
@@ -3879,11 +3920,14 @@
       (let ((m (%py-dunder o "__delattr__")))
         (if (not (null? m))
           (%seq (m n) ())
-          (let ((as (%py-obj-attrs o)))
-            (if (null? (%py-alist-find n as))
-              (Err raise (lit attribute)
-                (Str8 append (Str8 append "'" n) "'") ())
-              (%py-obj-set-attrs! o (%py-attr-drop as n)))))))))
+          (let ((d (%py-method-find (%py-obj-class o) n)))
+            (if (%py-desc-delete? d)
+              (%seq ((%py-dunder d "__delete__") o) ())
+              (let ((as (%py-obj-attrs o)))
+                (if (null? (%py-alist-find n as))
+                  (Err raise (lit attribute)
+                    (Str8 append (Str8 append "'" n) "'") ())
+                  (%py-obj-set-attrs! o (%py-attr-drop as n)))))))))))
 (def %py-attr-drop
   (fn (self as n)
     (if (null? as) ()
