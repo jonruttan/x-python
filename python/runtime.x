@@ -520,7 +520,13 @@
     (if (%py-bytes-is b)
       (if (%py-bytes-is a)
         (Str8 includes? (%py-bytes-str a) (%py-bytes-str b))
-        (Err raise (lit type) "a bytes-like object is required" ()))
+        ; AN INT IN A BYTES IS A BYTE VALUE, not a type error: bytes are a
+        ; sequence OF ints in Python, so `0 in b"1234"` asks whether any byte
+        ; is zero and answers False rather than refusing.
+        (if (eq? (%py-num-kind (%py-boolnorm a)) (lit int))
+          (let ((bs (%py-bytes-str b)))
+            (%py-in-walk (%py-boolnorm a) (%py-byte-list bs (- (Str8 length bs) 1) ())))
+          (Err raise (lit type) "a bytes-like object is required" ())))
     (if (str? b)
       (if (str? a)
         (Str8 includes? a b)
@@ -3109,6 +3115,21 @@
 (def %py-staticmethod (fn (_ f) (%py-desc-new (lit static) f)))
 (def %py-classmethod  (fn (_ f) (%py-desc-new (lit classmethod) f)))
 (def %py-property     (fn (_ f) (%py-desc-new (lit property) f)))
+
+; StopIteration CARRIES A VALUE -- what a generator returned -- and Python
+; spells it as an attribute: StopIteration("x").value is "x", and with no
+; argument it is None.  A property is the honest shape for something read off
+; the arguments rather than stored.
+(%py-class-methods-set! %py-exc-StopIteration
+  (list
+    (pair "value"
+      (%py-property
+        (fn (_ self)
+          (let ((a (%py-alist-find "args" (%py-obj-attrs self))))
+            (if (null? a)
+              ()
+              (let ((els (%py-tuple-elems (rest a))))
+                (if (null? els) () (first els))))))))))
 
 (def %py-mkclass
   (fn (_ name bases methods)

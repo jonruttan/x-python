@@ -1833,7 +1833,13 @@
                 (let ((v (%py-exprlist (rest (rest t)))))
                   (self (rest v)
                     (pair (list (lit pair) (%py-val (first t)) (first v)) acc)))
-                (Err raise (lit syntax) "a class body takes defs, assignments, decorated defs and pass only" ()))
+                ; A BARE EXPRESSION IN A CLASS BODY is evaluated and dropped,
+                ; which is how Python spells a class DOCSTRING -- the string
+                ; is the first statement of the body and nothing reads it
+                ; here.  Refusing it meant no class in this runtime could
+                ; carry documentation at all.
+                (let ((v (%py-exprlist t)))
+                  (self (rest v) acc)))
               (let ((nm (if (null? (rest t)) () (first (rest t)))))
                 (if (not (eq? (%py-tag nm) (lit tok-name)))
                   (Err raise (lit syntax) "expected a method name after def" ())
