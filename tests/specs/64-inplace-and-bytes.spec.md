@@ -127,6 +127,24 @@ ValueError
 TypeError
 ```
 
+### a negative count is a ValueError, and zero is still the empty bytes
+
+`bytes(n)` counts, so it has a floor rather than a range, and the two answers
+either side of that floor are different: CPython gives `b''` for 0 and
+`ValueError("negative count")` for anything below.  One guard used to answer
+for both, so a negative count came back as the empty bytes -- the answer that
+belongs to 0.  A real CPython 3.14.7 output.
+
+```python
+(python-run "try:\n    bytes(-1)\nexcept ValueError as e:\n    print(e)\ntry:\n    bytes(-5)\nexcept ValueError as e:\n    print(e)\nprint(bytes(0), len(bytes(0)))")
+```
+---
+```output
+negative count
+negative count
+b'' 0
+```
+
 ## what this runtime cannot do here
 
 ### a NUL byte is refused in a literal, while the program is read

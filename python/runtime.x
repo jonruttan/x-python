@@ -4434,11 +4434,20 @@
             (self (rest codes)
               (Str8 append acc (%py-list->string (list (%py-int->char c)))))))))))
 
+; THE COUNT IS VALIDATED BEFORE THE BYTES ARE BUILT, and negative is its own
+; answer rather than a share of zero's.  `(< n 1)` was true for 0 AND for every
+; negative n, so both took the empty-bytes arm: bytes(-1) agreed with CPython
+; about bytes(0) while disagreeing about itself, which is a WRONG value rather
+; than a missing one.  Measured, CPython 3.14.7: bytes(0) is b'', bytes(-1) is
+; ValueError("negative count").  Zero alone is empty; a positive count asks for
+; that many NUL bytes, which is the refusal above under a second name.
 (def %py-bytes-zeros
   (fn (self n acc)
-    (if (< n 1)
-      acc
-      (Err raise (lit value) "a NUL byte is not representable here" ()))))
+    (if (< n 0)
+      (Err raise (lit value) "negative count" ())
+      (if (= n 0)
+        acc
+        (Err raise (lit value) "a NUL byte is not representable here" ())))))
 
 (def %py-cls-bytes
   (%py-class-new "bytes" %py-cls-object (list (pair "%ctor" %py-bytes-ctor)) "bytes"))
