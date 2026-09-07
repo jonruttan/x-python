@@ -194,13 +194,17 @@
       (mk-tok-number (Str8 sub 1 (- (Str8 length v) 1) v)))))
 
 ; Augmented assignment: the operator that folds the old value with the new.
+; EVERY op= GETS ITS OWN DUNDER, not just +=.  Each of these tries __iop__
+; on an object first and falls back to the binary op, which is Python's rule
+; (runtime.x, %py-inplace); for everything that is not an object they ARE the
+; binary op.
 (def %py-aug-ops
-  (list (list "+=" (lit %py-iadd)) (list "-=" (lit %py-sub))
-        (list "*=" (lit %py-mul)) (list "/=" (lit %py-div))
-        (list "%=" (lit %py-mod))
+  (list (list "+=" (lit %py-iadd)) (list "-=" (lit %py-isub))
+        (list "*=" (lit %py-imul)) (list "/=" (lit %py-idiv))
+        (list "%=" (lit %py-imod))
         ; two characters only: the tokenizer pairs, it does not triple
-        (list "|=" (lit %py-bitor)) (list "&=" (lit %py-bitand))
-        (list "^=" (lit %py-bitxor))))
+        (list "|=" (lit %py-ibitor)) (list "&=" (lit %py-ibitand))
+        (list "^=" (lit %py-ibitxor))))
 
 (def %py-cmp-ops
   (list (list "==" (lit %py-eq)) (list "!=" (lit %py-ne))
@@ -1095,6 +1099,7 @@
         (list "hasattr" (lit %py-hasattr))
         (list "object"  (lit %py-cls-object))
         ; the three that make a decorated def mean something
+        (list "bytes"        (lit %py-cls-bytes))
         (list "staticmethod" (lit %py-staticmethod))
         (list "classmethod"  (lit %py-classmethod))
         (list "property"     (lit %py-property))
