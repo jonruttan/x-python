@@ -793,6 +793,9 @@
 ; `=` is assignment.  A single-character-only operator type reads `a//b` as two
 ; divisions, which is not a syntax error -- it is silently different arithmetic.
 ;
+; AND THE MATCH RUNS THREE CHARACTERS DEEP: `//=` `**=` `>>=` `<<=` are the
+; augmented forms of the doubled operators, so a pair is not always the end.
+;
 ; THE SHAPE IS ash's SH-OP, INCLUDING THE `(+ chr 0)`.  Two earlier attempts
 ; died here and both are worth recording:
 ;
@@ -816,7 +819,7 @@
     ; wrong, which is how x-python#40 reached CI red.
     (if (= c 43) #t (if (= c 45) #t (if (= c 42) #t (if (= c 47) #t (if (= c 37) #t (if (= c 61) #t (if (= c 60) #t (if (= c 62) #t (if (= c 33) #t (if (= c 126) #t (if (= c 124) #t (if (= c 94) #t (if (= c 38) #t (if (= c 44) #t (if (= c 58) #t (if (= c 46) #t (if (= c 59) #t (= c 64))))))))))))))))))))
 
-; Which pairs extend: == != <= >= // ** and += -= *= /= %=
+; Which pairs extend: a second `=`, or one of the four doubled operators.
 (def %py-op-pair?
   (fn (_ a b)
     (if (= b 61)
@@ -833,11 +836,33 @@
     ; = ! < > / * + - %, and | & ^ for |= &= ^=
     (if (= c 61) #t (if (= c 33) #t (if (= c 60) #t (if (= c 62) #t (if (= c 47) #t (if (= c 42) #t (if (= c 43) #t (if (= c 45) #t (if (= c 37) #t (if (= c 124) #t (if (= c 38) #t (= c 94))))))))))))))
 
+; Which pairs take a THIRD character.  Only the doubled four do, and the only
+; third character is `=`: `//=` `**=` `>>=` `<<=`.  Nothing else triples --
+; `==` is the whole operator, not the start of `===`.  Generated from the code
+; list like the two predicates above, for the reason recorded there.
+(def %py-op-triple?
+  (fn (_ a b)
+    (if (= a b)
+      (if (= a 47) #t (if (= a 42) #t (if (= a 62) #t (= a 60))))
+      #f)))
+
+; The third character is `=` and nothing else, so this state closes over
+; nothing and is an ordinary global -- the shape %py-sq-esc uses, and the one
+; form of state the note above is not warning about.
+(def %py-op-third
+  (fn (_ buffer score chr)
+    (if (= chr 61)
+      (%score-set score 1 buffer)
+      (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
+
 (def %py-op-second
   (fn (_ c1)
     (fn (_ buffer score chr)
       (if (%py-op-pair? c1 chr)
-        (%score-set score 1 buffer)
+        ; a pair that can triple keeps reading; every other pair is done
+        (if (%py-op-triple? c1 chr)
+          (%seq (%score-set score 1 buffer) %py-op-third)
+          (%score-set score 1 buffer))
         (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
 
 (def %py-t-op

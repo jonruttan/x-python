@@ -208,6 +208,38 @@ as two divisions, which is not an error — it is different arithmetic.
 ---
     (('tok-op "+") ('tok-name "x"))
 
+### a three-character operator is one token
+
+`//=` `**=` `<<=` `>>=` are the augmented forms of the doubled operators, so
+the match runs one character past the pair.
+
+```python
+(%seq (write (python-tokenize "//= **= <<= >>=")) (newline))
+```
+---
+    (('tok-op "//=") ('tok-op "**=") ('tok-op "<<=") ('tok-op ">>="))
+
+### a pair that could triple still ends without the third
+
+The mirror of the case above it: the third character is given back the way the
+second is, so `//` before a name is still floor division.
+
+```python
+(%seq (write (python-tokenize "//x")) (newline))
+```
+---
+    (('tok-op "//") ('tok-name "x"))
+
+### nothing but the doubled four triples
+
+`==` is the whole operator, not the start of `===`.
+
+```python
+(%seq (write (python-tokenize "===")) (newline))
+```
+---
+    (('tok-op "==") ('tok-op "="))
+
 ## tokenizer together
 
 ### a whole assignment

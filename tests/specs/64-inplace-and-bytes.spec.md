@@ -44,6 +44,55 @@ B(6)
 B(9)
 ```
 
+### the three-character op= forms
+
+```python
+(python-run "n = 7\nn //= 2\nprint(n)\nn **= 3\nprint(n)\nn <<= 4\nprint(n)\nn >>= 2\nprint(n)")
+```
+---
+```output
+3
+27
+432
+108
+```
+
+### each of those has its own dunder too
+
+```python
+(python-run "class N:\n    def __init__(self, v): self.v = v\n    def __ifloordiv__(self, o): return N(self.v // o)\n    def __ipow__(self, o): return N(self.v ** o)\n    def __ilshift__(self, o): return N(self.v << o)\n    def __irshift__(self, o): return N(self.v >> o)\n    def __repr__(self): return f\"N({self.v})\"\nn = N(17)\nn //= 5\nprint(n)\nn **= 4\nprint(n)\nn <<= 3\nprint(n)\nn >>= 2\nprint(n)")
+```
+---
+```output
+N(3)
+N(81)
+N(648)
+N(162)
+```
+
+### and falls back to the binary op when there is none
+
+```python
+(python-run "class F:\n    def __init__(self, v): self.v = v\n    def __floordiv__(self, o): return F(self.v // o)\n    def __repr__(self): return f\"F({self.v})\"\na = F(9)\nb = a\na //= 2\nprint(a, b, a is b)")
+```
+---
+```output
+F(4) F(9) False
+```
+
+### the shorter operators still end where they did
+
+```python
+(python-run "a = 7\nprint(a // 2, a ** 2, a << 2, a >> 1)\nprint(a / 2, a <= 7, a >= 7, a == 7, a != 7)\nprint(2**3**2)\nn=7\nn//=2\nn<<=3\nn>>=1\nn**=2\nprint(n)")
+```
+---
+```output
+3 49 28 3
+3.5 True True True False
+512
+144
+```
+
 ### numbers and lists are unchanged by all this
 
 ```python
@@ -79,18 +128,6 @@ TypeError
 ```
 
 ## what this runtime cannot do here
-
-### a three-character op= is not tokenized
-
-`//=`, `**=`, `>>=` and `<<=` are three characters, and the tokenizer PAIRS:
-it reads two-character operators and stops.  The binary forms all work --
-`a = a // b` is fine -- so the gap is the assignment spelling alone.
-
-```python
-(python-run "n = 7\nn //= 2\nprint(n)")
-```
----
-    Error: #<err:syntax unexpected token in expression>
 
 ### a NUL byte is refused in a literal, while the program is read
 
