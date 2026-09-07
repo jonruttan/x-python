@@ -52,7 +52,7 @@
   %py-dict %py-dict-new %py-dict-is %py-dict-entries %py-dict-set! %py-dict-get
   %py-repr %py-equal %py-repeat
   %py-tuple %py-tuple-new %py-tuple-is %py-tuple-elems
-  %py-class %py-class-new %py-class-is %py-class-name %py-class-base
+  %py-class %py-class-new %py-class-is %py-class-name %py-class-base %py-class-bases
   %py-class-methods %py-class-methods-set! %py-class-qualname %py-instantiate
   %py-obj-write %py-obj-call
   %py-obj %py-obj-new %py-obj-is %py-obj-class %py-obj-attrs %py-obj-set-attrs!
@@ -434,15 +434,29 @@
 ; a fact about where the class came from -- the constructor's caller knows it,
 ; the class itself cannot compute it, so it travels as a slot.
 (def %py-class-new
+  ; THE BASES ARE A LIST, because `class Sub(A, B)` is ordinary Python and the
+  ; corpus tests it.  The argument is NORMALIZED rather than changed at every
+  ; call site: a single class becomes a one-element list, () stays empty, and a
+  ; list passes through -- so the builtin type objects still name their base
+  ; the way they always did.
+  ;
   ; THE METHOD ALIST IS A CELL, for the reason the list type's is: `C.x = 2`
   ; stores on the CLASS, and every instance and every reference to the class
   ; must see it.  The slot holds the cell, the cell's rest holds the rows, and
   ; a store replaces that rest -- so nothing has to find every holder.
   (fn (_ name base methods qualname)
-    (%make-instance %py-class (list name base (pair () methods) qualname))))
+    (%make-instance %py-class
+      (list name
+        (if (null? base) () (if (%py-class-is base) (list base) base))
+        (pair () methods) qualname))))
 (def %py-class-is (fn (_ v) (%type? v %py-class)))
 (def %py-class-name (fn (_ c) (first (first c))))
-(def %py-class-base (fn (_ c) (first (rest (first c)))))
+(def %py-class-bases (fn (_ c) (first (rest (first c)))))
+; The FIRST base, for the places that walk one chain -- super() reaches the
+; next class along, which for single inheritance is the same answer Python's
+; MRO gives.
+(def %py-class-base
+  (fn (_ c) (let ((bs (first (rest (first c))))) (if (null? bs) () (first bs)))))
 (def %py-class-methods (fn (_ c) (rest (first (rest (rest (first c)))))))
 (def %py-class-methods-set!
   (fn (_ c rows) (%seq (%set-rest! (first (rest (rest (first c)))) rows) ())))

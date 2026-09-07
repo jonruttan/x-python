@@ -1443,8 +1443,7 @@
         (if (Str8 =? name "__name__")
           (%py-class-name cls)
           (if (Str8 =? name "__bases__")
-            (%py-tuple-of-list
-              (let ((b (%py-class-base cls))) (if (null? b) () (list b))))
+            (%py-tuple-of-list (%py-class-bases cls))
             (if (Str8 =? name "__dict__")
               (%py-dict-new (%py-class-rows cls))
               (let ((m (%py-method-find cls name)))
@@ -2843,7 +2842,13 @@
   (fn (self c target)
     (if (null? c)
       #f
-      (if (eq? c target) #t (self (%py-class-base c) target)))))
+      (if (eq? c target) #t (%py-subclass-any? (%py-class-bases c) target)))))
+
+(def %py-subclass-any?
+  (fn (self bs target)
+    (if (null? bs)
+      #f
+      (if (%py-subclass? (first bs) target) #t (self (rest bs) target)))))
 
 (def %py-exc-match
   (fn (_ e cls)
@@ -2923,8 +2928,19 @@
       ()
       (let ((e (%py-alist-find name (%py-class-methods cls))))
         (if (null? e)
-          (self (%py-class-base cls) name)
+          ; DEPTH FIRST, LEFT TO RIGHT across every base: `class Sub(A, B)`
+          ; finds A's method before B's, and A's own bases before B at all,
+          ; which is the order Python's MRO gives for the shapes a program
+          ; without diamonds writes.
+          (%py-method-find-bases (%py-class-bases cls) name)
           (rest e))))))
+
+(def %py-method-find-bases
+  (fn (self bs name)
+    (if (null? bs)
+      ()
+      (let ((m (%py-method-find (first bs) name)))
+        (if (null? m) (self (rest bs) name) m)))))
 
 ; A BOUND METHOD IS JUST A CLOSURE OVER THE OBJECT.  A method compiles to
 ; (fn (_ py-self ...) ...) -- the leading _ absorbs x's self-binding -- so
@@ -3008,13 +3024,20 @@
 (def %py-property     (fn (_ f) (%py-desc-new (lit property) f)))
 
 (def %py-mkclass
-  (fn (_ name base methods)
+  (fn (_ name bases methods)
     ; A BASE THAT IS NOT A CLASS IS A TypeError, not a crash.  An undefined
     ; name is bound to a shim that raises when called, and a shim reaching
-    ; method lookup as a base record is a walk into a closure's guts.
-    (if (if (null? base) #f (not (%py-class-is base)))
-      (Err raise (lit type) "a class base must be a class" ())
-      (%py-class-new name base methods (Str8 append "__main__." name)))))
+    ; method lookup as a base record is a walk into a closure's guts.  Every
+    ; base is checked, since `class C(A, nosuch)` is the same mistake.
+    (if (%py-all-classes? bases)
+      (%py-class-new name bases methods (Str8 append "__main__." name))
+      (Err raise (lit type) "a class base must be a class" ()))))
+
+(def %py-all-classes?
+  (fn (self bs)
+    (if (null? bs)
+      #t
+      (if (%py-class-is (first bs)) (self (rest bs)) #f))))
 
 ; Construction: make the instance, then run __init__ if the class chain has one.
 ; Its return value is discarded -- Python returns the INSTANCE from a call to a
