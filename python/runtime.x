@@ -99,11 +99,32 @@
 
 ; augmented + on a list is list.extend, which takes any iterable -- while
 ; plain + demands a list.  Python draws that line and the corpus tests it.
+; AUGMENTED ASSIGNMENT IS ITS OWN DUNDER FIRST.  Python tries __iop__, which
+; may mutate the object and answer itself, and falls back to the ordinary
+; binary op -- `a += b` is `a = a.__add__(b)` only when there is no __iadd__.
+; One helper takes the name and the fallback, so every op= gets the same rule
+; rather than += alone having it.
+(def %py-inplace
+  (fn (_ name binop a b)
+    (if (%py-obj-is a)
+      (let ((m (%py-dunder a name)))
+        (if (null? m) (binop a b) (m b)))
+      (binop a b))))
+
 (def %py-iadd
   (fn (_ a b)
+    ; a list grows in place from ANY iterable, which is list.extend's rule
     (if (%py-list? a)
       (%seq (%py-list-set! a (%py-list-cat (%py-list-elems a) (%py-iter-elems b))) a)
-      (%py-add a b))))
+      (%py-inplace "__iadd__" %py-add a b))))
+
+(def %py-isub    (fn (_ a b) (%py-inplace "__isub__" %py-sub a b)))
+(def %py-imul    (fn (_ a b) (%py-inplace "__imul__" %py-mul a b)))
+(def %py-idiv    (fn (_ a b) (%py-inplace "__itruediv__" %py-div a b)))
+(def %py-imod    (fn (_ a b) (%py-inplace "__imod__" %py-mod a b)))
+(def %py-ibitor  (fn (_ a b) (%py-inplace "__ior__" %py-bitor a b)))
+(def %py-ibitand (fn (_ a b) (%py-inplace "__iand__" %py-bitand a b)))
+(def %py-ibitxor (fn (_ a b) (%py-inplace "__ixor__" %py-bitxor a b)))
 
 (def %py-add
   (fn (_ a b)
@@ -4335,11 +4356,56 @@
 (def %py-cls-NoneType
   (%py-class-new "NoneType" %py-cls-object () "NoneType"))
 
+; bytes(...) -- from a list of ints, from a count (that many zero bytes), or
+; from something already bytes.  The type object makes `bytes` a name and
+; gives type(b'a') something to answer.
+(def %py-bytes-ctor
+  (fn (_ . args)
+    (if (null? args)
+      (%py-bytes-new "")
+      (let ((v (first args)))
+        (if (%py-bytes-is v)
+          v
+          (if (%py-list? v)
+            (%py-bytes-new (%py-bytes-of-codes (%py-list-elems v) ""))
+            (if (%py-tuple-is v)
+              (%py-bytes-new (%py-bytes-of-codes (%py-tuple-elems v) ""))
+              (if (str? v)
+                (Err raise (lit type) "string argument without an encoding" ())
+                (%py-bytes-new (%py-bytes-zeros v ""))))))))))
+
+; A NUL BYTE CANNOT BE CARRIED HERE, and saying so is better than answering a
+; short bytes.  A string on this platform ends at its first NUL, so chr(0) is
+; already the empty string and b"\x00" is already empty -- a pre-existing
+; limit of the string layer, not of this constructor, which merely refuses to
+; hide it.
+(def %py-bytes-of-codes
+  (fn (self codes acc)
+    (if (null? codes)
+      acc
+      (let ((c (%py-boolnorm (first codes))))
+        (if (if (< c 0) #t (> c 255))
+          (Err raise (lit value) "bytes must be in range(0, 256)" ())
+          (if (= c 0)
+            (Err raise (lit value) "a NUL byte is not representable here" ())
+            (self (rest codes)
+              (Str8 append acc (%py-list->string (list (%py-int->char c)))))))))))
+
+(def %py-bytes-zeros
+  (fn (self n acc)
+    (if (< n 1)
+      acc
+      (Err raise (lit value) "a NUL byte is not representable here" ()))))
+
+(def %py-cls-bytes
+  (%py-class-new "bytes" %py-cls-object (list (pair "%ctor" %py-bytes-ctor)) "bytes"))
+
 (def %py-type-of
   (fn (_ v)
     (if (eq? v #t) %py-cls-bool
     (if (eq? v #f) %py-cls-bool
     (if (null? v) %py-cls-NoneType
+    (if (%py-bytes-is v) %py-cls-bytes
     (if (str? v) %py-cls-str
     (if (%py-list-is v) %py-cls-list
     (if (%py-set-is v) (if (%py-set-frozen? v) %py-cls-frozenset %py-cls-set)
@@ -4351,7 +4417,7 @@
         (if (eq? k (lit int)) %py-cls-int
         (if (eq? k (lit float)) %py-cls-float
         (if (eq? k (lit complex)) %py-cls-complex
-          (Err raise (lit type) "type: unsupported value")))))))))))))))))
+          (Err raise (lit type) "type: unsupported value"))))))))))))))))))
 
 ; isinstance walks the base chain with the same %py-subclass? the exception
 ; matcher uses, so user classes, user exceptions and builtins all answer from
