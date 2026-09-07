@@ -56,6 +56,7 @@
   %py-class-methods %py-class-methods-set! %py-class-qualname %py-instantiate
   %py-obj-write %py-obj-call
   %py-obj %py-obj-new %py-obj-is %py-obj-class %py-obj-attrs %py-obj-set-attrs!
+  %py-obj-native %py-obj-native! %py-native-of
   %py-super-t %py-super-new %py-super-is %py-super-from %py-super-self
   %py-desc %py-desc-new %py-desc-is %py-desc-kind %py-desc-fn)
 
@@ -97,8 +98,8 @@
 (def %py-t-th-float (%py-t-typeof 1.5))
 (def %py-t-float? (fn (_ v) (eq? (%py-t-typeof v) %py-t-th-float)))
 
-(def %py-list-elems (fn (_ v) (rest (first v))))
-(def %py-list-set! (fn (_ v new) (%seq (%set-rest! (first v) new) ())))
+(def %py-list-elems (fn (_ v) (rest (first (%py-native-of v)))))
+(def %py-list-set! (fn (_ v new) (%seq (%set-rest! (first (%py-native-of v)) new) ())))
 (def %py-list-new (fn (_ elems) (%make-instance %py-list (pair () elems))))
 (def %py-list-is (fn (_ v) (%type? v %py-list)))
 
@@ -470,6 +471,30 @@
 (def %py-obj-class (fn (_ o) (first (first o))))
 (def %py-obj-attrs (fn (_ o) (rest (first o))))
 (def %py-obj-set-attrs! (fn (_ o a) (%seq (%set-rest! (first o) a) ())))
+
+; SUBCLASSING A BUILTIN: the instance keeps the native value it is a subclass
+; OF -- a PY-LIST for `class mylist(list)` -- and every list operation reads it
+; through the accessors below.  It is stored as an attribute row under a key no
+; Python identifier can spell (a name comes from tok-name, and % is not a name
+; character), so the instance record itself does not change and the attributes
+; a program writes sit beside it undisturbed.
+(def %py-obj-native
+  ; its own row walk rather than runtime.x's %py-alist-find: this module is
+  ; loaded first and must not reach forward into the one that imports it.
+  (fn (_ o)
+    ((fn (go rows)
+       (if (null? rows)
+         ()
+         (if (Str8 =? (first (first rows)) "%native")
+           (rest (first rows))
+           (go (rest rows)))))
+     (rest (first o)))))
+(def %py-obj-native!
+  (fn (_ o v) (%py-obj-set-attrs! o (pair (pair "%native" v) (rest (first o))))))
+; The value an operation should work on: an ordinary value is itself, and a
+; subclass instance is what it wraps.
+(def %py-native-of
+  (fn (_ v) (if (%type? v %py-obj) (%py-obj-native v) v)))
 
 (set! %py-class
   (%make-type
