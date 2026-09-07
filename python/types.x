@@ -53,7 +53,8 @@
   %py-repr %py-equal %py-repeat
   %py-tuple %py-tuple-new %py-tuple-is %py-tuple-elems
   %py-class %py-class-new %py-class-is %py-class-name %py-class-base
-  %py-class-methods %py-class-qualname %py-instantiate %py-obj-write %py-obj-call
+  %py-class-methods %py-class-methods-set! %py-class-qualname %py-instantiate
+  %py-obj-write %py-obj-call
   %py-obj %py-obj-new %py-obj-is %py-obj-class %py-obj-attrs %py-obj-set-attrs!
   %py-super-t %py-super-new %py-super-is %py-super-from %py-super-self
   %py-desc %py-desc-new %py-desc-is %py-desc-kind %py-desc-fn)
@@ -433,12 +434,18 @@
 ; a fact about where the class came from -- the constructor's caller knows it,
 ; the class itself cannot compute it, so it travels as a slot.
 (def %py-class-new
+  ; THE METHOD ALIST IS A CELL, for the reason the list type's is: `C.x = 2`
+  ; stores on the CLASS, and every instance and every reference to the class
+  ; must see it.  The slot holds the cell, the cell's rest holds the rows, and
+  ; a store replaces that rest -- so nothing has to find every holder.
   (fn (_ name base methods qualname)
-    (%make-instance %py-class (list name base methods qualname))))
+    (%make-instance %py-class (list name base (pair () methods) qualname))))
 (def %py-class-is (fn (_ v) (%type? v %py-class)))
 (def %py-class-name (fn (_ c) (first (first c))))
 (def %py-class-base (fn (_ c) (first (rest (first c)))))
-(def %py-class-methods (fn (_ c) (first (rest (rest (first c))))))
+(def %py-class-methods (fn (_ c) (rest (first (rest (rest (first c)))))))
+(def %py-class-methods-set!
+  (fn (_ c rows) (%seq (%set-rest! (first (rest (rest (first c)))) rows) ())))
 (def %py-class-qualname (fn (_ c) (List ref 3 (first c))))
 
 ; An instance is a cell: first is its class, rest is its attribute alist.  The

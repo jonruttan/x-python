@@ -2739,7 +2739,12 @@
 ; the guard in %py-mkclass turns any other non-class base into the TypeError
 ; Python raises instead of a crash.
 (def %py-cls-object
-  (%py-class-new "object" () () "object"))
+  ; object.__new__ ALLOCATES, and having it here is what makes a user
+  ; __new__ able to call super().__new__(cls) -- the bound self is the class,
+  ; and the explicit cls argument arrives after it, so the extra is absorbed.
+  (%py-class-new "object" ()
+    (list (pair "__new__" (fn (_ cls . args) (%py-obj-new cls))))
+    "object"))
 
 (def %py-exc-Exception
   (%py-class-new "Exception" %py-cls-object
@@ -2964,9 +2969,15 @@
 
 (def %py-setattr
   (fn (_ obj name v)
-    (if (not (%py-obj-is obj))
-      (Err raise (lit attribute) "object does not support attribute assignment" ())
-      (%py-obj-set-attrs! obj (%py-attr-put (%py-obj-attrs obj) name v)))))
+    ; A CLASS TAKES A STORE TOO.  `C.x = 2` puts the row in the same alist the
+    ; class body wrote, so instances see it through the lookup that already
+    ; walks the class chain, and an instance attribute of the same name still
+    ; shadows it -- %py-obj-attr reads the instance first.
+    (if (%py-class-is obj)
+      (%py-class-methods-set! obj (%py-attr-put (%py-class-methods obj) name v))
+      (if (not (%py-obj-is obj))
+        (Err raise (lit attribute) "object does not support attribute assignment" ())
+        (%py-obj-set-attrs! obj (%py-attr-put (%py-obj-attrs obj) name v))))))
 
 ; staticmethod, classmethod and property are FUNCTIONS in Python -- applying
 ; a decorator IS calling it -- so they are ordinary builtins here, and
@@ -2999,11 +3010,19 @@
     (let ((ctor (%py-alist-find "%ctor" (%py-class-methods cls))))
       (if (not (null? ctor))
         (apply (rest ctor) args)
-        (let ((o (%py-obj-new cls)))
-          (let ((init (%py-method-find cls "__init__")))
-            (if (null? init)
-              o
-              (%seq (apply init (pair o args)) o))))))))
+        ; __new__ MAKES the instance and __init__ fills it in.  Every class
+        ; reaches object.__new__, so this path is always taken; a class that
+        ; writes its own gets to answer something else entirely, and Python's
+        ; rule is that __init__ runs only when what came back IS an instance
+        ; of the class being called.
+        (let ((nw (%py-method-find cls "__new__")))
+          (let ((o (apply nw (pair cls args))))
+            (if (if (%py-obj-is o) (%py-subclass? (%py-obj-class o) cls) #f)
+              (let ((init (%py-method-find cls "__init__")))
+                (if (null? init)
+                  o
+                  (%seq (apply init (pair o args)) o)))
+              o)))))))
 
 ; --- Tuples ------------------------------------------------------------------
 
