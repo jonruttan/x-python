@@ -1879,18 +1879,18 @@
         (Err raise (lit syntax) "expected a class name after class" ())
         (let ((after (rest toks)))
           (if (%py-group? (if (null? after) () (first after)) "(")
-            (let ((b (let ((g (%py-group-of (first after))))
-                       (if (null? g) () (first g)))))
-              ; `class C():` IS `class C:` -- empty parens are legal Python and
-              ; the corpus writes them; the base is object either way, which is
-              ; also what CPython reports for a bare class.
-              (if (null? b)
-                (%py-class-of n (rest after) (lit %py-cls-object))
-                (if (not (eq? (%py-tag b) (lit tok-name)))
-                  (Err raise (lit syntax) "expected a base class name" ())
-                  ; single inheritance: `class Dog(Animal):`
-                  (%py-class-of n (rest after) (%py-name->sym (%py-val b))))))
-            (%py-class-of n after (lit %py-cls-object))))))))
+            ; EVERY base, as expressions: `class Sub(A, B)` is ordinary Python,
+            ; and reading the group the way a call's arguments are read means a
+            ; base can be any expression -- which is what Python says too.  One
+            ; that turns out not to be a class is caught at %py-mkclass, where
+            ; the message can say so.
+            (let ((es (%py-group-exprs (%py-group-of (first after)))))
+              (if (null? es)
+                ; `class C():` IS `class C:` -- empty parens are legal Python
+                ; and the corpus writes them; the base is object either way.
+                (%py-class-of n (rest after) (list (lit list) (lit %py-cls-object)))
+                (%py-class-of n (rest after) (pair (lit list) es))))
+            (%py-class-of n after (list (lit list) (lit %py-cls-object)))))))))
 
 ; --- tuple unpacking ---------------------------------------------------------
 ;
