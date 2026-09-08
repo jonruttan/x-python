@@ -1475,27 +1475,28 @@
 
 (def %py-class-attr
   (fn (_ cls name)
-    ; dict.fromkeys is a CLASSMETHOD: it answers a new dict, so it hangs off
-    ; the class rather than an instance
-    (if (eq? cls %py-cls-dict)
-      (if (Str8 =? name "fromkeys")
-        %py-dict-fromkeys
-        (Err raise (lit attribute)
-          (Str8 append (Str8 append "type object 'dict' has no attribute '" name) "'") ()))
-      (if (eq? cls %py-cls-str)
-        ; validate the name NOW, so str.nosuch raises at access, not at call
-        (do (%py-str-attr "" name)
-            (fn (_ recv . args) (apply (%py-str-attr recv name) args)))
-        ; THE THREE A CLASS ANSWERS ABOUT ITSELF, read off the record rather
-        ; than stored: a class already knows its name, its base, and the alist
-        ; its methods and class attributes share.  Python spells them
-        ; __name__, __bases__ (a tuple, empty at object) and __dict__.
-        (if (Str8 =? name "__name__")
-          (%py-class-name cls)
-          (if (Str8 =? name "__bases__")
-            (%py-tuple-of-list (%py-class-bases cls))
-            (if (Str8 =? name "__dict__")
-              (%py-dict-new (%py-class-rows cls))
+    ; THE THREE A CLASS ANSWERS ABOUT ITSELF COME FIRST, and they have to:
+    ; the dict and str branches below answer for their INSTANCES' surface, so
+    ; asking either for __name__ used to reach `str.nosuch` and report that a
+    ; 'str' object has no attribute __name__ -- when what was asked was the
+    ; name of the class itself, which `type(x).__name__` asks constantly.
+    (if (Str8 =? name "__name__")
+      (%py-class-name cls)
+      (if (Str8 =? name "__bases__")
+        (%py-tuple-of-list (%py-class-bases cls))
+        (if (Str8 =? name "__dict__")
+          (%py-dict-new (%py-class-rows cls))
+          ; dict.fromkeys is a CLASSMETHOD: it answers a new dict, so it hangs
+          ; off the class rather than an instance
+          (if (eq? cls %py-cls-dict)
+            (if (Str8 =? name "fromkeys")
+              %py-dict-fromkeys
+              (Err raise (lit attribute)
+                (Str8 append (Str8 append "type object 'dict' has no attribute '" name) "'") ()))
+            (if (eq? cls %py-cls-str)
+              ; validate the name NOW, so str.nosuch raises at access, not at call
+              (do (%py-str-attr "" name)
+                  (fn (_ recv . args) (apply (%py-str-attr recv name) args)))
               (let ((m (%py-method-find cls name)))
                 (if (null? m)
                   (Err raise (lit attribute)
@@ -3234,14 +3235,51 @@
 ; WHAT THIS RUNTIME OFFERS, built on first import and remembered after.  sys
 ; is the one the corpus reaches for most: its feature probes read
 ; sys.implementation and sys.modules before deciding what to test.
+; WHAT PLATFORM THIS IS, read off x-machine -- the build triple the platform
+; layer already keys its syscalls from, e.g. "arm64-apple-darwin23.6.0" or
+; "x86_64-linux-gnu".  Python's own spellings are darwin, linux and win32; a
+; triple naming none of them answers ITSELF rather than a guess, which at
+; least says truthfully where it ran.
+; WHAT PLATFORM THIS IS, read off x-machine -- the build triple the platform
+; layer already keys its syscalls from, e.g. "arm64-apple-darwin23.6.0" or
+; "x86_64-linux-gnu".  The triples and Python's name for each are a TABLE, not
+; a chain of near-identical tests; a triple naming none of them answers ITSELF
+; rather than a guess, which at least says truthfully where it ran.
+(def %py-platform-names
+  (list
+    (pair "darwin"  "darwin")
+    (pair "linux"   "linux")
+    (pair "mingw"   "win32")
+    (pair "cygwin"  "win32")
+    (pair "windows" "win32")))
+
+(def %py-platform-of
+  (fn (self triple rows)
+    (match
+      ((null? rows) triple)
+      ((not (null? (Str8 index-of (first (first rows)) triple))) (rest (first rows)))
+      (#t (self triple (rest rows))))))
+
+; sys.implementation names the runtime a program is actually running on, and
+; this one is not CPython.  A test that branches on it should see the truth.
+(def %py-sys-implementation
+  (fn (_)
+    (%py-module-new "implementation"
+      (list
+        (pair "name" "x-python")
+        (pair "_machine" x-machine)))))
+
 (def %py-module-build
   (fn (_ name)
     (if (Str8 =? name "sys")
       (%py-module-new "sys"
         (list
           (pair "version" "3.14.7")
-          (pair "platform" "darwin")
+          (pair "platform" (%py-platform-of x-machine %py-platform-names))
+          ; every architecture this platform builds for is little-endian;
+          ; a big-endian port would have to say so here
           (pair "byteorder" "little")
+          (pair "implementation" (%py-sys-implementation))
           ; the largest int a CPython machine word holds; this runtime has
           ; bigints and no such limit, and the number is what programs test
           (pair "maxsize" 9223372036854775807)

@@ -1,0 +1,78 @@
+# if-ladders.txt -- the nested-if debt this check was born with
+#
+# One row per function: FILE NAME COUNT LONGEST, where COUNT is how many
+# MAXIMAL ladders of four arms or more it holds and LONGEST is the deepest.
+# `match` is the primitive for a decision with more than a couple of arms;
+# every row here is a function that should become one.
+#
+# THIS FILE MAY ONLY SHRINK.  tools/check/if-ladders.sh fails on a new row, on
+# a row that grows, AND on a row that has improved without being lowered -- so
+# a fix updates the manifest in the same breath, and the list cannot rot into
+# a record of things that are fine.
+python/format.x %py-fmt-one 2 5
+python/format.x %py-format 1 5
+python/parse.x %py-assign-targets 1 8
+python/parse.x %py-atom 1 9
+python/parse.x %py-bound-names 1 4
+python/parse.x %py-class-methods-of 1 4
+python/parse.x %py-from-imports 1 4
+python/parse.x %py-group-names 1 4
+python/parse.x %py-has-yield? 1 4
+python/parse.x %py-num 1 4
+python/parse.x %py-params-of 1 5
+python/parse.x %py-stmt 2 16
+python/parse.x %py-unpack-scan 1 4
+python/parse.x %py-yield-expr 1 4
+python/repl.x %py-stmt-form? 1 8
+python/runtime.x %py-add 1 9
+python/runtime.x %py-bytes-args 1 4
+python/runtime.x %py-bytes-ctor 1 4
+python/runtime.x %py-bytes-repr 1 6
+python/runtime.x %py-class-attr 1 5
+python/runtime.x %py-dict-attr 1 14
+python/runtime.x %py-eq 1 13
+python/runtime.x %py-floordiv 1 4
+python/runtime.x %py-fmtfield 1 4
+python/runtime.x %py-format-spec 6 8
+python/runtime.x %py-ge 1 4
+python/runtime.x %py-gen-attr 1 6
+python/runtime.x %py-getattr 1 10
+python/runtime.x %py-hash 1 12
+python/runtime.x %py-in 1 7
+python/runtime.x %py-index 1 6
+python/runtime.x %py-int-ctor 1 4
+python/runtime.x %py-is 1 6
+python/runtime.x %py-iter-elems 1 9
+python/runtime.x %py-kwcall 1 4
+python/runtime.x %py-kwcall-attr 1 5
+python/runtime.x %py-le 1 4
+python/runtime.x %py-len 1 8
+python/runtime.x %py-list-attr 1 14
+python/runtime.x %py-mod 1 4
+python/runtime.x %py-mul 1 7
+python/runtime.x %py-num-kind 1 4
+python/runtime.x %py-obj-attr 1 4
+python/runtime.x %py-pow 1 5
+python/runtime.x %py-repr-of 1 7
+python/runtime.x %py-s-ws? 1 5
+python/runtime.x %py-seq-cmp 1 4
+python/runtime.x %py-set-attr 1 18
+python/runtime.x %py-set-cmp 1 4
+python/runtime.x %py-slice 1 5
+python/runtime.x %py-str 1 8
+python/runtime.x %py-str-attr 2 26
+python/runtime.x %py-str-repr 1 6
+python/runtime.x %py-super-attr 1 4
+python/runtime.x %py-truthy 1 11
+python/runtime.x %py-type-of 1 11
+python/runtime.x %py-write 1 12
+python/tokens.x %py-esc-at 1 13
+python/tokens.x %py-jit-compile! 2 4
+python/tokens.x %py-number-body 1 5
+python/tokens.x %py-number-frac 1 4
+python/tokens.x %py-number-zero 1 5
+python/tokens.x %py-op-pair? 2 11
+python/tokens.x %py-op-pairable? 1 11
+python/tokens.x %py-op-start? 1 17
+python/tokens.x %py-prefix-char? 1 7
+python/tokens.x %py-t-number 1 4

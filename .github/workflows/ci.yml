@@ -84,6 +84,33 @@ jobs:
       - name: Run the Python specs (shard ${{ matrix.shard }} of 4)
         run: SPEC_SHARD="${{ matrix.shard }}/4" X="$PWD/.x-lang/x.sh" sh tests/spec-runner.sh
 
+  if-ladders:
+    # `match` IS THE PRIMITIVE, and a decision with four or more arms written
+    # as nested ifs says the same thing one indent deeper per arm.  The check
+    # is a RATCHET over tools/contract/if-ladders.txt: the debt it was born
+    # with may only shrink, and a new ladder fails here rather than in review.
+    #
+    # It needs the platform, because the checker is x -- an if ladder is a
+    # SHAPE, and reading the file as s-expressions is the only way to see one.
+    name: if ladders are match
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out x-lang
+        uses: actions/checkout@v4
+        with:
+          repository: jonruttan/x-lang
+          ref: main
+          path: .x-lang
+      - name: Build the platform
+        working-directory: .x-lang
+        run: |
+          make engine
+          make
+          make boot
+      - name: No new if ladders
+        run: X="$PWD/.x-lang/x.sh" sh tools/check/if-ladders.sh
+
   relocatable:
     # THE RULE THAT ACTUALLY KILLED THE LAST GENERATION, as a gate -- and it
     # is stricter now than the contract requires.  The contract exempts an app
