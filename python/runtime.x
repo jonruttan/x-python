@@ -3207,17 +3207,31 @@
     ; base is checked, since `class C(A, nosuch)` is the same mistake.
     (if (not (%py-all-classes? bases))
       (Err raise (lit type) "a class base must be a class" ())
-      ; TWO BUILTIN BASES CANNOT BE COMBINED: an instance carries ONE native
-      ; value, so `class A(type, tuple)` has no answer to what it would be.
-      ; Python calls this a layout conflict and refuses it too.
-      (if (> (%py-ctor-count bases 0) 1)
-        (Err raise (lit type)
-          "multiple bases have instance lay-out conflict" ())
-        (let ((cls (%py-class-new name bases methods (Str8 append "__main__." name))))
-          ; __set_name__ IS CALLED AS THE CLASS IS MADE, once per attribute
-          ; that wants it, with the owner and the name it was written under --
-          ; which is the only moment a descriptor can learn what it is called.
-          (%seq (%py-set-names cls methods) cls))))))
+      (let ((fin (%py-final-base bases)))
+        (if (not (null? fin))
+          (Err raise (lit type)
+            (Str8 append (Str8 append "type '" (%py-class-name fin))
+              "' is not an acceptable base type") ())
+          ; TWO BUILTIN BASES CANNOT BE COMBINED: an instance carries ONE
+          ; native value, so `class A(type, tuple)` has no answer to what it
+          ; would be.  Python calls this a layout conflict and refuses it too.
+          (if (> (%py-ctor-count bases 0) 1)
+            (Err raise (lit type)
+              "multiple bases have instance lay-out conflict" ())
+            (let ((cls (%py-class-new name bases methods (Str8 append "__main__." name))))
+              ; __set_name__ IS CALLED AS THE CLASS IS MADE, once per attribute
+              ; that wants it, with the owner and the name it was written
+              ; under -- the only moment a descriptor can learn its name.
+              (%seq (%py-set-names cls methods) cls))))))))
+
+; The first base that refuses to be one, or nil.
+(def %py-final-base
+  (fn (self bs)
+    (if (null? bs)
+      ()
+      (if (null? (%py-alist-find "%final" (%py-class-methods (first bs))))
+        (self (rest bs))
+        (first bs)))))
 
 ; How many of these bases bring a native value with them.
 (def %py-ctor-count
@@ -3860,13 +3874,21 @@
       (let ((d (if (null? pos) (%py-dict-new ()) (%py-dict-ctor (first pos)))))
         (%seq (%py-dict-merge! d (%py-dict-new (%py-dict-kwargs kws))) d))
       (if (%py-class-is f)
-        (let ((init (%py-method-find f "__init__")))
-          (let ((sig (if (null? init) () (%py-sig-of init))))
-            (if (null? sig)
-              (Err raise (lit type)
-                (Str8 append (%py-class-name f) "() takes no keyword arguments") ())
-              ; the class's own call door, not apply: apply wants a closure
-              (%py-instantiate f (%py-kw-args (%py-sig-shift sig) pos kws)))))
+        ; A BUILTIN CLASS ANSWERS THROUGH ITS %ctor, and the ctor is where its
+        ; signature lives: enumerate is a CLASS now, and asking only __init__
+        ; for one made `enumerate(x, start=1)` -- which had worked for as long
+        ; as enumerate was a function -- say it takes no keyword arguments.
+        (let ((ctor (%py-alist-find "%ctor" (%py-class-methods f))))
+          (let ((csig (if (null? ctor) () (%py-sig-of (rest ctor)))))
+            (if (not (null? csig))
+              (apply (rest ctor) (%py-kw-args csig pos kws))
+              (let ((init (%py-method-find f "__init__")))
+                (let ((sig (if (null? init) () (%py-sig-of init))))
+                  (if (null? sig)
+                    (Err raise (lit type)
+                      (Str8 append (%py-class-name f) "() takes no keyword arguments") ())
+                    ; the class's own call door, not apply: apply wants a closure
+                    (%py-instantiate f (%py-kw-args (%py-sig-shift sig) pos kws))))))))
         (let ((sig (%py-sig-of f)))
           (if (null? sig)
             (Err raise (lit type) "this callable takes no keyword arguments" ())
@@ -4756,7 +4778,8 @@
 (def %py-cls-int
   (%py-class-new "int" %py-cls-object (list (pair "%ctor" %py-int-ctor)) "int"))
 (def %py-cls-bool
-  (%py-class-new "bool" %py-cls-int (list (pair "%ctor" %py-bool-ctor)) "bool"))
+  (%py-class-new "bool" %py-cls-int
+    (list (pair "%final" #t) (pair "%ctor" %py-bool-ctor)) "bool"))
 (def %py-cls-float
   (%py-class-new "float" %py-cls-object (list (pair "%ctor" %py-float-ctor)) "float"))
 (def %py-cls-complex
@@ -4809,6 +4832,19 @@
             ()
             (%py-list-set! self (%py-iter-elems (first args))))
           ())))))
+
+; THE LAZY BUILTINS ARE CLASSES IN PYTHON, not functions -- `class mymap(map)`
+; is ordinary code, and the corpus writes it.  Each keeps the function it
+; always was as its %ctor, so `map(f, xs)` answers exactly what it did; what is
+; new is that the name is a CLASS, so it can be named as a base and a subclass
+; inherits an iterator's surface: __iter__ answers the value the instance
+; carries, and __next__ pulls from it.
+(def %py-lazy-methods
+  (fn (_ ctor)
+    (list
+      (pair "%ctor" ctor)
+      (pair "__iter__" (fn (_ self) (%py-native-of self)))
+      (pair "__next__" (fn (_ self) (%py-next (%py-native-of self)))))))
 
 (def %py-cls-list
   (%py-class-new "list" %py-cls-object %py-list-methods "list"))
@@ -5058,3 +5094,16 @@
 ; quoted, the value evaluated.
 (def %py-defg-prim (prim-ref (lit base) (lit def-global)))
 (def %py-defg (fn (_ sym v) (%py-defg-prim sym v)))
+
+; Each of these was a bare function until the corpus asked to subclass one.
+(def %py-cls-map       (%py-class-new "map"       %py-cls-object (%py-lazy-methods %py-map)       "map"))
+(def %py-cls-filter    (%py-class-new "filter"    %py-cls-object (%py-lazy-methods %py-filter)    "filter"))
+(def %py-cls-zip       (%py-class-new "zip"       %py-cls-object (%py-lazy-methods %py-zip)       "zip"))
+(def %py-cls-enumerate (%py-class-new "enumerate" %py-cls-object (%py-lazy-methods %py-enumerate) "enumerate"))
+(def %py-cls-reversed  (%py-class-new "reversed"  %py-cls-object (%py-lazy-methods %py-reversed)  "reversed"))
+; NOT EVERY BUILTIN IS AN ACCEPTABLE BASE.  CPython refuses `class X(range)`
+; and `class X(bool)` outright -- "type 'range' is not an acceptable base
+; type" -- so the marker below says so, under a key no Python name can spell.
+(def %py-cls-range
+  (%py-class-new "range" %py-cls-object
+    (pair (pair "%final" #t) (%py-lazy-methods %py-range)) "range"))

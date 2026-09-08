@@ -1116,7 +1116,7 @@
         (list "False" #f)
         (list "None"  ())
         (list "len"   (lit %py-len))
-        (list "range" (lit %py-range))
+        (list "range" (lit %py-cls-range))
         ; str and list are now the CLASS OBJECTS -- calling one still converts,
         ; through the %ctor entry, and `type(x) == str` is an identity compare.
         (list "str"     (lit %py-cls-str))
@@ -1151,8 +1151,8 @@
         (list "GeneratorExit"  (lit %py-exc-GeneratorExit))
         (list "next"           (lit %py-next))
         (list "sum"            (lit %py-builtin-sum))
-        (list "map"            (lit %py-map))
-        (list "zip"            (lit %py-zip))
+        (list "map"            (lit %py-cls-map))
+        (list "zip"            (lit %py-cls-zip))
         (list "all"            (lit %py-all))
         (list "any"            (lit %py-any))
         (list "sorted"         (lit %py-sorted))
@@ -1169,9 +1169,9 @@
         (list "setattr"        (lit %py-setattr3))
         (list "delattr"        (lit %py-delattr))
         (list "issubclass"     (lit %py-issubclass))
-        (list "enumerate"      (lit %py-enumerate))
-        (list "filter"         (lit %py-filter))
-        (list "reversed"       (lit %py-reversed))
+        (list "enumerate"      (lit %py-cls-enumerate))
+        (list "filter"         (lit %py-cls-filter))
+        (list "reversed"       (lit %py-cls-reversed))
         (list "SystemExit"     (lit %py-exc-SystemExit))
         ; The builtin exceptions are ordinary names bound to ordinary class
         ; values, so `except ValueError` and `except MyError` take one path.
