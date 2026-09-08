@@ -2881,6 +2881,12 @@
 (def %py-exc-SyntaxError     (%py-exc-new "SyntaxError"     %py-exc-Exception))
 (def %py-exc-NotImplementedError
   (%py-exc-new "NotImplementedError" %py-exc-RuntimeError))
+(def %py-exc-OSError         (%py-exc-new "OSError"         %py-exc-Exception))
+(def %py-exc-EOFError        (%py-exc-new "EOFError"        %py-exc-Exception))
+(def %py-exc-KeyboardInterrupt
+  (%py-exc-new "KeyboardInterrupt" %py-exc-BaseException))
+(def %py-exc-IndentationError (%py-exc-new "IndentationError" %py-exc-SyntaxError))
+(def %py-exc-UnicodeError    (%py-exc-new "UnicodeError"    %py-exc-ValueError))
 
 ; An Err's kind names the class it would have been.  A kind with no row -- one
 ; raised by the platform rather than by this runtime -- answers Exception, so
@@ -3009,23 +3015,40 @@
 
 ; Derived first, then the base, then the base's base.
 (def %py-method-find
+  ; OBJECT IS CONSULTED LAST, which is where every MRO puts it.  The walk is
+  ; otherwise depth first, left to right -- but depth first reaches a base's
+  ; ANCESTORS before the next base, and since every class now roots at object,
+  ; `class C(tuple, Base)` found object.__init__ through tuple and never asked
+  ; Base at all.  Skipping object during the walk and asking it at the end is
+  ; the same answer C3 gives for every shape a program without diamonds
+  ; writes, at a fraction of the machinery.
+  (fn (self cls name)
+    (let ((m (%py-method-find-below cls name)))
+      (if (null? m)
+        (let ((e (%py-alist-find name (%py-class-methods %py-cls-object))))
+          (if (null? e) () (rest e)))
+        m))))
+
+(def %py-method-find-below
   (fn (self cls name)
     (if (null? cls)
       ()
-      (let ((e (%py-alist-find name (%py-class-methods cls))))
-        (if (null? e)
-          ; DEPTH FIRST, LEFT TO RIGHT across every base: `class Sub(A, B)`
-          ; finds A's method before B's, and A's own bases before B at all,
-          ; which is the order Python's MRO gives for the shapes a program
-          ; without diamonds writes.
-          (%py-method-find-bases (%py-class-bases cls) name)
-          (rest e))))))
+      (if (same? cls %py-cls-object)
+        ()
+        (let ((e (%py-alist-find name (%py-class-methods cls))))
+          (if (null? e)
+            ; DEPTH FIRST, LEFT TO RIGHT across every base: `class Sub(A, B)`
+            ; finds A's method before B's, and A's own bases before B at all,
+            ; which is the order Python's MRO gives for the shapes a program
+            ; without diamonds writes.
+            (%py-method-find-bases (%py-class-bases cls) name)
+            (rest e)))))))
 
 (def %py-method-find-bases
   (fn (self bs name)
     (if (null? bs)
       ()
-      (let ((m (%py-method-find (first bs) name)))
+      (let ((m (%py-method-find-below (first bs) name)))
         (if (null? m) (self (rest bs) name) m)))))
 
 ; A BOUND METHOD IS JUST A CLOSURE OVER THE OBJECT.  A method compiles to
@@ -3152,6 +3175,19 @@
 ; spells it as an attribute: StopIteration("x").value is "x", and with no
 ; argument it is None.  A property is the honest shape for something read off
 ; the arguments rather than stored.
+; OSError's FIRST ARGUMENT IS ITS errno, read off the arguments the same way
+; StopIteration reads its value; with no arguments it is None.
+(%py-class-methods-set! %py-exc-OSError
+  (list
+    (pair "errno"
+      (%py-property
+        (fn (_ self)
+          (let ((a (%py-alist-find "args" (%py-obj-attrs self))))
+            (if (null? a)
+              ()
+              (let ((els (%py-tuple-elems (rest a))))
+                (if (null? els) () (first els))))))))))
+
 (%py-class-methods-set! %py-exc-StopIteration
   (list
     (pair "value"
@@ -3169,13 +3205,27 @@
     ; name is bound to a shim that raises when called, and a shim reaching
     ; method lookup as a base record is a walk into a closure's guts.  Every
     ; base is checked, since `class C(A, nosuch)` is the same mistake.
-    (if (%py-all-classes? bases)
-      (let ((cls (%py-class-new name bases methods (Str8 append "__main__." name))))
-        ; __set_name__ IS CALLED AS THE CLASS IS MADE, once per attribute that
-        ; wants it, with the owner and the name it was written under -- which
-        ; is the only moment a descriptor can learn what it is called.
-        (%seq (%py-set-names cls methods) cls))
-      (Err raise (lit type) "a class base must be a class" ()))))
+    (if (not (%py-all-classes? bases))
+      (Err raise (lit type) "a class base must be a class" ())
+      ; TWO BUILTIN BASES CANNOT BE COMBINED: an instance carries ONE native
+      ; value, so `class A(type, tuple)` has no answer to what it would be.
+      ; Python calls this a layout conflict and refuses it too.
+      (if (> (%py-ctor-count bases 0) 1)
+        (Err raise (lit type)
+          "multiple bases have instance lay-out conflict" ())
+        (let ((cls (%py-class-new name bases methods (Str8 append "__main__." name))))
+          ; __set_name__ IS CALLED AS THE CLASS IS MADE, once per attribute
+          ; that wants it, with the owner and the name it was written under --
+          ; which is the only moment a descriptor can learn what it is called.
+          (%seq (%py-set-names cls methods) cls))))))
+
+; How many of these bases bring a native value with them.
+(def %py-ctor-count
+  (fn (self bs n)
+    (if (null? bs)
+      n
+      (self (rest bs)
+        (if (null? (%py-inherited-ctor (first bs))) n (+ n 1))))))
 
 (def %py-set-names
   (fn (self cls rows)
@@ -3225,18 +3275,16 @@
                 (let ((bc (%py-inherited-ctor cls)))
                   (if (null? bc)
                     ()
-                    ; WHO CONSUMES THE ARGUMENTS: a class that writes its own
-                    ; __init__ BELOW the builtin does (it will call
-                    ; list.__init__ or set the fields itself), and otherwise
-                    ; the builtin's constructor does -- which is the only way
-                    ; an IMMUTABLE builtin can be built at all, since a tuple
-                    ; or str cannot be filled in afterwards.  Deciding by
-                    ; whether __init__ merely EXISTS stopped working the day
-                    ; object grew one: every class has one now.
+                    ; THE ARGUMENTS GO TO THE CONSTRUCTOR, which is what
+                    ; Python does: __new__ receives them whether or not an
+                    ; __init__ exists, and that is the only way an IMMUTABLE
+                    ; builtin can be built at all -- a tuple or str cannot be
+                    ; filled in afterwards.  A class whose own __init__ takes
+                    ; DIFFERENT arguments would make that call raise, and then
+                    ; the empty value is right: its __init__ fills the
+                    ; instance itself, the way list.__init__(self, xs) does.
                     (%py-obj-native! o
-                      (if (%py-init-below-ctor? cls)
-                        (bc)
-                        (apply bc args)))))
+                      (guard (e (bc)) (apply bc args)))))
                 (let ((init (%py-method-find cls "__init__")))
                   (if (null? init)
                     o
