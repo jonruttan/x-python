@@ -814,10 +814,31 @@
   (fn (_ c)
     ; + - * / % = < > ! ~ | ^ & , : . ; and @, which is a decorator here
     ; (Python's other @ is matrix multiply, which this runtime has no use
-    ; for).  GENERATED from the code list rather than hand-nested: a
-    ; mis-nested predicate of this shape is paren-balanced and silently
-    ; wrong, which is how x-python#40 reached CI red.
-    (if (= c 43) #t (if (= c 45) #t (if (= c 42) #t (if (= c 47) #t (if (= c 37) #t (if (= c 61) #t (if (= c 60) #t (if (= c 62) #t (if (= c 33) #t (if (= c 126) #t (if (= c 124) #t (if (= c 94) #t (if (= c 38) #t (if (= c 44) #t (if (= c 58) #t (if (= c 46) #t (if (= c 59) #t (= c 64))))))))))))))))))))
+    ; for).  GENERATED from the code list -- and a match, not a chain of ifs
+    ; nested through their else branches: one arm per code, flat, which is
+    ; what the primitive is for.  A hand-nested predicate of this shape is
+    ; paren-balanced and silently wrong, which is how x-python#40 reached CI
+    ; red.
+    (match
+      ((= c 43) #t)
+      ((= c 45) #t)
+      ((= c 42) #t)
+      ((= c 47) #t)
+      ((= c 37) #t)
+      ((= c 61) #t)
+      ((= c 60) #t)
+      ((= c 62) #t)
+      ((= c 33) #t)
+      ((= c 126) #t)
+      ((= c 124) #t)
+      ((= c 94) #t)
+      ((= c 38) #t)
+      ((= c 44) #t)
+      ((= c 58) #t)
+      ((= c 46) #t)
+      ((= c 59) #t)
+      ((= c 64) #t)
+      (#t #f))))
 
 ; Which pairs extend: a second `=`, or one of the four doubled operators.
 (def %py-op-pair?
@@ -833,8 +854,21 @@
 
 (def %py-op-pairable?
   (fn (_ c)
-    ; = ! < > / * + - %, and | & ^ for |= &= ^=
-    (if (= c 61) #t (if (= c 33) #t (if (= c 60) #t (if (= c 62) #t (if (= c 47) #t (if (= c 42) #t (if (= c 43) #t (if (= c 45) #t (if (= c 37) #t (if (= c 124) #t (if (= c 38) #t (= c 94))))))))))))))
+    ; = ! < > / * + - %, and | & ^ for |= &= ^=; generated, as above
+    (match
+      ((= c 61) #t)
+      ((= c 33) #t)
+      ((= c 60) #t)
+      ((= c 62) #t)
+      ((= c 47) #t)
+      ((= c 42) #t)
+      ((= c 43) #t)
+      ((= c 45) #t)
+      ((= c 37) #t)
+      ((= c 124) #t)
+      ((= c 38) #t)
+      ((= c 94) #t)
+      (#t #f))))
 
 ; Which pairs take a THIRD character.  Only the doubled four do, and the only
 ; third character is `=`: `//=` `**=` `>>=` `<<=`.  Nothing else triples --
