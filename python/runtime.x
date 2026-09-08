@@ -2642,39 +2642,38 @@
   (fn (self es acc)
     (if (null? es) acc (self (rest es) (+ acc (%py-hash (first es)))))))
 (def %py-hash
+  ; TWELVE ARMS, so a match: what a value hashes to, one arm per kind.
   (fn (_ v)
-    (if (eq? v #t) 1
-    (if (eq? v #f) 0
-    ; NotImplemented is a singleton, and Python lets it be hashed.  It reaches
-    ; here as an ordinary pair that nothing else in this ladder claims, so it
-    ; fell through to "unhashable type".
-    (if (eq? v %py-NotImplemented) (%py-id v)
-    (if (%py-float-is v)
-      (if (= v (Float floor v)) (Float ->int v) (first v))
-    (if (%py-complex-is v)
-      (+ (%py-hash (%py-cre v)) (* 1000003 (%py-hash (%py-cim v))))
-    (if (eq? (%py-num-kind v) (lit int))
-      v
-    (if (str? v)
-      (Hash fnv-1a v)
-    (if (%py-obj-is v)
-      (let ((m (%py-dunder v "__hash__"))) (if (null? m) 0 (m)))
-    ; a frozenset hashes on its elements; a set is unhashable
-    (if (%py-set-is v)
-      (if (%py-set-frozen? v)
-        (%py-set-hash (%py-set-elems v) 0)
-        (Err raise (lit type) "unhashable type: 'set'" ()))
-    ; a function, generator or class hashes by identity, as in Python
-    (if (if (%py-fn-is v) #t (if (%py-gen-is v) #t (%py-class-is v)))
-      (%py-id v)
-    (if (%py-view-is v)
-      (if (Str8 =? (%py-view-kind v) "dict_values")
-        (%py-set-hash (%py-view-elems v) 0)
-        (Err raise (lit type)
-          (Str8 append (Str8 append "unhashable type: '" (%py-view-kind v)) "'") ()))
-    (if (%py-tuple-is v)
-      (%py-set-hash (%py-tuple-elems v) 0)
-      (Err raise (lit type) "unhashable type" ())))))))))))))))
+    (match
+      ((eq? v #t) 1)
+      ((eq? v #f) 0)
+      ; NotImplemented is a singleton, and Python lets it be hashed.  It
+      ; reaches here as an ordinary pair that nothing else claims, so it used
+      ; to fall through to "unhashable type".
+      ((eq? v %py-NotImplemented) (%py-id v))
+      ((%py-float-is v) (if (= v (Float floor v)) (Float ->int v) (first v)))
+      ((%py-complex-is v)
+        (+ (%py-hash (%py-cre v)) (* 1000003 (%py-hash (%py-cim v)))))
+      ((eq? (%py-num-kind v) (lit int)) v)
+      ((str? v) (Hash fnv-1a v))
+      ((%py-obj-is v)
+        (let ((m (%py-dunder v "__hash__"))) (if (null? m) 0 (m))))
+      ; a frozenset hashes on its elements; a set is unhashable
+      ((%py-set-is v)
+        (if (%py-set-frozen? v)
+          (%py-set-hash (%py-set-elems v) 0)
+          (Err raise (lit type) "unhashable type: 'set'" ())))
+      ; a function, generator or class hashes by identity, as in Python
+      ((%py-fn-is v) (%py-id v))
+      ((%py-gen-is v) (%py-id v))
+      ((%py-class-is v) (%py-id v))
+      ((%py-view-is v)
+        (if (Str8 =? (%py-view-kind v) "dict_values")
+          (%py-set-hash (%py-view-elems v) 0)
+          (Err raise (lit type)
+            (Str8 append (Str8 append "unhashable type: '" (%py-view-kind v)) "'") ())))
+      ((%py-tuple-is v) (%py-set-hash (%py-tuple-elems v) 0))
+      (#t (Err raise (lit type) "unhashable type" ())))))
 
 ; Is v a machine float?  The type-handle compare %py-num-kind uses, taken
 ; directly so the writer below can ask cheaply.
@@ -5110,23 +5109,30 @@
   (%py-class-new "bytes" %py-cls-object %py-bytes-methods "bytes"))
 
 (def %py-type-of
+  ; ELEVEN ARMS, so a match: the class a value answers to, asked once per
+  ; kind.  bool is checked before int because True is an int in this runtime
+  ; as it is in Python, and the numeric kinds are read from one place at the
+  ; end rather than re-asked per arm.
   (fn (_ v)
-    (if (eq? v #t) %py-cls-bool
-    (if (eq? v #f) %py-cls-bool
-    (if (null? v) %py-cls-NoneType
-    (if (%py-bytes-is v) %py-cls-bytes
-    (if (str? v) %py-cls-str
-    (if (%py-list-is v) %py-cls-list
-    (if (%py-set-is v) (if (%py-set-frozen? v) %py-cls-frozenset %py-cls-set)
-    (if (%py-dict-is v) %py-cls-dict
-    (if (%py-tuple-is v) %py-cls-tuple
-    (if (%py-obj-is v) (%py-obj-class v)
-    (if (%py-class-is v) %py-cls-type
-      (let ((k (%py-num-kind v)))
-        (if (eq? k (lit int)) %py-cls-int
-        (if (eq? k (lit float)) %py-cls-float
-        (if (eq? k (lit complex)) %py-cls-complex
-          (Err raise (lit type) "type: unsupported value"))))))))))))))))))
+    (match
+      ((eq? v #t) %py-cls-bool)
+      ((eq? v #f) %py-cls-bool)
+      ((null? v) %py-cls-NoneType)
+      ((%py-bytes-is v) %py-cls-bytes)
+      ((str? v) %py-cls-str)
+      ((%py-list-is v) %py-cls-list)
+      ((%py-set-is v) (if (%py-set-frozen? v) %py-cls-frozenset %py-cls-set))
+      ((%py-dict-is v) %py-cls-dict)
+      ((%py-tuple-is v) %py-cls-tuple)
+      ((%py-obj-is v) (%py-obj-class v))
+      ((%py-class-is v) %py-cls-type)
+      (#t
+        (let ((k (%py-num-kind v)))
+          (match
+            ((eq? k (lit int)) %py-cls-int)
+            ((eq? k (lit float)) %py-cls-float)
+            ((eq? k (lit complex)) %py-cls-complex)
+            (#t (Err raise (lit type) "type: unsupported value"))))))))
 
 ; isinstance walks the base chain with the same %py-subclass? the exception
 ; matcher uses, so user classes, user exceptions and builtins all answer from

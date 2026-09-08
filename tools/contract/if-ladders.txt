@@ -37,7 +37,6 @@ python/runtime.x %py-format-spec 6 8
 python/runtime.x %py-ge 1 4
 python/runtime.x %py-gen-attr 1 6
 python/runtime.x %py-getattr 1 10
-python/runtime.x %py-hash 1 12
 python/runtime.x %py-in 1 7
 python/runtime.x %py-index 1 6
 python/runtime.x %py-int-ctor 1 4
@@ -64,7 +63,6 @@ python/runtime.x %py-str-attr 2 26
 python/runtime.x %py-str-repr 1 6
 python/runtime.x %py-super-attr 1 4
 python/runtime.x %py-truthy 1 11
-python/runtime.x %py-type-of 1 11
 python/runtime.x %py-write 1 12
 python/tokens.x %py-esc-at 1 13
 python/tokens.x %py-jit-compile! 2 4
@@ -72,7 +70,5 @@ python/tokens.x %py-number-body 1 5
 python/tokens.x %py-number-frac 1 4
 python/tokens.x %py-number-zero 1 5
 python/tokens.x %py-op-pair? 2 11
-python/tokens.x %py-op-pairable? 1 11
-python/tokens.x %py-op-start? 1 17
 python/tokens.x %py-prefix-char? 1 7
 python/tokens.x %py-t-number 1 4
