@@ -23,11 +23,14 @@
   (import x/codec/xon)
   (import x/tool/contract)
 
-  ; NO alloc-guard! HERE.  The guard is sized for a tool that walks a library
-  ; surface; this one walks every form of every function body, and on this
-  ; bundle's largest file it tripped mid-report -- which is worse than slow,
-  ; because a truncated report makes the manifest below it a lie.  The .sh
-  ; feeds one file per process, which is the bound that matters.
+  ; THE GUARD STAYS ON, and the walker is written to fit under it.  Removing
+  ; it to stop a truncated report only moved the failure: with no ceiling this
+  ; walk took a 7GB CI runner down, and the job came back "canceled" with no
+  ; error of its own.  What made it hungry was allocating a CLOSURE PER NODE
+  ; (a lambda handed to a list walker) in a runtime with no automatic GC --
+  ; so the walk below allocates none, and each top-level form is swept before
+  ; the next.
+  (Contract alloc-guard!)
 
   ; A ladder of this many arms or more is reported.  Three arms is an
   ; ordinary two-way decision with a fallback; four is a table.
@@ -40,13 +43,6 @@
 
   (def %il-name (fn (_ x) (if (symbol? x) (symbol->str x) "")))
   (def %il-is? (fn (_ x s) (str=? (%il-name x) s)))
-
-  ; A LIST WALK THAT SURVIVES AN IMPROPER TAIL: a parameter list is
-  ; (a b . rest), so walking with List for-each would die on the dot.
-  (def %il-each
-    (fn (self f g)
-      (when (pair? f)
-        (do (g (first f)) (self (rest f) g)))))
 
   ; (if TEST THEN ELSE) -- the three-armed form is the one that chains
   (def %il-if?
@@ -71,6 +67,12 @@
             (self (List ref 3 f) file top))
         (%il-walk f file top))))
 
+  ; NO LAMBDA PER NODE: the two walkers call each other by name, so a tree of
+  ; a hundred thousand pairs allocates nothing but the walk itself.  The list
+  ; walk also survives an IMPROPER tail -- a parameter list is (a b . rest),
+  ; and List for-each would die on the dot.
+  (def %il-walk-list ())
+
   (set! %il-walk
     (fn (self form file top)
       (when (pair? form)
@@ -81,7 +83,13 @@
                 (do (display file) (display " ") (display top) (display " ")
                     (display n) (newline))))
             (%il-inside form file top))
-          (%il-each form (fn (_ sub) (self sub file top)))))))
+          (%il-walk-list form file top)))))
+
+  (set! %il-walk-list
+    (fn (self form file top)
+      (when (pair? form)
+        (do (%il-walk (first form) file top)
+            (self (rest form) file top)))))
 
   ; the name a ladder is reported under: the top-level def or set! it sits in
   (def %il-top-name
@@ -92,9 +100,16 @@
           "")
         "")))
 
+  ; A SWEEP BETWEEN TOP-LEVEL FORMS.  Nothing here collects on its own, and a
+  ; module of ten thousand lines is one long walk; without this the guard
+  ; fires part way through the largest file and the report is a lie.
+  (def %il-file
+    (fn (self forms file)
+      (when (pair? forms)
+        (do (%il-walk (first forms) file (%il-top-name (first forms)))
+            (Heap collect)
+            (self (rest forms) file)))))
+
   (List for-each
-    (fn (_ file)
-      (List for-each
-        (fn (_ form) (%il-walk form file (%il-top-name form)))
-        (Xon parse (File read-all file))))
+    (fn (_ file) (%il-file (Xon parse (File read-all file)) file))
     %il-argv))
