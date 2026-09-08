@@ -2902,7 +2902,8 @@
     (pair (lit attribute)     %py-exc-AttributeError)
     (pair (lit zero-division) %py-exc-ZeroDivisionError)
     (pair (lit syntax)        %py-exc-SyntaxError)
-    (pair (lit state)         %py-exc-RuntimeError)))
+    (pair (lit state)         %py-exc-RuntimeError)
+    (pair (lit import)        %py-exc-ImportError)))
 
 (def %py-kind-class
   (fn (self k rows)
@@ -3198,6 +3199,106 @@
               ()
               (let ((els (%py-tuple-elems (rest a))))
                 (if (null? els) () (first els))))))))))
+
+; --- Modules -----------------------------------------------------------------
+;
+; A MODULE IS AN OBJECT of one class, and importing is looking a name up in a
+; table.  There is no file system search here: this runtime runs one program,
+; and the modules it can offer are the ones written below.  Everything else
+; raises ImportError, which is not a limitation so much as the truth -- and it
+; is what the corpus's own feature probes expect, since they wrap an import in
+; a try and print SKIP when it fails.
+(def %py-cls-module (%py-class-new "module" %py-cls-object () "module"))
+
+(def %py-module-new
+  (fn (_ name rows)
+    (let ((m (%py-obj-new %py-cls-module)))
+      (%seq (%py-obj-set-attrs! m (pair (pair "__name__" name) rows)) m))))
+
+; The modules this runtime has, built once and remembered, so that `sys.modules`
+; and repeated imports answer the same object.
+(def %py-modules (list ()))
+
+(def %py-module-find
+  (fn (self name rows)
+    (if (null? rows)
+      ()
+      (if (Str8 =? name (first (first rows)))
+        (rest (first rows))
+        (self name (rest rows))))))
+
+(def %py-module-put!
+  (fn (_ name m)
+    (%seq (%set-first! %py-modules (pair (pair name m) (first %py-modules))) m)))
+
+; WHAT THIS RUNTIME OFFERS, built on first import and remembered after.  sys
+; is the one the corpus reaches for most: its feature probes read
+; sys.implementation and sys.modules before deciding what to test.
+(def %py-module-build
+  (fn (_ name)
+    (if (Str8 =? name "sys")
+      (%py-module-new "sys"
+        (list
+          (pair "version" "3.14.7")
+          (pair "platform" "darwin")
+          (pair "byteorder" "little")
+          ; the largest int a CPython machine word holds; this runtime has
+          ; bigints and no such limit, and the number is what programs test
+          (pair "maxsize" 9223372036854775807)
+          (pair "path" (%py-list-new ()))
+          (pair "argv" (%py-list-new ()))
+          (pair "modules" (%py-dict-new ()))
+          (pair "exit"
+            (fn (_ . a)
+              (%py-raise (%py-instantiate %py-exc-SystemExit
+                (if (null? a) () (list (first a)))))))))
+      (if (Str8 =? name "builtins")
+        (%py-module-new "builtins" ())
+        ()))))
+
+(def %py-import
+  (fn (_ name)
+    (if (not (str? name))
+      (Err raise (lit type) "module name must be a string" ())
+      (if (= (Str8 length name) 0)
+        (Err raise (lit value) "empty module name" ())
+        (let ((have (%py-module-find name (first %py-modules))))
+          (if (not (null? have))
+            have
+            (let ((built (%py-module-build name)))
+              (if (null? built)
+                (Err raise (lit import)
+                  (Str8 append (Str8 append "No module named '" name) "'") ())
+                (%py-module-put! name built)))))))))
+
+; `from X import a, b` and `from X import *` both read attributes off the
+; module the same way an ordinary program would.
+(def %py-import-call
+  (fn (_ . a)
+    (if (null? a)
+      (Err raise (lit type)
+        "__import__() missing required argument 'name'" ())
+      (%py-import (first a)))))
+
+(def %py-import-from
+  (fn (_ name attr)
+    (let ((m (%py-import name)))
+      (let ((e (%py-alist-find attr (%py-obj-attrs m))))
+        (if (null? e)
+          (Err raise (lit import)
+            (Str8 append
+              (Str8 append (Str8 append "cannot import name '" attr) "' from '")
+              (Str8 append name "'")) ())
+          (rest e))))))
+
+; every public name a module has, for `from X import *`
+(def %py-import-star-names
+  (fn (self rows acc)
+    (if (null? rows)
+      (List reverse acc)
+      (let ((k (first (first rows))))
+        (self (rest rows)
+          (if (Str8 =? (Str8 sub 0 1 k) "_") acc (pair k acc)))))))
 
 (def %py-mkclass
   (fn (_ name bases methods)
