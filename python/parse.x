@@ -1164,6 +1164,7 @@
         (list "oct"            (lit %py-oct))
         (list "divmod"         (lit %py-divmod))
         (list "callable"       (lit %py-callable))
+        (list "__import__"     (lit %py-import-call))
         (list "id"             (lit %py-id))
         (list "getattr"        (lit %py-getattr3))
         (list "setattr"        (lit %py-setattr3))
@@ -1344,6 +1345,100 @@
         (let ((r (%py-stmt t)))
           (self (rest r) (pair (first r) acc)))))))
 
+; --- import ------------------------------------------------------------------
+;
+; `import a`, `import a as b`, `from a import x, y`, `from a import x as z`
+; and `from a import *`.  A DOTTED name is read whole and handed to the
+; importer, which has no file system to search and answers ImportError for
+; everything it does not itself provide -- which is what lets a program whose
+; import fails take its own fallback path, the way the corpus writes a probe.
+(def %py-dotted-name
+  (fn (self toks acc)
+    (if (null? toks)
+      (pair acc toks)
+      (if (%py-op-is? (first toks) ".")
+        (if (null? (rest toks))
+          (pair acc toks)
+          (self (rest (rest toks))
+            (Str8 append acc (Str8 append "." (%py-val (first (rest toks)))))))
+        (pair acc toks)))))
+
+(def %py-import-name
+  (fn (_ toks)
+    (if (not (eq? (%py-tag (if (null? toks) () (first toks))) (lit tok-name)))
+      (Err raise (lit syntax) "expected a module name after import" ())
+      (%py-dotted-name (rest toks) (%py-val (first toks))))))
+
+; the name a module is bound under: `import a.b` binds `a`, `as` renames
+; the name a module is bound under: `import a.b` binds `a`, `as` renames.
+; Str8 index-of answers NIL when the substring is absent, not -1.
+(def %py-import-head
+  (fn (_ name)
+    (let ((i (Str8 index-of "." name)))
+      (if (null? i) name (Str8 sub 0 i name)))))
+
+; `from a import x, y as z` -- each name bound, `as` renaming it
+; `from a import *` binds every PUBLIC name the module has, at run time --
+; the parser cannot know them, so this reads the module's own attributes and
+; defines each.  It lives in this file because turning a Python name into a
+; symbol is the parser's own reader.
+(def %py-import-star
+  (fn (_ name)
+    (let ((m (%py-import name)))
+      (%py-import-star-bind (%py-obj-attrs m)))))
+
+(def %py-import-star-bind
+  (fn (self rows)
+    (if (null? rows)
+      ()
+      (do
+        (if (Str8 =? (Str8 sub 0 1 (first (first rows))) "_")
+          ()
+          (%py-defg (%py-name->sym (first (first rows))) (rest (first rows))))
+        (self (rest rows))))))
+
+; `import a, b as c` -- a comma-separated list, each binding its own name
+(def %py-import-list
+  (fn (self toks acc)
+    (let ((r (%py-import-name toks)))
+      (let ((name (first r)) (after (rest r)))
+        (let ((bound
+                (if (%py-name-is? (if (null? after) () (first after)) "as")
+                  (let ((n (if (null? (rest after)) () (first (rest after)))))
+                    (if (not (eq? (%py-tag n) (lit tok-name)))
+                      (Err raise (lit syntax) "expected a name after as" ())
+                      (list (%py-name->sym (%py-val n)) (rest (rest after)))))
+                  ; `import a.b` binds the head name, as Python does
+                  (list (%py-name->sym (%py-import-head name)) after))))
+          (let ((acc2 (pair (list (lit def) (first bound)
+                              (list (lit %py-import) name)) acc))
+                (rest-toks (first (rest bound))))
+            (if (%py-op-is? (if (null? rest-toks) () (first rest-toks)) ",")
+              (self (rest rest-toks) acc2)
+              (pair (pair (lit do) (List reverse acc2)) rest-toks))))))))
+
+(def %py-from-imports
+  (fn (self name toks acc)
+    (if (null? toks)
+      (pair (pair (lit do) (List reverse acc)) toks)
+      (if (%py-op-is? (first toks) ",")
+        (self name (rest toks) acc)
+        (if (eq? (%py-tag (first toks)) (lit tok-newline))
+          (pair (pair (lit do) (List reverse acc)) toks)
+          (if (not (eq? (%py-tag (first toks)) (lit tok-name)))
+            (Err raise (lit syntax) "expected a name after import" ())
+            (let ((attr (%py-val (first toks))))
+              (if (%py-name-is? (if (null? (rest toks)) () (first (rest toks))) "as")
+                (let ((n (if (null? (rest (rest toks))) () (first (rest (rest toks))))))
+                  (if (not (eq? (%py-tag n) (lit tok-name)))
+                    (Err raise (lit syntax) "expected a name after as" ())
+                    (self name (rest (rest (rest toks)))
+                      (pair (list (lit def) (%py-name->sym (%py-val n))
+                              (list (lit %py-import-from) name attr)) acc))))
+                (self name (rest toks)
+                  (pair (list (lit def) (%py-name->sym attr)
+                          (list (lit %py-import-from) name attr)) acc))))))))))
+
 (set! %py-stmt
   (fn (_ toks)
     (let ((t (first toks)))
@@ -1356,6 +1451,18 @@
         ; the declaration itself does nothing; %py-def reads it to leave the
         ; names out of the local hoist, so assignment reaches the module's
         (let ((sp (%py-line-of (rest toks) ()))) (pair () (rest sp)))
+      (if (%py-name-is? t "import")
+        (%py-import-list (rest toks) ())
+      (if (%py-name-is? t "from")
+        (let ((r (%py-import-name (rest toks))))
+          (let ((name (first r)) (after (rest r)))
+            (if (not (%py-name-is? (if (null? after) () (first after)) "import"))
+              (Err raise (lit syntax) "expected import after a from" ())
+              (let ((what (rest after)))
+                (if (%py-op-is? (if (null? what) () (first what)) "*")
+                  ; `from a import *` binds every public name the module has
+                  (pair (list (lit %py-import-star) name) (rest what))
+                  (%py-from-imports name what ()))))))
       ; `del NAME[k]`, `del NAME[a:b]`: the subscript form decides which
       (if (%py-name-is? t "del")
         (let ((r (%py-postfix (rest toks))))
@@ -1467,7 +1574,7 @@
                             (pair
                               (%py-store (first tgt)
                                 (list aug (first tgt) (first r)))
-                              (rest r)))))))))))))))))))))))))
+                              (rest r)))))))))))))))))))))))))))
 
 ; `else:` after an if.  `elif` is `else: if ...`, which is what Python's own
 ; grammar says it is, so it needs no separate shape.
