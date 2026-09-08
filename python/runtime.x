@@ -312,9 +312,41 @@
 ; machinery further down.
 (def %py-sigs (pair () ()))
 (def %py-sig!
-  (fn (_ f name names nreq has-rest)
-    (%set-first! %py-sigs (pair (pair f (list name names nreq has-rest)) (first %py-sigs)))
+  ; The kw name is OPTIONAL so that every existing caller -- the builtins that
+  ; register signatures by hand -- keeps working unchanged.
+  (fn (_ f name names nreq has-rest . kw)
+    (%set-first! %py-sigs
+      (pair (pair f (list name names nreq has-rest (if (null? kw) () (first kw))))
+        (first %py-sigs)))
     f))
+
+; **kwargs ARRIVES IN A BOX, and it has to: a plain call reaches a function by
+; apply, with no keyword machinery in the way, so a dict at the end of the
+; argument list would be indistinguishable from an ordinary positional one.
+; The box is a pair whose head is this one unique value, which no program can
+; produce, so the tail can be read without ambiguity.
+(def %py-kwbox-tag (list (lit %py-kwbox)))
+(def %py-kwbox (fn (_ d) (pair %py-kwbox-tag d)))
+(def %py-kwbox? (fn (_ v) (if (pair? v) (same? (first v) %py-kwbox-tag) #f)))
+
+; The dict a call sent, or an empty one when it sent none -- which is what a
+; plain call always looks like.
+(def %py-kwargs-of
+  (fn (self more)
+    (if (null? more)
+      (%py-dict-new ())
+      (if (null? (rest more))
+        (if (%py-kwbox? (first more)) (rest (first more)) (%py-dict-new ()))
+        (self (rest more))))))
+
+; The same tail without the box, which is what the positional binders read.
+(def %py-args-strip-kw
+  (fn (self more)
+    (if (null? more)
+      ()
+      (if (null? (rest more))
+        (if (%py-kwbox? (first more)) () more)
+        (pair (first more) (self (rest more)))))))
 (def %py-dflt (list (lit %py-default)))
 (def %py-opt
   (fn (_ more i dflt)
@@ -3660,8 +3692,13 @@
     (go (first %py-sigs))))
 ; a method's signature seen from its object: self is already supplied
 (def %py-sig-shift
+  ; A METHOD'S SIGNATURE WITHOUT ITS self, for a call through the class.  The
+  ; **name travels with it: dropping the field here is how `C(1, k=2)` came
+  ; back saying __init__ got an unexpected keyword argument it had declared.
   (fn (_ sig)
-    (list (first sig) (rest (List ref 1 sig)) (- (List ref 2 sig) 1) (List ref 3 sig))))
+    (list (first sig) (rest (List ref 1 sig)) (- (List ref 2 sig) 1)
+      (List ref 3 sig)
+      (if (> (List length sig) 4) (List ref 4 sig) ()))))
 (def %py-drop
   (fn (self l k) (if (= k 0) l (if (null? l) () (self (rest l) (- k 1))))))
 (def %py-list-cat
@@ -3689,6 +3726,8 @@
     (def names (List ref 1 sig))
     (def nreq (List ref 2 sig))
     (def has-rest (List ref 3 sig))
+    ; the **name this function declares, if it declares one
+    (def kwname (if (> (List length sig) 4) (List ref 4 sig) ()))
     (def n (List length names))
     (def npos (List length pos))
     (def known?
@@ -3699,8 +3738,20 @@
         (if (null? ks) ()
           (if (known? (first (first ks)) names)
             (self (rest ks))
-            (%py-kw-error fname
-              (Str8 append (Str8 append "got an unexpected keyword argument '" (first (first ks))) "'"))))))
+            ; A FUNCTION THAT DECLARES **kwargs TAKES THE REST rather than
+            ; refusing them, which is the whole point of declaring it.
+            (if (null? kwname)
+              (%py-kw-error fname
+                (Str8 append (Str8 append "got an unexpected keyword argument '" (first (first ks))) "'"))
+              (self (rest ks)))))))
+    ; the keywords no parameter claimed, as dict rows
+    (def spare
+      (fn (self ks acc)
+        (if (null? ks)
+          (List reverse acc)
+          (if (known? (first (first ks)) names)
+            (self (rest ks) acc)
+            (self (rest ks) (pair (pair (first (first ks)) (rest (first ks))) acc))))))
     (def slot
       (fn (_ i)
         (let ((nm (List ref i names)))
@@ -3725,7 +3776,31 @@
         (Str8 append
           (Str8 append (Str8 append "takes " (%py-str n)) " positional arguments but ")
           (Str8 append (%py-str npos) " were given")))
-      (%py-list-cat (build 0 ()) (%py-drop pos n)))))
+      (let ((base (%py-list-cat (build 0 ()) (%py-drop pos n))))
+        (if (null? kwname)
+          base
+          ; the box goes LAST, where the binder reads it
+          (%py-list-cat base (list (%py-kwbox (%py-dict-new (spare kws ()))))))))))
+; The keyword list a call sends, with every `**d` merged onto what was written
+; by name.  A later spelling wins, which is what Python does when a name is
+; given twice by different spellings.
+(def %py-kw-spread
+  (fn (_ written dicts)
+    (%py-kw-spread-go written dicts)))
+(def %py-kw-spread-go
+  (fn (self acc dicts)
+    (if (null? dicts)
+      acc
+      (self (%py-kw-put-rows acc (%py-dict-entries (first dicts))) (rest dicts)))))
+(def %py-kw-put-rows
+  (fn (self acc rows)
+    (if (null? rows)
+      acc
+      (let ((k (first (first rows))))
+        (if (not (str? k))
+          (Err raise (lit type) "keywords must be strings" ())
+          (self (%py-attr-put acc k (rest (first rows))) (rest rows)))))))
+
 (def %py-kwcall
   (fn (_ f pos kws)
     (if (same? f %py-print)
@@ -3788,7 +3863,19 @@
             (if (null? sig)
               (%py-kwcall (%py-getattr obj name) pos kws)
               (apply m (pair obj (%py-kw-args (%py-sig-shift sig) pos kws))))))
-        (%py-kwcall (%py-getattr obj name) pos kws)))))))
+      ; SUPER HAS TO BE ASKED THE SAME WAY.  Reaching it through %py-getattr
+      ; answers a BOUND method, and a bound method is a new closure with no
+      ; signature of its own -- so `super().__init__(**kw)` came back saying
+      ; the callable takes no keyword arguments, which it plainly did.
+      (if (%py-super-is obj)
+        (let ((m (%py-method-find (%py-class-base (%py-super-from obj)) name)))
+          (let ((sig (if (null? m) () (%py-sig-of m))))
+            (if (null? sig)
+              (%py-kwcall (%py-getattr obj name) pos kws)
+              (apply m
+                (pair (%py-super-self obj)
+                  (%py-kw-args (%py-sig-shift sig) pos kws))))))
+        (%py-kwcall (%py-getattr obj name) pos kws))))))))
 (def %py-splat
   (fn (_ . segs)
     (def cat
