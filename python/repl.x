@@ -102,15 +102,17 @@
     (if (not (pair? form))
       #f
       (let ((h (first form)))
-        (if (eq? h (lit set!)) #t
-        (if (eq? h (lit def)) #t
-        (if (eq? h (lit %py-defg)) #t
-        (if (eq? h (lit let)) (%py-stmt-let? form)
-        (if (eq? h (lit guard)) #t
-        (if (eq? h (lit if)) #t
-        (if (eq? h (lit error)) #t
+        (match
+          ((eq? h (lit set!)) #t)
+          ((eq? h (lit def)) #t)
+          ((eq? h (lit %py-defg)) #t)
+          ((eq? h (lit let)) (%py-stmt-let? form))
+          ((eq? h (lit guard)) #t)
+          ((eq? h (lit if)) #t)
+          ((eq? h (lit error)) #t)
           ; the while/for emission: a call whose head is an (fn ...) form
-          (if (pair? h) (eq? (first h) (lit fn)) #f))))))))))))
+          ((pair? h) (eq? (first h) (lit fn)))
+          (#t #f))))))
 
 (def %py-repl-eval
   (fn (_ src)
@@ -179,20 +181,20 @@
   (fn (_)
     (display ">>> ")
     (let ((line (%py-repl-line)))
-      (if (eq? line (lit eof))
-        (%seq (newline) (Sys exit 0))
-        (if (= (Str8 length line) 0)
-          (%python-repl-loop)
-          (if (if (Str8 =? line "quit()") #t (Str8 =? line "exit()"))
-            (Sys exit 0)
-            (%seq
-              (guard (%py-err
+      (match
+        ((eq? line (lit eof)) (%seq (newline) (Sys exit 0)))
+        ((= (Str8 length line) 0) (%python-repl-loop))
+        ((if (Str8 =? line "quit()") #t (Str8 =? line "exit()"))
+          (Sys exit 0))
+        (#t
+          (%seq
+            (guard (%py-err
+                (%seq
+                  (display "Error: ")
                   (%seq
-                    (display "Error: ")
-                    (%seq
-                      (display (if (str? %py-err) %py-err (Io write-to-str %py-err)))
-                      (newline))))
-                (%py-repl-eval (%py-read-entry line)))
-              (%python-repl-loop))))))))
+                    (display (if (str? %py-err) %py-err (Io write-to-str %py-err)))
+                    (newline))))
+              (%py-repl-eval (%py-read-entry line)))
+            (%python-repl-loop)))))))
 
 (provide python/repl %python-repl %python-banner)

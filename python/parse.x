@@ -111,30 +111,32 @@
     (if (< (Str8 length t) 3) ()
       (if (not (= (%py-char->int (Str8 ref 0 t)) 48)) ()
         (let ((c (%py-char->int (Str8 ref 1 t))))
-          (if (if (= c 120) #t (= c 88)) 16
-            (if (if (= c 111) #t (= c 79)) 8
-              (if (if (= c 98) #t (= c 66)) 2 ()))))))))
+          (match
+            ((if (= c 120) #t (= c 88)) 16)
+            ((if (= c 111) #t (= c 79)) 8)
+            ((if (= c 98) #t (= c 66)) 2)
+            (#t ())))))))
 
 (def %py-num
   (fn (self text)
     (let ((t (%py-num-strip text)))
       ; a signed based literal (-0x10 alone) is the sign applied to the rest
-      (if (if (if (= (%py-char->int (Str8 ref 0 t)) 45) #t (= (%py-char->int (Str8 ref 0 t)) 43))
+      (match
+        ((if (if (= (%py-char->int (Str8 ref 0 t)) 45) #t (= (%py-char->int (Str8 ref 0 t)) 43))
             (not (null? (%py-num-base-of (Str8 sub 1 (- (Str8 length t) 1) t))))
             #f)
-        (let ((v (self (Str8 sub 1 (- (Str8 length t) 1) t))))
-          (if (= (%py-char->int (Str8 ref 0 t)) 45) (%py-neg v) v))
-      (if (not (null? (%py-num-base-of t)))
-        (%py-int-of-based (Str8 sub 2 (- (Str8 length t) 2) t) (%py-num-base-of t))
-      (if (%py-num-imag? t)
-        (Complex make 0.0 (Float from (Str8 sub 0 (- (Str8 length t) 1) t)))
-      (if (%py-num-float-text? t)
-        (Float from t)
+          (let ((v (self (Str8 sub 1 (- (Str8 length t) 1) t))))
+            (if (= (%py-char->int (Str8 ref 0 t)) 45) (%py-neg v) v)))
+        ((not (null? (%py-num-base-of t)))
+          (%py-int-of-based (Str8 sub 2 (- (Str8 length t) 2) t) (%py-num-base-of t)))
+        ((%py-num-imag? t)
+          (Complex make 0.0 (Float from (Str8 sub 0 (- (Str8 length t) 1) t))))
+        ((%py-num-float-text? t) (Float from t))
         ; THE HAND PARSER, NOT THE CHILD BASE: %py-sexp-base is a (Base make)
         ; child and bigint is a library type it does not carry, so a literal
         ; past 2^63 WRAPPED silently.  %py-int-of-str promotes through the
         ; tower.
-        (%py-int-of-str t))))))))
+        (#t (%py-int-of-str t))))))
 
 ; --- Token helpers -----------------------------------------------------------
 ; Guarded for the same reason as python/indent.x's %py-tok-type: (first 2)
@@ -277,23 +279,24 @@
   (fn (_ toks)
     (let ((r (%py-left toks %py-cmp-ops %py-bor)))
       (def more (rest r))
-      (if (%py-name-is? (if (null? more) () (first more)) "in")
-        (let ((rhs (%py-left (rest more) %py-cmp-ops %py-bor)))
-          (pair (list (lit %py-in) (first r) (first rhs)) (rest rhs)))
-        (if (if (%py-name-is? (if (null? more) () (first more)) "not")
+      (match
+        ((%py-name-is? (if (null? more) () (first more)) "in")
+          (let ((rhs (%py-left (rest more) %py-cmp-ops %py-bor)))
+            (pair (list (lit %py-in) (first r) (first rhs)) (rest rhs))))
+        ((if (%py-name-is? (if (null? more) () (first more)) "not")
               (%py-name-is? (if (null? (rest more)) () (first (rest more))) "in")
               #f)
           (let ((rhs (%py-left (rest (rest more)) %py-cmp-ops %py-bor)))
             (pair (list (lit not) (list (lit %py-in) (first r) (first rhs)))
-              (rest rhs)))
+              (rest rhs))))
         ; `is` and `is not`: identity (python/runtime.x %py-is)
-        (if (%py-name-is? (if (null? more) () (first more)) "is")
+        ((%py-name-is? (if (null? more) () (first more)) "is")
           (if (%py-name-is? (if (null? (rest more)) () (first (rest more))) "not")
             (let ((rhs (%py-left (rest (rest more)) %py-cmp-ops %py-bor)))
               (pair (list (lit not) (list (lit %py-is) (first r) (first rhs))) (rest rhs)))
             (let ((rhs (%py-left (rest more) %py-cmp-ops %py-bor)))
-              (pair (list (lit %py-is) (first r) (first rhs)) (rest rhs))))
-          r))))))
+              (pair (list (lit %py-is) (first r) (first rhs)) (rest rhs)))))
+        (#t r)))))
 (set! %py-bor  (fn (_ toks) (%py-left toks %py-bor-ops %py-bxor)))
 (set! %py-bxor (fn (_ toks) (%py-left toks %py-bxor-ops %py-band)))
 (set! %py-band (fn (_ toks) (%py-left toks %py-band-ops %py-shift)))
@@ -357,16 +360,17 @@
 (set! %py-unary
   (fn (_ toks)
     (def t (if (null? toks) () (first toks)))
-    (if (%py-op-is? t "-")
-      (let ((r (%py-unary (rest toks))))
-        (pair (list (lit %py-neg) (first r)) (rest r)))
-      (if (%py-op-is? t "+")
+    (match
+      ((%py-op-is? t "-")
         (let ((r (%py-unary (rest toks))))
-          (pair (list (lit %py-pos) (first r)) (rest r)))
-        (if (%py-op-is? t "~")
-          (let ((r (%py-unary (rest toks))))
-            (pair (list (lit %py-invert) (first r)) (rest r)))
-          (%py-power toks))))))
+          (pair (list (lit %py-neg) (first r)) (rest r))))
+      ((%py-op-is? t "+")
+        (let ((r (%py-unary (rest toks))))
+          (pair (list (lit %py-pos) (first r)) (rest r))))
+      ((%py-op-is? t "~")
+        (let ((r (%py-unary (rest toks))))
+          (pair (list (lit %py-invert) (first r)) (rest r))))
+      (#t (%py-power toks)))))
 
 ; RIGHT-ASSOCIATIVE, and it matters: 2**3**2 is 2**(3**2) = 512, not 64.  The
 ; recursion goes back to `unary` rather than to `power`, which is also how
@@ -412,27 +416,28 @@
     (def %a (%py-atom toks))
     (def %go
       (fn (self acc more)
-        (if (%py-group? (if (null? more) () (first more)) "(")
-          (self (%py-call-form acc (%py-group-of (first more)))
-                (rest more))
+        (match
+          ((%py-group? (if (null? more) () (first more)) "(")
+            (self (%py-call-form acc (%py-group-of (first more)))
+                  (rest more)))
           ; Attribute access binds like a call, and yields a VALUE -- the
           ; bound method -- so `f = x.append` works and a following `(` simply
           ; applies it.
-          (if (%py-op-is? (if (null? more) () (first more)) ".")
+          ((%py-op-is? (if (null? more) () (first more)) ".")
             (let ((n (if (null? (rest more)) () (first (rest more)))))
               (if (not (eq? (%py-tag n) (lit tok-name)))
                 (Err raise (lit syntax) "expected a name after ." ())
                 (self (list (lit %py-getattr) acc (%py-val n))
-                      (rest (rest more)))))
+                      (rest (rest more))))))
           ; Subscript binds like a call: left-associative, same level.
-          (if (%py-group? (if (null? more) () (first more)) "[")
+          ((%py-group? (if (null? more) () (first more)) "[")
             (self
               (if (%py-slice-group? (%py-group-of (first more)))
                 (%py-slice-form acc (%py-group-of (first more)))
                 (list (lit %py-index) acc
                   (%py-expr-of (%py-group-of (first more)))))
-              (rest more))
-            (pair acc more))))))
+              (rest more)))
+          (#t (pair acc more)))))
     (%go (first %a) (rest %a))))
 
 ; --- Groups ------------------------------------------------------------------
@@ -471,23 +476,24 @@
         (self (rest toks) (pair (first toks) acc))))))
 (def %py-comma-split
   (fn (self toks cur acc)
-    (if (null? toks)
-      (List reverse (if (null? cur) acc (pair (List reverse cur) acc)))
-      (if (%py-op-is? (first toks) ",")
-        (self (rest toks) () (if (null? cur) acc (pair (List reverse cur) acc)))
-        (if (%py-name-is? (first toks) "lambda")
-          (let ((h (%py-lambda-head toks ())))
-            (self (rest h) (%py-append (List reverse (first h)) cur) acc))
-          (self (rest toks) (pair (first toks) cur) acc))))))
+    (match
+      ((null? toks)
+        (List reverse (if (null? cur) acc (pair (List reverse cur) acc))))
+      ((%py-op-is? (first toks) ",")
+        (self (rest toks) () (if (null? cur) acc (pair (List reverse cur) acc))))
+      ((%py-name-is? (first toks) "lambda")
+        (let ((h (%py-lambda-head toks ())))
+          (self (rest h) (%py-append (List reverse (first h)) cur) acc)))
+      (#t (self (rest toks) (pair (first toks) cur) acc)))))
 
 (def %py-has-comma?
   (fn (self toks)
-    (if (null? toks)
-      #f
-      (if (%py-op-is? (first toks) ",") #t
-        (if (%py-name-is? (first toks) "lambda")
-          (self (rest (%py-lambda-head toks ())))
-          (self (rest toks)))))))
+    (match
+      ((null? toks) #f)
+      ((%py-op-is? (first toks) ",") #t)
+      ((%py-name-is? (first toks) "lambda")
+        (self (rest (%py-lambda-head toks ()))))
+      (#t (self (rest toks))))))
 
 ; A CONDITIONAL EXPRESSION sits above `or`: `a if c else b`, right-
 ; associative, the value chosen by %py-truthy like every condition.  This is
@@ -503,10 +509,12 @@
       (if (%py-name-is? (if (null? after) () (first after)) "from")
         (let ((r (%py-test (rest after))))
           (pair (list (lit %py-yield-from) (lit %py-gen) (first r)) (rest r)))
-        (if (if (null? after) #t
-              (if (eq? (%py-tag (first after)) (lit tok-newline)) #t
-                (if (%py-op-is? (first after) ")") #t
-                  (if (%py-op-is? (first after) "=") #t (%py-op-is? (first after) ",")))))
+        (if (match
+              ((null? after) #t)
+              ((eq? (%py-tag (first after)) (lit tok-newline)) #t)
+              ((%py-op-is? (first after) ")") #t)
+              ((%py-op-is? (first after) "=") #t)
+              (#t (%py-op-is? (first after) ",")))
           (pair (list (lit %py-yield) (lit %py-gen) ()) after)
           (let ((r (%py-exprlist after)))
             (pair (list (lit %py-yield) (lit %py-gen) (first r)) (rest r))))))))
@@ -616,11 +624,12 @@
 ; A keyword argument is NAME = EXPR as one comma-part.
 (def %py-kw-part?
   (fn (_ part)
-    (if (null? part) #f
-      (if (null? (rest part)) #f
-        (if (eq? (%py-tag (first part)) (lit tok-name))
-          (%py-op-is? (first (rest part)) "=")
-          #f)))))
+    (match
+      ((null? part) #f)
+      ((null? (rest part)) #f)
+      ((eq? (%py-tag (first part)) (lit tok-name))
+        (%py-op-is? (first (rest part)) "="))
+      (#t #f))))
 
 ; The positional arguments as one form: (list e1 e2) without a spread, or
 ; (%py-splat ...) when there is one.
@@ -671,12 +680,11 @@
             (self (rest ps))))))
     (def poss
       (fn (self ps)
-        (if (null? ps) ()
-          (if (%py-kw-part? (first ps))
-            (self (rest ps))
-            (if (%py-kwspread-part? (first ps))
-              (self (rest ps))
-              (pair (first ps) (self (rest ps))))))))
+        (match
+          ((null? ps) ())
+          ((%py-kw-part? (first ps)) (self (rest ps)))
+          ((%py-kwspread-part? (first ps)) (self (rest ps)))
+          (#t (pair (first ps) (self (rest ps)))))))
     (def kw-forms (kws parts))
     (def kw-spreads (spreads parts))
     ; the keyword list, with every spread dict merged onto the written ones
@@ -769,10 +777,12 @@
 
 (def %py-top-colon?
   (fn (self toks)
-    (if (null? toks) #f
-      (if (%py-name-is? (first toks) "lambda")
-        (self (rest (%py-lambda-head toks ())))
-        (if (%py-op-is? (first toks) ":") #t (self (rest toks)))))))
+    (match
+      ((null? toks) #f)
+      ((%py-name-is? (first toks) "lambda")
+        (self (rest (%py-lambda-head toks ()))))
+      ((%py-op-is? (first toks) ":") #t)
+      (#t (self (rest toks))))))
 
 (def %py-comp?
   (fn (self toks)
@@ -818,17 +828,18 @@
 (def %py-comp-clauses ())
 (set! %py-comp-clauses
   (fn (self toks acc)
-    (if (null? toks)
-      (List reverse acc)
-      (if (%py-name-is? (first toks) "for")
+    (match
+      ((null? toks) (List reverse acc))
+      ((%py-name-is? (first toks) "for")
         (let ((n (%py-for-names (rest toks) ())))
           (let ((it (%py-or-e (rest n))))
             (self (rest it)
-              (pair (list (lit for) (%py-syms-of (first n) ()) (first it)) acc))))
-        (if (%py-name-is? (first toks) "if")
-          (let ((c (%py-or-e (rest toks))))
-            (self (rest c) (pair (list (lit if) (first c)) acc)))
-          (Err raise (lit syntax) "unexpected token in comprehension" (first toks)))))))
+              (pair (list (lit for) (%py-syms-of (first n) ()) (first it)) acc)))))
+      ((%py-name-is? (first toks) "if")
+        (let ((c (%py-or-e (rest toks))))
+          (self (rest c) (pair (list (lit if) (first c)) acc))))
+      (#t
+        (Err raise (lit syntax) "unexpected token in comprehension" (first toks))))))
 
 ; First clause outermost: front recursion nests them the way they read.
 (def %py-comp-fold ())
@@ -924,68 +935,56 @@
     (if (null? toks)
       (Err raise (lit syntax) "unexpected end of input in expression" ())
       (let ((t (first toks)))
-        (if (eq? (%py-tag t) (lit tok-number))
-          (pair (%py-num (%py-val t)) (rest toks))
-          (if (eq? (%py-tag t) (lit tok-string))
-            ; QUOTED, because the form is evaluated: a bare string literal is
-            ; self-evaluating in x, but a form built here is handed to eval!,
-            ; and an unquoted string in head position would be called.
-            ; ADJACENT LITERALS CONCATENATE: "a" "b" is "ab".
-            (%py-adjacent (lit tok-string) (%py-val t) (rest toks))
-          (if (eq? (%py-tag t) (lit tok-bytes))
+        (match
+          ((eq? (%py-tag t) (lit tok-number))
+            (pair (%py-num (%py-val t)) (rest toks)))
+          ((eq? (%py-tag t) (lit tok-string))
+            (%py-adjacent (lit tok-string) (%py-val t) (rest toks)))
+          ((eq? (%py-tag t) (lit tok-bytes))
             (let ((r (%py-adjacent (lit tok-bytes) (%py-val t) (rest toks))))
-              (pair (list (lit %py-mkbytes) (first r)) (rest r)))
-          (if (eq? (%py-tag t) (lit tok-fstring))
-            (pair (%py-fstring-form (%py-val t)) (rest toks))
-            (if (%py-super-call? toks)
-              ; `super()` -- the group is consumed with the name.  With
-              ; ARGUMENTS it is the explicit two-argument form, which this
-              ; runtime does not implement: Python rejects the bad ones with
-              ; a TypeError at call time, so that check is a runtime one.
-              (if (not (null? (%py-group-of (first (rest toks)))))
-                (pair (list (lit %py-super-args)) (rest (rest toks)))
-              (if (null? (first %py-current-class))
-                (Err raise (lit syntax) "super() outside a class" ())
-                (if (null? (first %py-current-self))
-                  (Err raise (lit syntax) "super() outside a method" ())
+              (pair (list (lit %py-mkbytes) (first r)) (rest r))))
+          ((eq? (%py-tag t) (lit tok-fstring))
+            (pair (%py-fstring-form (%py-val t)) (rest toks)))
+          ((%py-super-call? toks)
+            (match
+              ((not (null? (%py-group-of (first (rest toks)))))
+                (pair (list (lit %py-super-args)) (rest (rest toks))))
+              ((null? (first %py-current-class))
+                (Err raise (lit syntax) "super() outside a class" ()))
+              ((null? (first %py-current-self))
+                (Err raise (lit syntax) "super() outside a method" ()))
+              (#t
+                (pair
+                  (list (lit %py-super)
+                    (first %py-current-class) (first %py-current-self))
+                  (rest (rest toks))))))
+          ((eq? (%py-tag t) (lit tok-name))
+            (pair (%py-name->sym (%py-val t)) (rest toks)))
+          ((%py-group? t "{")
+            (let ((g (%py-group-of t)))
+              (if (%py-comp? g)
+                (pair (if (%py-top-colon? g) (%py-dictcomp g) (%py-setcomp g)) (rest toks))
+                (if (if (null? g) #t (%py-top-colon? g))
                   (pair
-                    (list (lit %py-super)
-                      (first %py-current-class) (first %py-current-self))
-                    (rest (rest toks))))))
-            (if (eq? (%py-tag t) (lit tok-name))
-              (pair (%py-name->sym (%py-val t)) (rest toks))
-              (if (%py-group? t "{")
-                ; BRACES ARE A DICT ONLY WITH A COLON (or empty): {1, 2} is a
-                ; set, {a for a in x} a set comprehension, {k: v} a dict.
-                (let ((g (%py-group-of t)))
-                  (if (%py-comp? g)
-                    (pair (if (%py-top-colon? g) (%py-dictcomp g) (%py-setcomp g)) (rest toks))
-                    (if (if (null? g) #t (%py-top-colon? g))
-                      (pair
-                        (pair (lit %py-mkdict) (%py-entries-of (%py-comma-split g () ()) ()))
-                        (rest toks))
-                      (pair (pair (lit %py-mkset) (%py-group-exprs g)) (rest toks)))))
-              (if (%py-group? t "[")
-                (if (%py-comp? (%py-group-of t))
-                  (pair (%py-listcomp (%py-group-of t)) (rest toks))
+                    (pair (lit %py-mkdict) (%py-entries-of (%py-comma-split g () ()) ()))
+                    (rest toks))
+                  (pair (pair (lit %py-mkset) (%py-group-exprs g)) (rest toks))))))
+          ((%py-group? t "[")
+            (if (%py-comp? (%py-group-of t))
+              (pair (%py-listcomp (%py-group-of t)) (rest toks))
+              (pair
+                (pair (lit %py-mklist) (%py-group-exprs (%py-group-of t)))
+                (rest toks))))
+          ((%py-group? t "(")
+            (let ((elems (%py-group-of t)))
+              (if (null? elems)
+                (pair (list (lit %py-mktuple)) (rest toks))
+                (if (%py-has-comma? elems)
                   (pair
-                    (pair (lit %py-mklist) (%py-group-exprs (%py-group-of t)))
-                    (rest toks)))
-              (if (%py-group? t "(")
-                ; THE COMMA MAKES A TUPLE, NOT THE PARENS.  `(x)` is just x in
-                ; Python, so a one-element tuple is spelled `(x,)` and the
-                ; trailing comma is load-bearing rather than decorative -- which
-                ; is why this asks whether a comma was PRESENT, not how many
-                ; parts the split produced.
-                (let ((elems (%py-group-of t)))
-                  (if (null? elems)
-                    (pair (list (lit %py-mktuple)) (rest toks))
-                    (if (%py-has-comma? elems)
-                      (pair
-                        (pair (lit %py-mktuple) (%py-group-exprs elems))
-                        (rest toks))
-                      (pair (%py-expr-of elems) (rest toks)))))
-                (Err raise (lit syntax) "unexpected token in expression" t))))))))))))))
+                    (pair (lit %py-mktuple) (%py-group-exprs elems))
+                    (rest toks))
+                  (pair (%py-expr-of elems) (rest toks))))))
+          (#t (Err raise (lit syntax) "unexpected token in expression" t)))))))
 
 ; --- f-strings ---------------------------------------------------------------
 ;
@@ -1014,9 +1013,12 @@
     (if (>= i (Str8 length s))
       ()
       (let ((c (%py-fs-code s i)))
-        (if (if (= c 40) #t (if (= c 91) #t (= c 123))) (self s (+ i 1) (+ depth 1))
-          (if (if (= c 41) #t (if (= c 93) #t (= c 125))) (self s (+ i 1) (- depth 1))
-            (if (if (= depth 0)
+        (match
+          ((if (= c 40) #t (if (= c 91) #t (= c 123)))
+            (self s (+ i 1) (+ depth 1)))
+          ((if (= c 41) #t (if (= c 93) #t (= c 125)))
+            (self s (+ i 1) (- depth 1)))
+          ((if (= depth 0)
                   (if (= c 58) #t
                     ; `!` opens a conversion only when `=` does not follow:
                     ; {a!=b} is a comparison
@@ -1024,8 +1026,8 @@
                       (if (< (+ i 1) (Str8 length s)) (not (= (%py-fs-code s (+ i 1)) 61)) #t)
                       #f))
                   #f)
-              i
-              (self s (+ i 1) depth))))))))
+            i)
+          (#t (self s (+ i 1) depth)))))))
 
 ; {x=} DEBUG FIELDS: an expression ending in `=` (not ==, !=, <=, >=) prints
 ; its own text, `=` and any whitespace included, before its value -- and that
@@ -1039,11 +1041,17 @@
           (let ((c (%py-fs-code s i)))
             (if (if (= c 32) #t (if (= c 9) #t (= c 10))) (self (- i 1)) i)))))
     (let ((i (last-non-ws (- (Str8 length s) 1))))
-      (if (null? i) ()
-        (if (not (= (%py-fs-code s i) 61)) ()
-          (if (= i 0) ()
-            (let ((p (%py-fs-code s (- i 1))))
-              (if (if (= p 61) #t (if (= p 33) #t (if (= p 60) #t (= p 62)))) () i))))))))
+      (match
+        ((null? i) ())
+        ((not (= (%py-fs-code s i) 61)) ())
+        ((= i 0) ())
+        (#t
+          (let ((p (%py-fs-code s (- i 1))))
+            (if (match
+                  ((= p 61) #t)
+                  ((= p 33) #t)
+                  ((= p 60) #t)
+                  (#t (= p 62))) () i)))))))
 
 ; A field holds an expression LIST: {x, y} is a tuple.
 (def %py-fs-expr-of
@@ -1419,25 +1427,25 @@
 
 (def %py-from-imports
   (fn (self name toks acc)
-    (if (null? toks)
-      (pair (pair (lit do) (List reverse acc)) toks)
-      (if (%py-op-is? (first toks) ",")
-        (self name (rest toks) acc)
-        (if (eq? (%py-tag (first toks)) (lit tok-newline))
-          (pair (pair (lit do) (List reverse acc)) toks)
-          (if (not (eq? (%py-tag (first toks)) (lit tok-name)))
-            (Err raise (lit syntax) "expected a name after import" ())
-            (let ((attr (%py-val (first toks))))
-              (if (%py-name-is? (if (null? (rest toks)) () (first (rest toks))) "as")
-                (let ((n (if (null? (rest (rest toks))) () (first (rest (rest toks))))))
-                  (if (not (eq? (%py-tag n) (lit tok-name)))
-                    (Err raise (lit syntax) "expected a name after as" ())
-                    (self name (rest (rest (rest toks)))
-                      (pair (list (lit def) (%py-name->sym (%py-val n))
-                              (list (lit %py-import-from) name attr)) acc))))
-                (self name (rest toks)
-                  (pair (list (lit def) (%py-name->sym attr)
-                          (list (lit %py-import-from) name attr)) acc))))))))))
+    (match
+      ((null? toks) (pair (pair (lit do) (List reverse acc)) toks))
+      ((%py-op-is? (first toks) ",") (self name (rest toks) acc))
+      ((eq? (%py-tag (first toks)) (lit tok-newline))
+        (pair (pair (lit do) (List reverse acc)) toks))
+      ((not (eq? (%py-tag (first toks)) (lit tok-name)))
+        (Err raise (lit syntax) "expected a name after import" ()))
+      (#t
+        (let ((attr (%py-val (first toks))))
+          (if (%py-name-is? (if (null? (rest toks)) () (first (rest toks))) "as")
+            (let ((n (if (null? (rest (rest toks))) () (first (rest (rest toks))))))
+              (if (not (eq? (%py-tag n) (lit tok-name)))
+                (Err raise (lit syntax) "expected a name after as" ())
+                (self name (rest (rest (rest toks)))
+                  (pair (list (lit def) (%py-name->sym (%py-val n))
+                          (list (lit %py-import-from) name attr)) acc))))
+            (self name (rest toks)
+              (pair (list (lit def) (%py-name->sym attr)
+                      (list (lit %py-import-from) name attr)) acc))))))))
 
 (set! %py-stmt
   (fn (_ toks)
@@ -1445,59 +1453,54 @@
       ; if / while / def are decided by the leading NAME.  They are keywords to
       ; the parser and plain names to the tokenizer, which is where that
       ; distinction belongs.
-      (if (%py-name-is? t "class")
-        (%py-class-stmt (rest toks))
-      (if (if (%py-name-is? t "global") #t (%py-name-is? t "nonlocal"))
-        ; the declaration itself does nothing; %py-def reads it to leave the
-        ; names out of the local hoist, so assignment reaches the module's
-        (let ((sp (%py-line-of (rest toks) ()))) (pair () (rest sp)))
-      (if (%py-name-is? t "import")
-        (%py-import-list (rest toks) ())
-      (if (%py-name-is? t "from")
-        (let ((r (%py-import-name (rest toks))))
-          (let ((name (first r)) (after (rest r)))
-            (if (not (%py-name-is? (if (null? after) () (first after)) "import"))
-              (Err raise (lit syntax) "expected import after a from" ())
-              (let ((what (rest after)))
-                (if (%py-op-is? (if (null? what) () (first what)) "*")
-                  ; `from a import *` binds every public name the module has
-                  (pair (list (lit %py-import-star) name) (rest what))
-                  (%py-from-imports name what ()))))))
-      ; `del NAME[k]`, `del NAME[a:b]`: the subscript form decides which
-      (if (%py-name-is? t "del")
-        (let ((r (%py-postfix (rest toks))))
-          (let ((tgt (first r)))
-            (if (not (pair? tgt))
-              (Err raise (lit syntax) "cannot delete this target" ())
-              (if (eq? (first tgt) (lit %py-index))
-                (pair (pair (lit %py-delindex) (rest tgt)) (rest r))
-                (if (eq? (first tgt) (lit %py-slice))
-                  (pair (pair (lit %py-delslice) (rest tgt)) (rest r))
-                  ; `del obj.attr` -- the runtime already had %py-delattr for
-                  ; the builtin of that name; only the statement was missing,
-                  ; and the attribute node carries exactly its two arguments.
-                  (if (eq? (first tgt) (lit %py-getattr))
-                    (pair (pair (lit %py-delattr) (rest tgt)) (rest r))
-                    (Err raise (lit syntax) "cannot delete this target" ())))))))
-      (if (%py-name-is? t "try")
-        (%py-try (rest toks))
-      (if (%py-name-is? t "raise")
-        (%py-raise-stmt (rest toks))
-      ; THE CONDITION IS PYTHON'S TRUTH, NOT x's.  `if []:` must not run its
-      ; body: an empty list is falsy in Python and a PY-LIST instance is a
-      ; non-nil value to x, so the bare value in an x `if` was silently wrong.
-      ; bool() stated the rule once in %py-truthy; conditions now ask it.
-      (if (%py-name-is? t "if")
-        (let ((c (%py-test (rest toks))))
-          (let ((b (%py-block (rest c))))
-            (let ((e (%py-else (rest b))))
-              (pair
-                (list (lit if) (list (lit %py-truthy) (first c))
-                  (first b) (first e))
-                (rest e)))))
-        (if (%py-name-is? t "for")
-          (%py-for (rest toks))
-        (if (%py-name-is? t "while")
+      (match
+        ((%py-name-is? t "class") (%py-class-stmt (rest toks)))
+        ((if (%py-name-is? t "global") #t (%py-name-is? t "nonlocal"))
+          (let ((sp (%py-line-of (rest toks) ()))) (pair () (rest sp))))
+        ((%py-name-is? t "import") (%py-import-list (rest toks) ()))
+        ((%py-name-is? t "from")
+          (let ((r (%py-import-name (rest toks))))
+            (let ((name (first r)) (after (rest r)))
+              (if (not (%py-name-is? (if (null? after) () (first after)) "import"))
+                (Err raise (lit syntax) "expected import after a from" ())
+                (let ((what (rest after)))
+                  (if (%py-op-is? (if (null? what) () (first what)) "*")
+                    ; `from a import *` binds every public name the module has
+                    (pair (list (lit %py-import-star) name) (rest what))
+                    (%py-from-imports name what ())))))))
+        ; `del NAME[k]`, `del NAME[a:b]`: the subscript form decides which
+        ((%py-name-is? t "del")
+          (let ((r (%py-postfix (rest toks))))
+            (let ((tgt (first r)))
+              (match
+                ((not (pair? tgt))
+                  (Err raise (lit syntax) "cannot delete this target" ()))
+                ((eq? (first tgt) (lit %py-index))
+                  (pair (pair (lit %py-delindex) (rest tgt)) (rest r)))
+                ((eq? (first tgt) (lit %py-slice))
+                  (pair (pair (lit %py-delslice) (rest tgt)) (rest r)))
+                ; `del obj.attr` -- the runtime already had %py-delattr for
+                ; the builtin of that name; only the statement was missing,
+                ; and the attribute node carries exactly its two arguments.
+                ((eq? (first tgt) (lit %py-getattr))
+                  (pair (pair (lit %py-delattr) (rest tgt)) (rest r)))
+                (#t (Err raise (lit syntax) "cannot delete this target" ()))))))
+        ((%py-name-is? t "try") (%py-try (rest toks)))
+        ((%py-name-is? t "raise") (%py-raise-stmt (rest toks)))
+        ; THE CONDITION IS PYTHON'S TRUTH, NOT x's.  `if []:` must not run its
+        ; body: an empty list is falsy in Python and a PY-LIST instance is a
+        ; non-nil value to x, so the bare value in an x `if` was silently wrong.
+        ; bool() stated the rule once in %py-truthy; conditions now ask it.
+        ((%py-name-is? t "if")
+          (let ((c (%py-test (rest toks))))
+            (let ((b (%py-block (rest c))))
+              (let ((e (%py-else (rest b))))
+                (pair
+                  (list (lit if) (list (lit %py-truthy) (first c))
+                    (first b) (first e))
+                  (rest e))))))
+        ((%py-name-is? t "for") (%py-for (rest toks)))
+        ((%py-name-is? t "while")
           (let ((c (%py-test (rest toks))))
             (let ((b (%py-block (rest c))))
               (pair
@@ -1506,75 +1509,60 @@
                     (list (lit if) (list (lit %py-truthy) (first c))
                       (list (lit %seq) (first b) (list (lit self)))
                       ())))
-                (rest b))))
-          (if (%py-op-is? t "@")
-            ; A DECORATED def AT STATEMENT LEVEL is the same def with the call
-            ; around its function: %py-def emits (def SYM FN), so the wrap goes
-            ; on FN and the binding stays one form.
-            (let ((ds (%py-decos-of toks ())))
-              (let ((t2 (rest ds)))
-                (if (not (%py-name-is? (if (null? t2) () (first t2)) "def"))
-                  (Err raise (lit syntax) "a decorator must be followed by a def" ())
-                  (let ((r (%py-def (rest t2))))
-                    (pair
-                      (list (lit def) (first (rest (first r)))
-                        (%py-wrap-decos (first ds) (first (rest (rest (first r))))))
-                      (rest r))))))
-          (if (%py-name-is? t "def")
-            (%py-def (rest toks))
-            (if (%py-name-is? t "return")
-              ; RETURN INVOKES AN ESCAPE CONTINUATION.  It used to compile to
-              ; its expression, and x returns a body's LAST value -- so a return
-              ; anywhere but the tail computed and discarded. `if x < 0: return
-              ; 0` fell through and answered the wrong number with no error.
-              ;
-              ; %py-return is bound by the enclosing def (see %py-def). A return
-              ; outside a function leaves it unbound, which is an error where
-              ; Python raises SyntaxError -- different words, same refusal.
-              ;
-              ; A bare `return` yields None.
-              (let ((nxt (if (null? (rest toks)) () (first (rest toks)))))
-                (if (if (null? nxt) #t
-                      (if (eq? (%py-tag nxt) (lit tok-newline)) #t
-                        (%py-block? nxt)))
-                  (pair (list (lit %py-return) ()) (rest toks))
-                  (let ((r (%py-exprlist (rest toks))))
-                    (pair (list (lit %py-return) (first r)) (rest r)))))
-              (if (%py-name-is? t "pass")
-                (pair () (rest toks))
-              (if (%py-unpack-stmt? toks)
-                (%py-unpack-stmt toks)
-              ; A statement can BEGIN with a unary operator (`~x`, `-x` as an
-              ; expression statement); the postfix-target probe below would
-              ; refuse the op token, so these go straight to the expression
-              ; parser.
-              (if (if (%py-op-is? t "-") #t
+                (rest b)))))
+        ((%py-op-is? t "@")
+          (let ((ds (%py-decos-of toks ())))
+            (let ((t2 (rest ds)))
+              (if (not (%py-name-is? (if (null? t2) () (first t2)) "def"))
+                (Err raise (lit syntax) "a decorator must be followed by a def" ())
+                (let ((r (%py-def (rest t2))))
+                  (pair
+                    (list (lit def) (first (rest (first r)))
+                      (%py-wrap-decos (first ds) (first (rest (rest (first r))))))
+                    (rest r)))))))
+        ((%py-name-is? t "def") (%py-def (rest toks)))
+        ((%py-name-is? t "return")
+          (let ((nxt (if (null? (rest toks)) () (first (rest toks)))))
+            (if (if (null? nxt) #t
+                  (if (eq? (%py-tag nxt) (lit tok-newline)) #t
+                    (%py-block? nxt)))
+              (pair (list (lit %py-return) ()) (rest toks))
+              (let ((r (%py-exprlist (rest toks))))
+                (pair (list (lit %py-return) (first r)) (rest r))))))
+        ((%py-name-is? t "pass") (pair () (rest toks)))
+        ((%py-unpack-stmt? toks) (%py-unpack-stmt toks))
+        ; A statement can BEGIN with a unary operator (`~x`, `-x` as an
+        ; expression statement); the postfix-target probe below would
+        ; refuse the op token, so these go straight to the expression
+        ; parser.
+        ((if (%py-op-is? t "-") #t
                     (if (%py-op-is? t "+") #t (%py-op-is? t "~")))
-                (%py-test toks)
-                ; ASSIGNMENT IS DECIDED BY WHAT FOLLOWS A TARGET, not by the
-                ; shape of the first token.  Parse a postfix expression -- a
-                ; name, a subscript, an attribute, a call -- and then look.
-                ; If it is not an assignment the tokens are re-parsed as a full
-                ; expression from the start, which costs a second pass over one
-                ; statement and keeps the two cases from having to agree about
-                ; precedence.
-                (let ((tgt (%py-postfix toks)))
-                  (let ((nxt (if (null? (rest tgt)) () (first (rest tgt)))))
-                    (if (%py-op-is? nxt "=")
-                      (let ((r (%py-exprlist (rest (rest tgt)))))
-                        (pair (%py-store (first tgt) (first r)) (rest r)))
-                      (let ((aug (%py-op-sym nxt %py-aug-ops)))
-                        (if (null? aug)
-                          (%py-test toks)
-                          ; `t op= v` is `t = t op v`.  The target is evaluated
-                          ; twice for a subscript, which is wrong for an
-                          ; expression with side effects and right for every
-                          ; case this handles today.
-                          (let ((r (%py-test (rest (rest tgt)))))
-                            (pair
-                              (%py-store (first tgt)
-                                (list aug (first tgt) (first r)))
-                              (rest r)))))))))))))))))))))))))))
+          (%py-test toks))
+        ; ASSIGNMENT IS DECIDED BY WHAT FOLLOWS A TARGET, not by the
+        ; shape of the first token.  Parse a postfix expression -- a
+        ; name, a subscript, an attribute, a call -- and then look.
+        ; If it is not an assignment the tokens are re-parsed as a full
+        ; expression from the start, which costs a second pass over one
+        ; statement and keeps the two cases from having to agree about
+        ; precedence.
+        (#t
+          (let ((tgt (%py-postfix toks)))
+            (let ((nxt (if (null? (rest tgt)) () (first (rest tgt)))))
+              (if (%py-op-is? nxt "=")
+                (let ((r (%py-exprlist (rest (rest tgt)))))
+                  (pair (%py-store (first tgt) (first r)) (rest r)))
+                (let ((aug (%py-op-sym nxt %py-aug-ops)))
+                  (if (null? aug)
+                    (%py-test toks)
+                    ; `t op= v` is `t = t op v`.  The target is evaluated
+                    ; twice for a subscript, which is wrong for an
+                    ; expression with side effects and right for every
+                    ; case this handles today.
+                    (let ((r (%py-test (rest (rest tgt)))))
+                      (pair
+                        (%py-store (first tgt)
+                          (list aug (first tgt) (first r)))
+                        (rest r)))))))))))))
 
 ; `else:` after an if.  `elif` is `else: if ...`, which is what Python's own
 ; grammar says it is, so it needs no separate shape.
@@ -1593,13 +1581,12 @@
 (def %py-for-names
   (fn (self toks acc)
     (let ((t (if (null? toks) () (first toks))))
-      (if (%py-name-is? t "in")
-        (pair (List reverse acc) (rest toks))
-        (if (%py-op-is? t ",")
-          (self (rest toks) acc)
-          (if (eq? (%py-tag t) (lit tok-name))
-            (self (rest toks) (pair (%py-val t) acc))
-            (Err raise (lit syntax) "expected in after a for target" ())))))))
+      (match
+        ((%py-name-is? t "in") (pair (List reverse acc) (rest toks)))
+        ((%py-op-is? t ",") (self (rest toks) acc))
+        ((eq? (%py-tag t) (lit tok-name))
+          (self (rest toks) (pair (%py-val t) acc)))
+        (#t (Err raise (lit syntax) "expected in after a for target" ()))))))
 
 (def %py-syms-of
   (fn (self names acc)
@@ -1675,25 +1662,23 @@
     (if (null? toks)
       (List reverse acc)
       (let ((t (first toks)))
-        (if (%py-op-is? t ",")
-          (self (rest toks) acc)
-          (if (%py-op-is? t "**")
-            ; `**kw` joins the name list like any other parameter, so the
-            ; locals hoist leaves it alone; the def binds it from the box.
+        (match
+          ((%py-op-is? t ",") (self (rest toks) acc))
+          ((%py-op-is? t "**")
             (let ((n (if (null? (rest toks)) () (first (rest toks)))))
               (if (not (eq? (%py-tag n) (lit tok-name)))
                 (Err raise (lit syntax) "expected a name after **" t)
-                (self (rest (rest toks)) (pair (%py-name->sym (%py-val n)) acc))))
-          (if (%py-op-is? t "*")
+                (self (rest (rest toks)) (pair (%py-name->sym (%py-val n)) acc)))))
+          ((%py-op-is? t "*")
             (let ((n (if (null? (rest toks)) () (first (rest toks)))))
               (if (not (eq? (%py-tag n) (lit tok-name)))
                 (Err raise (lit syntax) "expected a name after *" t)
                 (do
                   (%set-first! %py-rest-param (%py-name->sym (%py-val n)))
-                  (self (rest (rest toks)) (pair (%py-name->sym (%py-val n)) acc)))))
-          (if (eq? (%py-tag t) (lit tok-name))
-            (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
-            (Err raise (lit syntax) "expected a name" t)))))))))
+                  (self (rest (rest toks)) (pair (%py-name->sym (%py-val n)) acc))))))
+          ((eq? (%py-tag t) (lit tok-name))
+            (self (rest toks) (pair (%py-name->sym (%py-val t)) acc)))
+          (#t (Err raise (lit syntax) "expected a name" t)))))))
 
 ; (a b . rest) -- the parameter list with the rest name as the dotted tail.
 (def %py-dotted-params
@@ -1719,27 +1704,29 @@
           (list (List reverse names) (List reverse dflts) rest-name kw-name)
           (let ((p (first parts)))
             (let ((t (first p)))
-              (if (%py-op-is? t "**")
-                (let ((n (if (null? (rest p)) () (first (rest p)))))
-                  (if (not (eq? (%py-tag n) (lit tok-name)))
-                    (Err raise (lit syntax) "expected a name after **" t)
-                    (self (rest parts) names dflts rest-name (%py-val n))))
-              (if (%py-op-is? t "*")
-                (let ((n (if (null? (rest p)) () (first (rest p)))))
-                  (if (not (eq? (%py-tag n) (lit tok-name)))
-                    (Err raise (lit syntax) "expected a name after *" t)
-                    (self (rest parts) names dflts (%py-val n) kw-name)))
-              (if (not (eq? (%py-tag t) (lit tok-name)))
-                (Err raise (lit syntax) "expected a parameter name" t)
-              (if (null? (rest p))
-                (if (null? dflts)
-                  (self (rest parts) (pair (%py-val t) names) dflts rest-name kw-name)
-                  (Err raise (lit syntax) "non-default argument follows default argument" t))
-              (if (not (%py-op-is? (first (rest p)) "="))
-                (Err raise (lit syntax) "expected , or = after a parameter name" t)
-                (self (rest parts) (pair (%py-val t) names)
-                  (pair (pair (%py-name->sym (%py-val t)) (%py-expr-of (rest (rest p)))) dflts)
-                  rest-name kw-name)))))))))))
+              (match
+                ((%py-op-is? t "**")
+                  (let ((n (if (null? (rest p)) () (first (rest p)))))
+                    (if (not (eq? (%py-tag n) (lit tok-name)))
+                      (Err raise (lit syntax) "expected a name after **" t)
+                      (self (rest parts) names dflts rest-name (%py-val n)))))
+                ((%py-op-is? t "*")
+                  (let ((n (if (null? (rest p)) () (first (rest p)))))
+                    (if (not (eq? (%py-tag n) (lit tok-name)))
+                      (Err raise (lit syntax) "expected a name after *" t)
+                      (self (rest parts) names dflts (%py-val n) kw-name))))
+                ((not (eq? (%py-tag t) (lit tok-name)))
+                  (Err raise (lit syntax) "expected a parameter name" t))
+                ((null? (rest p))
+                  (if (null? dflts)
+                    (self (rest parts) (pair (%py-val t) names) dflts rest-name kw-name)
+                    (Err raise (lit syntax) "non-default argument follows default argument" t)))
+                ((not (%py-op-is? (first (rest p)) "="))
+                  (Err raise (lit syntax) "expected , or = after a parameter name" t))
+                (#t
+                  (self (rest parts) (pair (%py-val t) names)
+                    (pair (pair (%py-name->sym (%py-val t)) (%py-expr-of (rest (rest p)))) dflts)
+                    rest-name kw-name))))))))
     (go (%py-comma-split toks () ()) () () () ())))
 
 ; A DEFAULT IS EVALUATED ONCE, AT def TIME, into a let around the fn --
@@ -1948,12 +1935,12 @@
 (set! %py-class-methods-of
   (fn (self toks acc)
     (let ((t (%py-skip-nl toks)))
-      (if (null? t)
-        (pair (List reverse acc) t)
+      (match
+        ((null? t) (pair (List reverse acc) t))
         ; A DECORATED METHOD is the same entry with a call around its function:
         ; the decorators are collected, the def is parsed as it always was, and
         ; what goes in the alist is deco(fn) rather than fn.
-        (if (%py-op-is? (first t) "@")
+        ((%py-op-is? (first t) "@")
           (let ((ds (%py-decos-of t ())))
             (let ((t2 (rest ds)))
               (if (not (%py-name-is? (if (null? t2) () (first t2)) "def"))
@@ -1967,34 +1954,32 @@
                           (list (lit pair) (%py-val nm)
                             (%py-wrap-decos (first ds)
                               (first (rest (rest (first r))))))
-                          acc))))))))
-          (if (%py-name-is? (first t) "pass")
-            (self (rest t) acc)
-            (if (not (%py-name-is? (first t) "def"))
-              ; NAME = EXPR is a class attribute: one more entry in the same
-              ; alist the methods live in, read back unbound (runtime.x).
-              (if (if (eq? (%py-tag (first t)) (lit tok-name))
-                    (%py-op-is? (if (null? (rest t)) () (first (rest t))) "=")
-                    #f)
-                (let ((v (%py-exprlist (rest (rest t)))))
-                  (self (rest v)
-                    (pair (list (lit pair) (%py-val (first t)) (first v)) acc)))
-                ; A BARE EXPRESSION IN A CLASS BODY is evaluated and dropped,
-                ; which is how Python spells a class DOCSTRING -- the string
-                ; is the first statement of the body and nothing reads it
-                ; here.  Refusing it meant no class in this runtime could
-                ; carry documentation at all.
-                (let ((v (%py-exprlist t)))
-                  (self (rest v) acc)))
-              (let ((nm (if (null? (rest t)) () (first (rest t)))))
-                (if (not (eq? (%py-tag nm) (lit tok-name)))
-                  (Err raise (lit syntax) "expected a method name after def" ())
-                  (let ((r (%py-def (rest t))))
-                    (self (rest r)
-                      (pair
-                        (list (lit pair) (%py-val nm)
-                          (first (rest (rest (first r)))))
-                        acc))))))))))))
+                          acc)))))))))
+        ((%py-name-is? (first t) "pass") (self (rest t) acc))
+        ((not (%py-name-is? (first t) "def"))
+          (if (if (eq? (%py-tag (first t)) (lit tok-name))
+                (%py-op-is? (if (null? (rest t)) () (first (rest t))) "=")
+                #f)
+            (let ((v (%py-exprlist (rest (rest t)))))
+              (self (rest v)
+                (pair (list (lit pair) (%py-val (first t)) (first v)) acc)))
+            ; A BARE EXPRESSION IN A CLASS BODY is evaluated and dropped,
+            ; which is how Python spells a class DOCSTRING -- the string
+            ; is the first statement of the body and nothing reads it
+            ; here.  Refusing it meant no class in this runtime could
+            ; carry documentation at all.
+            (let ((v (%py-exprlist t)))
+              (self (rest v) acc))))
+        (#t
+          (let ((nm (if (null? (rest t)) () (first (rest t)))))
+            (if (not (eq? (%py-tag nm) (lit tok-name)))
+              (Err raise (lit syntax) "expected a method name after def" ())
+              (let ((r (%py-def (rest t))))
+                (self (rest r)
+                  (pair
+                    (list (lit pair) (%py-val nm)
+                      (first (rest (rest (first r)))))
+                    acc))))))))))
 
 (def %py-class-block
   (fn (_ toks)
@@ -2063,15 +2048,12 @@
     (if (null? toks)
       #f
       (let ((t (first toks)))
-        (if (eq? (%py-tag t) (lit tok-newline))
-          #f
-          (if (%py-op-is? t "=")
-            comma
-            (if (%py-op-is? t ",")
-              (self (rest toks) #t)
-              (if (eq? (%py-tag t) (lit tok-name))
-                (self (rest toks) comma)
-                #f))))))))
+        (match
+          ((eq? (%py-tag t) (lit tok-newline)) #f)
+          ((%py-op-is? t "=") comma)
+          ((%py-op-is? t ",") (self (rest toks) #t))
+          ((eq? (%py-tag t) (lit tok-name)) (self (rest toks) comma))
+          (#t #f))))))
 
 (def %py-unpack-stmt? (fn (_ toks) (%py-unpack-scan toks #f)))
 
@@ -2110,37 +2092,38 @@
 (def %py-store
   (fn (_ target value)
     (if (pair? target)
-      (if (eq? (first target) (lit %py-index))
-        (list (lit %py-setindex) (first (rest target))
-              (first (rest (rest target))) value)
-      ; `self.x = 1` is how a Python object gets its fields at all, so an
-      ; attribute is an assignable target exactly as a subscript is.
-      (if (eq? (first target) (lit %py-getattr))
-        (list (lit %py-setattr) (first (rest target))
-              (first (rest (rest target))) value)
-      ; `l[1:3] = xs` replaces that span, and may change the length
-      (if (eq? (first target) (lit %py-slice))
-        (pair (lit %py-setslice) (%py-append (rest target) (list value)))
-        (Err raise (lit syntax) "cannot assign to this target" ()))))
+      (match
+        ((eq? (first target) (lit %py-index))
+          (list (lit %py-setindex) (first (rest target))
+                (first (rest (rest target))) value))
+        ; `self.x = 1` is how a Python object gets its fields at all, so an
+        ; attribute is an assignable target exactly as a subscript is.
+        ((eq? (first target) (lit %py-getattr))
+          (list (lit %py-setattr) (first (rest target))
+                (first (rest (rest target))) value))
+        ; `l[1:3] = xs` replaces that span, and may change the length
+        ((eq? (first target) (lit %py-slice))
+          (pair (lit %py-setslice) (%py-append (rest target) (list value))))
+        (#t (Err raise (lit syntax) "cannot assign to this target" ())))
       (list (lit set!) target value))))
 
 (def %py-else
   (fn (_ toks)
     (let ((t (%py-skip-nl toks)))
-      (if (null? t)
-        (pair () t)
-        (if (%py-name-is? (first t) "else")
+      (match
+        ((null? t) (pair () t))
+        ((%py-name-is? (first t) "else")
           (let ((b (%py-block (rest t))))
-            (pair (first b) (rest b)))
-          (if (%py-name-is? (first t) "elif")
-            (let ((c (%py-test (rest t))))
-              (let ((b (%py-block (rest c))))
-                (let ((e (%py-else (rest b))))
-                  (pair
-                    (list (lit if) (list (lit %py-truthy) (first c))
-                      (first b) (first e))
-                    (rest e)))))
-            (pair () t)))))))
+            (pair (first b) (rest b))))
+        ((%py-name-is? (first t) "elif")
+          (let ((c (%py-test (rest t))))
+            (let ((b (%py-block (rest c))))
+              (let ((e (%py-else (rest b))))
+                (pair
+                  (list (lit if) (list (lit %py-truthy) (first c))
+                    (first b) (first e))
+                  (rest e))))))
+        (#t (pair () t))))))
 
 ; `def NAME ( params ) : BLOCK`
 
@@ -2287,14 +2270,15 @@
   (fn (self toks skip-block)
     (if (null? toks) #f
       (let ((t (first toks)))
-        (if (%py-name-is? t "yield") #t
-          (if (if (%py-name-is? t "def") #t (%py-name-is? t "class"))
-            (self (rest toks) #t)
-            (if (eq? (%py-tag t) (lit tok-group))
-              (if (self (%py-group-of t) #f) #t (self (rest toks) skip-block))
-              (if (%py-block? t)
-                (if (if skip-block #f (self (%py-block-toks t) #f)) #t (self (rest toks) #f))
-                (self (rest toks) skip-block)))))))))
+        (match
+          ((%py-name-is? t "yield") #t)
+          ((if (%py-name-is? t "def") #t (%py-name-is? t "class"))
+            (self (rest toks) #t))
+          ((eq? (%py-tag t) (lit tok-group))
+            (if (self (%py-group-of t) #f) #t (self (rest toks) skip-block)))
+          ((%py-block? t)
+            (if (if skip-block #f (self (%py-block-toks t) #f)) #t (self (rest toks) #f)))
+          (#t (self (rest toks) skip-block)))))))
 
 (def %py-lets
   (fn (self syms acc)
@@ -2370,13 +2354,14 @@
     (if (null? toks)
       (List reverse acc)
       (let ((t (first toks)))
-        (if (eq? (%py-tag t) (lit tok-name))
-          (self (rest toks) (pair (%py-val t) acc))
-          (if (eq? (%py-tag t) (lit tok-group))
-            (self (rest toks) (%py-append (List reverse (self (%py-group-of t) ())) acc))
-          (if (%py-block? t)
-            (self (rest toks) (%py-append (List reverse (self (%py-block-toks t) ())) acc))
-            (self (rest toks) acc))))))))
+        (match
+          ((eq? (%py-tag t) (lit tok-name))
+            (self (rest toks) (pair (%py-val t) acc)))
+          ((eq? (%py-tag t) (lit tok-group))
+            (self (rest toks) (%py-append (List reverse (self (%py-group-of t) ())) acc)))
+          ((%py-block? t)
+            (self (rest toks) (%py-append (List reverse (self (%py-block-toks t) ())) acc)))
+          (#t (self (rest toks) acc)))))))
 
 ; Every name the program BINDS: assignment targets, def names, parameters.
 (def %py-bound-names
@@ -2384,26 +2369,23 @@
     (if (null? toks)
       (List reverse acc)
       (let ((t (first toks)))
-        (if (%py-for-target? toks)
-          (let ((u (%py-for-names (rest toks) ())))
-            (self (rest u) (%py-append (List reverse (first u)) acc)))
-        (if (%py-name-is? t "as")
-          ; `except ValueError as e` binds e, and the hoisting scan is what
-          ; turns that into a def -- without this the set! below has nothing
-          ; to store into.
-          (let ((n (if (null? (rest toks)) () (first (rest toks)))))
-            (self (rest (rest toks))
-              (if (eq? (%py-tag n) (lit tok-name)) (pair (%py-val n) acc) acc)))
-        (if (%py-name-is? t "def")
-          ; the def name, then its parameters up to the closing paren
-          (let ((n (if (null? (rest toks)) () (first (rest toks)))))
-            (self (rest (rest toks))
-              (if (eq? (%py-tag n) (lit tok-name)) (pair (%py-val n) acc) acc)))
-          (if (if (eq? (%py-tag t) (lit tok-name))
+        (match
+          ((%py-for-target? toks)
+            (let ((u (%py-for-names (rest toks) ())))
+              (self (rest u) (%py-append (List reverse (first u)) acc))))
+          ((%py-name-is? t "as")
+            (let ((n (if (null? (rest toks)) () (first (rest toks)))))
+              (self (rest (rest toks))
+                (if (eq? (%py-tag n) (lit tok-name)) (pair (%py-val n) acc) acc))))
+          ((%py-name-is? t "def")
+            (let ((n (if (null? (rest toks)) () (first (rest toks)))))
+              (self (rest (rest toks))
+                (if (eq? (%py-tag n) (lit tok-name)) (pair (%py-val n) acc) acc))))
+          ((if (eq? (%py-tag t) (lit tok-name))
                 (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
-            (self (rest toks) (pair (%py-val t) acc))
-            (self (rest toks) acc)))))))))
+            (self (rest toks) (pair (%py-val t) acc)))
+          (#t (self (rest toks) acc)))))))
 
 (def %py-assign-targets
   (fn (self toks acc)
@@ -2414,36 +2396,31 @@
         ; Python, and the body is a nested token now -- a scan that stayed at
         ; the top level would hoist nothing from any compound statement.  Def
         ; bodies are still skipped below: those targets are the function's own.
-        (if (%py-block? t)
-          (self (rest toks) (%py-append (List reverse (self (%py-block-toks t) ())) acc))
-        (if (%py-for-target? toks)
-          (let ((u (%py-for-names (rest toks) ())))
-            (self (rest u) (%py-append (List reverse (%py-syms-of (first u) ())) acc)))
-        (if (%py-block? t)
-          (self (rest toks) (%py-append (List reverse (self (%py-block-toks t) ())) acc))
-        (if (%py-unpack-stmt? toks)
-          ; every name on the left of `a, b = ...` is bound by it
-          (let ((u (%py-unpack-names toks ())))
-            (self (rest u) (%py-append (List reverse (first u)) acc)))
-        (if (%py-name-is? t "class")
-          ; `class Foo:` binds Foo, and this scan is what hoists it.
-          (let ((n (if (null? (rest toks)) () (first (rest toks)))))
+        (match
+          ((%py-block? t)
+            (self (rest toks) (%py-append (List reverse (self (%py-block-toks t) ())) acc)))
+          ((%py-for-target? toks)
+            (let ((u (%py-for-names (rest toks) ())))
+              (self (rest u) (%py-append (List reverse (%py-syms-of (first u) ())) acc))))
+          ((%py-block? t)
+            (self (rest toks) (%py-append (List reverse (self (%py-block-toks t) ())) acc)))
+          ((%py-unpack-stmt? toks)
+            (let ((u (%py-unpack-names toks ())))
+              (self (rest u) (%py-append (List reverse (first u)) acc))))
+          ((%py-name-is? t "class")
+            (let ((n (if (null? (rest toks)) () (first (rest toks)))))
+              (self (rest (rest toks))
+                (if (eq? (%py-tag n) (lit tok-name))
+                  (pair (%py-name->sym (%py-val n)) acc) acc))))
+          ((%py-as-target? toks)
             (self (rest (rest toks))
-              (if (eq? (%py-tag n) (lit tok-name))
-                (pair (%py-name->sym (%py-val n)) acc) acc)))
-        (if (%py-as-target? toks)
-          ; `except ValueError as e` binds e as surely as an assignment does,
-          ; and this is the scan that emits the hoisted defs -- the other one
-          ; only keeps the undefined-name check from shimming it.
-          (self (rest (rest toks))
-            (pair (%py-name->sym (%py-val (first (rest toks)))) acc))
-        (if (%py-name-is? t "def")
-          (self (%py-skip-def (rest toks) 0) acc)
-          (if (if (eq? (%py-tag t) (lit tok-name))
+              (pair (%py-name->sym (%py-val (first (rest toks)))) acc)))
+          ((%py-name-is? t "def") (self (%py-skip-def (rest toks) 0) acc))
+          ((if (eq? (%py-tag t) (lit tok-name))
                 (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
-            (self (rest toks) (pair (%py-name->sym (%py-val t)) acc))
-            (self (rest toks) acc)))))))))))))
+            (self (rest toks) (pair (%py-name->sym (%py-val t)) acc)))
+          (#t (self (rest toks) acc)))))))
 
 ; The name after `as` in an except clause.
 (def %py-as-target?

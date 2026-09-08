@@ -135,49 +135,54 @@
 
 (def %py-add
   (fn (_ a b)
-    (if (if (%py-obj-is a) #t (%py-obj-is b))
-      (%py-binop a b "__add__" "__radd__" "+")
-    (if (if (%py-view-is a) #t (if (%py-view-is b) #t (if (%py-dict? a) #t (%py-dict? b))))
-      (Err raise (lit type) "unsupported operand type(s) for +" ())
-    (if (%py-list? a)
-      (if (%py-list? b)
-        (%py-list-new (%py-list-cat (%py-list-elems a) (%py-list-elems b)))
-        (Err raise (lit type) "can only concatenate list to list" ()))
-    (if (%py-list? b)
-      (Err raise (lit type) "unsupported operand type(s) for +" ())
-    (if (%py-bytes-is a)
-      (if (%py-bytes-is b)
-        (%py-bytes-new (Str8 append (%py-bytes-str a) (%py-bytes-str b)))
-        (Err raise (lit type) "can't concat to bytes" ()))
-    (if (%py-bytes-is b)
-      (Err raise (lit type) "can't concat bytes to non-bytes" ())
-    (if (str? a)
-      (if (str? b)
-        (Str8 append a b)
-        (Err raise (lit type) "can only concatenate str to str" ()))
-      (if (str? b)
-        ; `1 + "a"` is a TypeError in Python, not a coercion.  Without this it
-        ; reached x's `+` with a string operand and answered a number.
-        (Err raise (lit type) "unsupported operand type(s) for +" ())
-        ; Lists concatenate through PY-LIST's own `+` op, which the engine
-        ; dispatches from here.  Bools are ints here too: 1j + True.
-        (if (if (eq? (%py-typeof-prim a) %py-th-complex) #t
+    (match
+      ((if (%py-obj-is a) #t (%py-obj-is b))
+        (%py-binop a b "__add__" "__radd__" "+"))
+      ((match
+         ((%py-view-is a) #t)
+         ((%py-view-is b) #t)
+         ((%py-dict? a) #t)
+         (#t (%py-dict? b)))
+        (Err raise (lit type) "unsupported operand type(s) for +" ()))
+      ((%py-list? a)
+        (if (%py-list? b)
+          (%py-list-new (%py-list-cat (%py-list-elems a) (%py-list-elems b)))
+          (Err raise (lit type) "can only concatenate list to list" ())))
+      ((%py-list? b)
+        (Err raise (lit type) "unsupported operand type(s) for +" ()))
+      ((%py-bytes-is a)
+        (if (%py-bytes-is b)
+          (%py-bytes-new (Str8 append (%py-bytes-str a) (%py-bytes-str b)))
+          (Err raise (lit type) "can't concat to bytes" ())))
+      ((%py-bytes-is b)
+        (Err raise (lit type) "can't concat bytes to non-bytes" ()))
+      ((str? a)
+        (if (str? b)
+          (Str8 append a b)
+          (Err raise (lit type) "can only concatenate str to str" ())))
+      ((str? b)
+        (Err raise (lit type) "unsupported operand type(s) for +" ()))
+      ; Lists concatenate through PY-LIST's own `+` op, which the engine
+      ; dispatches from here.  Bools are ints here too: 1j + True.
+      ((if (eq? (%py-typeof-prim a) %py-th-complex) #t
               (eq? (%py-typeof-prim b) %py-th-complex))
-          (%py-cx-arith a b "+" 0)
-          (+ (if (eq? a #t) 1 (if (eq? a #f) 0 a))
-             (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))))))))))
+        (%py-cx-arith a b "+" 0))
+      (#t
+        (+ (if (eq? a #t) 1 (if (eq? a #f) 0 a))
+           (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))
 
 (def %py-sub
   (fn (_ a b)
-    (if (if (%py-obj-is a) #t (%py-obj-is b))
-      (%py-binop a b "__sub__" "__rsub__" "-")
-    (if (if (%py-set-is a) #t (%py-set-is b))
-      (%py-set-sub a b)
-    (if (if (eq? (%py-typeof-prim a) %py-th-complex) #t
+    (match
+      ((if (%py-obj-is a) #t (%py-obj-is b))
+        (%py-binop a b "__sub__" "__rsub__" "-"))
+      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-sub a b))
+      ((if (eq? (%py-typeof-prim a) %py-th-complex) #t
           (eq? (%py-typeof-prim b) %py-th-complex))
-      (%py-cx-arith a b "-" 1)
-      (- (if (eq? a #t) 1 (if (eq? a #f) 0 a))
-         (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))))
+        (%py-cx-arith a b "-" 1))
+      (#t
+        (- (if (eq? a #t) 1 (if (eq? a #f) 0 a))
+           (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))
 
 ; THE TYPE HANDLES, EARLY: the arithmetic seams below consult them, and
 ; %py-f-2p64 is computed through %py-mul at LOAD time -- so these must be
@@ -209,10 +214,11 @@
       (do
         (def x (if (eq? (%py-typeof-prim a) %py-th-big) (* 1.0 a) a))
         (def y (if (eq? (%py-typeof-prim b) %py-th-big) (* 1.0 b) b))
-        (if (= code 0) (+ x y)
-        (if (= code 1) (- x y)
-        (if (= code 2) (* x y)
-          (/ x y))))))))
+        (match
+          ((= code 0) (+ x y))
+          ((= code 1) (- x y))
+          ((= code 2) (* x y))
+          (#t (/ x y)))))))
 
 ; The shifts: ints only, and >> FLOORS for a negative left operand the way
 ; Python does -- Num quotient truncates, so the floor is stated.
@@ -256,29 +262,28 @@
 
 (def %py-mul
   (fn (_ a b)
-    (if (if (%py-obj-is a) #t (%py-obj-is b))
-      (%py-binop a b "__mul__" "__rmul__" "*")
-    (if (if (%py-list? a) #t (%py-list? b))
-      (let ((l (if (%py-list? a) a b)))
-        (let ((k (if (%py-list? a) b a)))
-          (if (not (eq? (%py-num-kind (%py-boolnorm k)) (lit int)))
-            (Err raise (lit type) "can't multiply sequence by non-int" ())
-            (%py-list-new (%py-els-repeat (%py-list-elems l) (%py-boolnorm k) ())))))
-    (if (%py-bytes-is a)
-      (%py-bytes-new (%py-str-repeat (%py-bytes-str a) b))
-    (if (%py-bytes-is b)
-      (%py-bytes-new (%py-str-repeat (%py-bytes-str b) a))
-    (if (str? a)
-      (if (str? b)
-        (Err raise (lit type) "can't multiply sequence by non-int" ())
-        (%py-str-repeat a b))
-      (if (str? b)
-        (%py-str-repeat b a)
-        (if (if (eq? (%py-typeof-prim a) %py-th-complex) #t
+    (match
+      ((if (%py-obj-is a) #t (%py-obj-is b))
+        (%py-binop a b "__mul__" "__rmul__" "*"))
+      ((if (%py-list? a) #t (%py-list? b))
+        (let ((l (if (%py-list? a) a b)))
+          (let ((k (if (%py-list? a) b a)))
+            (if (not (eq? (%py-num-kind (%py-boolnorm k)) (lit int)))
+              (Err raise (lit type) "can't multiply sequence by non-int" ())
+              (%py-list-new (%py-els-repeat (%py-list-elems l) (%py-boolnorm k) ()))))))
+      ((%py-bytes-is a) (%py-bytes-new (%py-str-repeat (%py-bytes-str a) b)))
+      ((%py-bytes-is b) (%py-bytes-new (%py-str-repeat (%py-bytes-str b) a)))
+      ((str? a)
+        (if (str? b)
+          (Err raise (lit type) "can't multiply sequence by non-int" ())
+          (%py-str-repeat a b)))
+      ((str? b) (%py-str-repeat b a))
+      ((if (eq? (%py-typeof-prim a) %py-th-complex) #t
               (eq? (%py-typeof-prim b) %py-th-complex))
-          (%py-cx-arith a b "*" 2)
-          (* (if (eq? a #t) 1 (if (eq? a #f) 0 a))
-             (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))))))))
+        (%py-cx-arith a b "*" 2))
+      (#t
+        (* (if (eq? a #t) 1 (if (eq? a #f) 0 a))
+           (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))
 
 ; TRUE DIVISION ALWAYS PRODUCES A FLOAT.  `1 / 2` is 0.5 in Python 3 and an
 ; exact 1/2 in x, and that difference is the reason this bundle declares xenon
@@ -295,14 +300,14 @@
   (fn (_ a0 b0)
     (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
     (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
-    (if (if (%py-obj-is a) #t (%py-obj-is b))
-      (%py-binop a b "__truediv__" "__rtruediv__" "/")
-    (if (= b 0)
-      (Err raise (lit zero-division) "division by zero" ())
-      (if (if (eq? (%py-typeof-prim a) %py-th-complex) #t
+    (match
+      ((if (%py-obj-is a) #t (%py-obj-is b))
+        (%py-binop a b "__truediv__" "__rtruediv__" "/"))
+      ((= b 0) (Err raise (lit zero-division) "division by zero" ()))
+      ((if (eq? (%py-typeof-prim a) %py-th-complex) #t
             (eq? (%py-typeof-prim b) %py-th-complex))
-        (%py-cx-arith a b "/" 3)
-        (/ (* a 1.0) b))))))
+        (%py-cx-arith a b "/" 3))
+      (#t (/ (* a 1.0) b)))))
 
 ; FLOOR DIVISION OF FLOATS IS A FLOAT: 1.0 // 2 is 0.0 in Python, floor of
 ; the true quotient, where Num quotient wants exact operands.
@@ -354,27 +359,29 @@
       (let ((v (List ref i more))) (if (same? v %py-dflt) dflt v)))))
 (def %py-floordiv
   (fn (_ a b)
-    (if (if (%py-obj-is a) #t (%py-obj-is b))
-      (%py-binop a b "__floordiv__" "__rfloordiv__" "//")
-    (if (= b 0)
-      (Err raise (lit zero-division) "integer division or modulo by zero" ())
-      (if (if (%py-complex-is a) #t (%py-complex-is b))
-        (Err raise (lit type) "can't take floor of complex number." ())
-      (if (if (%py-float-is a) #t (%py-float-is b))
-        (Float floor (/ (* a 1.0) b))
-        ; PYTHON FLOORS, `Num quotient` TRUNCATES: -7 // 2 is -4, not -3.
-        ; TRUNCATE THEN ADJUST, rather than subtracting a modulo: for a
-        ; non-negative numerator this is EXACTLY `Num quotient`, the value
-        ; and the representation callers had before floors were fixed.  The
-        ; subtracting form handed back a bigint zero under the promoting
-        ; lane, and python/format.x's digit loop tests its counter with
-        ; eq?, so base conversion span forever and took the CI host with it.
+    (match
+      ((if (%py-obj-is a) #t (%py-obj-is b))
+        (%py-binop a b "__floordiv__" "__rfloordiv__" "//"))
+      ((= b 0)
+        (Err raise (lit zero-division) "integer division or modulo by zero" ()))
+      ((if (%py-complex-is a) #t (%py-complex-is b))
+        (Err raise (lit type) "can't take floor of complex number." ()))
+      ((if (%py-float-is a) #t (%py-float-is b))
+        (Float floor (/ (* a 1.0) b)))
+      ; PYTHON FLOORS, `Num quotient` TRUNCATES: -7 // 2 is -4, not -3.
+      ; TRUNCATE THEN ADJUST, rather than subtracting a modulo: for a
+      ; non-negative numerator this is EXACTLY `Num quotient`, the value
+      ; and the representation callers had before floors were fixed.  The
+      ; subtracting form handed back a bigint zero under the promoting
+      ; lane, and python/format.x's digit loop tests its counter with
+      ; eq?, so base conversion span forever and took the CI host with it.
+      (#t
         (let ((q (Num quotient a b)))
           (if (if (not (= (- a (* q b)) 0))
                 (if (< (- a (* q b)) 0) (> b 0) (< b 0))
                 #f)
             (- q 1)
-            q))))))))
+            q))))))
 ; A STRING ON THE LEFT OF % IS FORMATTING, not arithmetic -- str.__mod__ --
 ; and the check comes before the zero test because the right operand of a
 ; format is a tuple as often as a number.
@@ -382,15 +389,14 @@
   (fn (_ a b)
     ; str.__mod__ answers first: "%d" % obj formats the object, it does not
     ; ask the object for __rmod__
-    (if (str? a)
-      (%py-format a b)
-    (if (if (%py-obj-is a) #t (%py-obj-is b))
-      (%py-binop a b "__mod__" "__rmod__" "%")
-      (if (if (%py-complex-is a) #t (%py-complex-is b))
-        (Err raise (lit type) "can't mod complex numbers." ())
-      (if (= b 0)
-        (Err raise (lit zero-division) "integer modulo by zero" ())
-        (Num modulo a b)))))))
+    (match
+      ((str? a) (%py-format a b))
+      ((if (%py-obj-is a) #t (%py-obj-is b))
+        (%py-binop a b "__mod__" "__rmod__" "%"))
+      ((if (%py-complex-is a) #t (%py-complex-is b))
+        (Err raise (lit type) "can't mod complex numbers." ()))
+      ((= b 0) (Err raise (lit zero-division) "integer modulo by zero" ()))
+      (#t (Num modulo a b)))))
 ; NEVER HAND Num expt A NEGATIVE EXPONENT.  Its parameter is documented
 ; "Non-negative integer exponent" and nothing enforces it: with exp < 0 the
 ; recursion never reaches 0 and SQUARES THE BASE on every even step, so it
@@ -426,26 +432,26 @@
 
 (def %py-pow
   (fn (_ a b)
-    (if (if (%py-obj-is a) #t (%py-obj-is b))
-      (%py-binop a b "__pow__" "__rpow__" "** or pow()")
-    (if (if (%py-complex-is a) #t (%py-complex-is b))
-      (%py-cpow (%py-complex-of a) (%py-complex-of b))
-    ; a negative real base to a fractional power is a COMPLEX in Python 3
-    (if (if (< (if (eq? a #t) 1 (if (eq? a #f) 0 a)) 0)
+    (match
+      ((if (%py-obj-is a) #t (%py-obj-is b))
+        (%py-binop a b "__pow__" "__rpow__" "** or pow()"))
+      ((if (%py-complex-is a) #t (%py-complex-is b))
+        (%py-cpow (%py-complex-of a) (%py-complex-of b)))
+      ; a negative real base to a fractional power is a COMPLEX in Python 3
+      ((if (< (if (eq? a #t) 1 (if (eq? a #f) 0 a)) 0)
           (if (%py-float-is b) (not (= b (Float floor b))) #f)
           #f)
-      (%py-cpow (%py-complex-of a) (%py-complex-of b))
-    (if (if (%py-float-is a) #t (%py-float-is b))
-      (do
-        (def fa (* (%py-boolnorm a) 1.0))
-        (def fb (* (%py-boolnorm b) 1.0))
-        (if (if (= fa 0.0) (< fb 0.0) #f)
-          (Err raise (lit zero-division)
-            "0.0 cannot be raised to a negative power" ())
-          (Float pow fa fb)))
-      (if (< b 0)
-        (/ 1.0 (Num expt a (- 0 b)))
-        (Num expt a b))))))))
+        (%py-cpow (%py-complex-of a) (%py-complex-of b)))
+      ((if (%py-float-is a) #t (%py-float-is b))
+        (do
+          (def fa (* (%py-boolnorm a) 1.0))
+          (def fb (* (%py-boolnorm b) 1.0))
+          (if (if (= fa 0.0) (< fb 0.0) #f)
+            (Err raise (lit zero-division)
+              "0.0 cannot be raised to a negative power" ())
+            (Float pow fa fb))))
+      ((< b 0) (/ 1.0 (Num expt a (- 0 b))))
+      (#t (Num expt a b)))))
 (def %py-neg
   (fn (_ a)
     (if (%py-obj-is a)
@@ -511,14 +517,14 @@
 
 (def %py-bitor
   (fn (_ a b)
-    (if (if (%py-dict? a) (%py-dict? b) #f)
-      (let ((d (%py-dict-new (%py-dict-copy (%py-dict-entries a)))))
-        (%seq (%py-dict-merge! d b) d))
-    (if (if (%py-set-is a) #t (%py-set-is b))
-      (%py-set-or a b)
-    (if (if (%py-obj-is a) #t (%py-obj-is b))
-      (%py-binop a b "__or__" "__ror__" "|")
-      (%py-bit2 a b "|" (fn (_ x y) (if x #t y))))))))
+    (match
+      ((if (%py-dict? a) (%py-dict? b) #f)
+        (let ((d (%py-dict-new (%py-dict-copy (%py-dict-entries a)))))
+          (%seq (%py-dict-merge! d b) d)))
+      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-or a b))
+      ((if (%py-obj-is a) #t (%py-obj-is b))
+        (%py-binop a b "__or__" "__ror__" "|"))
+      (#t (%py-bit2 a b "|" (fn (_ x y) (if x #t y)))))))
 (def %py-bitxor
   (fn (_ a b)
     (if (if (%py-set-is a) #t (%py-set-is b))
@@ -544,39 +550,37 @@
 
 (def %py-in
   (fn (_ a b)
-    (if (%py-obj-is b)
-      (let ((m (%py-dunder b "__contains__")))
-        (if (null? m)
-          (%py-in-walk a (%py-iter-elems b))
-          (%py-truthy (m a))))
-    (if (%py-bytes-is b)
-      (if (%py-bytes-is a)
-        (Str8 includes? (%py-bytes-str a) (%py-bytes-str b))
-        ; AN INT IN A BYTES IS A BYTE VALUE, not a type error: bytes are a
-        ; sequence OF ints in Python, so `0 in b"1234"` asks whether any byte
-        ; is zero and answers False rather than refusing.
-        (if (eq? (%py-num-kind (%py-boolnorm a)) (lit int))
-          (let ((bs (%py-bytes-str b)))
-            (%py-in-walk (%py-boolnorm a) (%py-byte-list bs (- (Str8 length bs) 1) ())))
-          (Err raise (lit type) "a bytes-like object is required" ())))
-    (if (str? b)
-      (if (str? a)
-        (Str8 includes? a b)
-        (Err raise (lit type)
-          "'in <string>' requires string as left operand" ()))
-      (if (%py-set-is b)
-        (%py-set-has? a (%py-set-elems b))
-      (if (%py-list? b)
-        (%py-in-walk a (%py-list-elems b))
-        (if (%py-tuple-is b)
-          (%py-in-walk a (%py-tuple-elems b))
-          (if (%py-dict? b)
-            (do
-              (def keys
-                (fn (self es acc)
-                  (if (null? es) acc (self (rest es) (pair (first (first es)) acc)))))
-              (%py-in-walk a (keys (%py-dict-entries b) ())))
-            (Err raise (lit type) "argument is not iterable" ()))))))))))
+    (match
+      ((%py-obj-is b)
+        (let ((m (%py-dunder b "__contains__")))
+          (if (null? m)
+            (%py-in-walk a (%py-iter-elems b))
+            (%py-truthy (m a)))))
+      ((%py-bytes-is b)
+        (if (%py-bytes-is a)
+          (Str8 includes? (%py-bytes-str a) (%py-bytes-str b))
+          ; AN INT IN A BYTES IS A BYTE VALUE, not a type error: bytes are a
+          ; sequence OF ints in Python, so `0 in b"1234"` asks whether any byte
+          ; is zero and answers False rather than refusing.
+          (if (eq? (%py-num-kind (%py-boolnorm a)) (lit int))
+            (let ((bs (%py-bytes-str b)))
+              (%py-in-walk (%py-boolnorm a) (%py-byte-list bs (- (Str8 length bs) 1) ())))
+            (Err raise (lit type) "a bytes-like object is required" ()))))
+      ((str? b)
+        (if (str? a)
+          (Str8 includes? a b)
+          (Err raise (lit type)
+            "'in <string>' requires string as left operand" ())))
+      ((%py-set-is b) (%py-set-has? a (%py-set-elems b)))
+      ((%py-list? b) (%py-in-walk a (%py-list-elems b)))
+      ((%py-tuple-is b) (%py-in-walk a (%py-tuple-elems b)))
+      ((%py-dict? b)
+        (do
+          (def keys
+            (fn (self es acc)
+              (if (null? es) acc (self (rest es) (pair (first (first es)) acc)))))
+          (%py-in-walk a (keys (%py-dict-entries b) ()))))
+      (#t (Err raise (lit type) "argument is not iterable" ())))))
 
 ; --- Numeric builtins --------------------------------------------------------
 ; abs clears the SIGN BIT for floats (the arithmetic spelling turns -0.0
@@ -591,13 +595,11 @@
 (def %py-abs-num
   (fn (_ v0)
     (def v (%py-boolnorm v0))
-    (if (%py-float-is v)
-      (if (< (first v) 0) (- 0.0 v) v)
-      (if (%py-complex-is v)
-        (Complex magnitude v)
-        (if (eq? (%py-num-kind v) (lit int))
-          (if (< v 0) (- 0 v) v)
-          (Err raise (lit type) "bad operand type for abs()" ()))))))
+    (match
+      ((%py-float-is v) (if (< (first v) 0) (- 0.0 v) v))
+      ((%py-complex-is v) (Complex magnitude v))
+      ((eq? (%py-num-kind v) (lit int)) (if (< v 0) (- 0 v) v))
+      (#t (Err raise (lit type) "bad operand type for abs()" ())))))
 
 ; rounding an int to a negative number of digits: half goes to EVEN, so
 ; round(125, -1) is 120 and round(15, -1) is 20
@@ -606,9 +608,11 @@
     (def p (%py-ipow10 (- 0 nd) 1))
     (def q (Num quotient (- v (Num modulo v p)) p))
     (def rr (Num modulo v p))
-    (if (> (* rr 2) p) (* (+ q 1) p)
-      (if (< (* rr 2) p) (* q p)
-        (if (= (Num modulo q 2) 0) (* q p) (* (+ q 1) p))))))
+    (match
+      ((> (* rr 2) p) (* (+ q 1) p))
+      ((< (* rr 2) p) (* q p))
+      ((= (Num modulo q 2) 0) (* q p))
+      (#t (* (+ q 1) p)))))
 (def %py-ipow10
   (fn (self n acc) (if (= n 0) acc (self (- n 1) (* acc 10)))))
 
@@ -717,13 +721,15 @@
           (let ((c (%py-char-code (%str-ref s i))))
             (self (+ i 1)
               (Str8 append acc
-                (if (= c 92) "\\\\"
-                (if (= c q) (Str8 append "\\" (Str8 sub i 1 s))
-                (if (= c 10) "\\n"
-                (if (= c 13) "\\r"
-                (if (= c 9) "\\t"
-                (if (if (< c 32) #t (>= c 127)) (Str8 append "\\x" (%py-hex2 c))
-                  (Str8 sub i 1 s)))))))))))))
+                (match
+                  ((= c 92) "\\\\")
+                  ((= c q) (Str8 append "\\" (Str8 sub i 1 s)))
+                  ((= c 10) "\\n")
+                  ((= c 13) "\\r")
+                  ((= c 9) "\\t")
+                  ((if (< c 32) #t (>= c 127))
+                    (Str8 append "\\x" (%py-hex2 c)))
+                  (#t (Str8 sub i 1 s)))))))))
     (let ((qs (Str8 sub (if (= q 34) 1 0) 1 "'\"")))
       (Str8 append "b" (Str8 append qs (Str8 append (go 0 "") qs))))))
 
@@ -734,10 +740,12 @@
 ; str method, is Python's TypeError.
 (def %py-bytes-wrap
   (fn (self v)
-    (if (str? v) (%py-bytes-new v)
-      (if (%py-list? v) (%py-list-new (%py-bytes-wrap-all (%py-list-elems v)))
-        (if (%py-tuple-is v) (%py-tuple-new (%py-bytes-wrap-all (%py-tuple-elems v)))
-          v)))))
+    (match
+      ((str? v) (%py-bytes-new v))
+      ((%py-list? v) (%py-list-new (%py-bytes-wrap-all (%py-list-elems v))))
+      ((%py-tuple-is v)
+        (%py-tuple-new (%py-bytes-wrap-all (%py-tuple-elems v))))
+      (#t v))))
 (def %py-bytes-wrap-all
   (fn (self l) (if (null? l) () (pair (%py-bytes-wrap (first l)) (self (rest l))))))
 (def %py-bytes-unwrap-seq
@@ -754,11 +762,15 @@
     (if (null? args) ()
       (let ((a (first args)))
         (pair
-          (if (%py-bytes-is a) (%py-bytes-str a)
-            (if (str? a) (Err raise (lit type) "a bytes-like object is required, not 'str'" ())
-              (if (%py-list? a) (%py-list-new (%py-bytes-unwrap-seq (%py-list-elems a)))
-                (if (%py-tuple-is a) (%py-tuple-new (%py-bytes-unwrap-seq (%py-tuple-elems a)))
-                  a))))
+          (match
+            ((%py-bytes-is a) (%py-bytes-str a))
+            ((str? a)
+              (Err raise (lit type) "a bytes-like object is required, not 'str'" ()))
+            ((%py-list? a)
+              (%py-list-new (%py-bytes-unwrap-seq (%py-list-elems a))))
+            ((%py-tuple-is a)
+              (%py-tuple-new (%py-bytes-unwrap-seq (%py-tuple-elems a))))
+            (#t a))
           (self (rest args)))))))
 (def %py-bytes-attr
   (fn (_ b name)
@@ -898,22 +910,23 @@
 (def %py-seq? (fn (_ v) (if (%py-list? v) #t (%py-tuple-is v))))
 (def %py-seq-cmp
   (fn (self a b)
-    (if (null? a) (if (null? b) 0 (- 0 1))
-      (if (null? b) 1
-        (if (%py-truthy (%py-eq (first a) (first b)))
-          (self (rest a) (rest b))
-          (if (%py-truthy (%py-lt (first a) (first b))) (- 0 1) 1))))))
+    (match
+      ((null? a) (if (null? b) 0 (- 0 1)))
+      ((null? b) 1)
+      ((%py-truthy (%py-eq (first a) (first b))) (self (rest a) (rest b)))
+      ((%py-truthy (%py-lt (first a) (first b))) (- 0 1))
+      (#t 1))))
 
 (def %py-lt
   (fn (_ a b)
-    (if (if (%py-seq? a) (%py-seq? b) #f)
-      (< (%py-seq-cmp (%py-seq-of a) (%py-seq-of b)) 0)
-    (if (if (%py-set-is a) #t (%py-set-is b))
-      (%py-set-cmp a b "<")
-    (if (if (%py-obj-is a) #t (%py-obj-is b))
-      (let ((r (%py-cmp2 a b "__lt__" "__gt__")))
-        (if (eq? r %py-NotImplemented) (%py-ord-refuse "<") r))
-    (%py-lt-num a b))))))
+    (match
+      ((if (%py-seq? a) (%py-seq? b) #f)
+        (< (%py-seq-cmp (%py-seq-of a) (%py-seq-of b)) 0))
+      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b "<"))
+      ((if (%py-obj-is a) #t (%py-obj-is b))
+        (let ((r (%py-cmp2 a b "__lt__" "__gt__")))
+          (if (eq? r %py-NotImplemented) (%py-ord-refuse "<") r)))
+      (#t (%py-lt-num a b)))))
 (def %py-lt-num
   (fn (_ a b)
     (%py-cmp-refuse a b "<")
@@ -923,14 +936,14 @@
          (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
 (def %py-gt
   (fn (_ a b)
-    (if (if (%py-seq? a) (%py-seq? b) #f)
-      (> (%py-seq-cmp (%py-seq-of a) (%py-seq-of b)) 0)
-    (if (if (%py-set-is a) #t (%py-set-is b))
-      (%py-set-cmp a b ">")
-    (if (if (%py-obj-is a) #t (%py-obj-is b))
-      (let ((r (%py-cmp2 a b "__gt__" "__lt__")))
-        (if (eq? r %py-NotImplemented) (%py-ord-refuse ">") r))
-    (%py-gt-num a b))))))
+    (match
+      ((if (%py-seq? a) (%py-seq? b) #f)
+        (> (%py-seq-cmp (%py-seq-of a) (%py-seq-of b)) 0))
+      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b ">"))
+      ((if (%py-obj-is a) #t (%py-obj-is b))
+        (let ((r (%py-cmp2 a b "__gt__" "__lt__")))
+          (if (eq? r %py-NotImplemented) (%py-ord-refuse ">") r)))
+      (#t (%py-gt-num a b)))))
 (def %py-gt-num
   (fn (_ a b)
     (%py-cmp-refuse a b ">")
@@ -940,24 +953,24 @@
          (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
 (def %py-le
   (fn (_ a b)
-    (if (if (%py-set-is a) #t (%py-set-is b))
-      (%py-set-cmp a b "<=")
-    (if (if (%py-obj-is a) #t (%py-obj-is b))
-      (let ((r (%py-cmp2 a b "__le__" "__ge__")))
-        (if (eq? r %py-NotImplemented) (%py-ord-refuse "<=") r))
-    (if (if (str? a) (str? b) #f)
-      (<= (%py-strcmp a b 0) 0)
-      (if (%py-lt a b) #t (%py-eq a b)))))))
+    (match
+      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b "<="))
+      ((if (%py-obj-is a) #t (%py-obj-is b))
+        (let ((r (%py-cmp2 a b "__le__" "__ge__")))
+          (if (eq? r %py-NotImplemented) (%py-ord-refuse "<=") r)))
+      ((if (str? a) (str? b) #f) (<= (%py-strcmp a b 0) 0))
+      ((%py-lt a b) #t)
+      (#t (%py-eq a b)))))
 (def %py-ge
   (fn (_ a b)
-    (if (if (%py-set-is a) #t (%py-set-is b))
-      (%py-set-cmp a b ">=")
-    (if (if (%py-obj-is a) #t (%py-obj-is b))
-      (let ((r (%py-cmp2 a b "__ge__" "__le__")))
-        (if (eq? r %py-NotImplemented) (%py-ord-refuse ">=") r))
-    (if (if (str? a) (str? b) #f)
-      (>= (%py-strcmp a b 0) 0)
-      (if (%py-gt a b) #t (%py-eq a b)))))))
+    (match
+      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b ">="))
+      ((if (%py-obj-is a) #t (%py-obj-is b))
+        (let ((r (%py-cmp2 a b "__ge__" "__le__")))
+          (if (eq? r %py-NotImplemented) (%py-ord-refuse ">=") r)))
+      ((if (str? a) (str? b) #f) (>= (%py-strcmp a b 0) 0))
+      ((%py-gt a b) #t)
+      (#t (%py-eq a b)))))
 
 ; --- Lists ------------------------------------------------------------------
 ;
@@ -979,25 +992,18 @@
 
 (def %py-len
   (fn (_ v)
-    (if (%py-obj-is v)
-      (let ((m (%py-dunder v "__len__")))
-        (if (null? m) (Err raise (lit type) "object of this type has no len()" ()) (m)))
-    (if (%py-dict? v)
-      (List length (%py-dict-entries v))
-    (if (%py-tuple-is v)
-      (List length (%py-tuple-elems v))
-    (if (%py-list? v)
-      (List length (%py-list-elems v))
-      (if (%py-set-is v)
-        (List length (%py-set-elems v))
-      (if (%py-view-is v)
-        (List length (%py-view-elems v))
-      (if (str? v)
-        ; CODE POINTS, not bytes: len('\xff') is 1
-        (Str length v)
-      (if (%py-bytes-is v)
-        (Str8 length (%py-bytes-str v))
-        (Err raise (lit type) "object of this type has no len()" ())))))))))))
+    (match
+      ((%py-obj-is v)
+        (let ((m (%py-dunder v "__len__")))
+          (if (null? m) (Err raise (lit type) "object of this type has no len()" ()) (m))))
+      ((%py-dict? v) (List length (%py-dict-entries v)))
+      ((%py-tuple-is v) (List length (%py-tuple-elems v)))
+      ((%py-list? v) (List length (%py-list-elems v)))
+      ((%py-set-is v) (List length (%py-set-elems v)))
+      ((%py-view-is v) (List length (%py-view-elems v)))
+      ((str? v) (Str length v))
+      ((%py-bytes-is v) (Str8 length (%py-bytes-str v)))
+      (#t (Err raise (lit type) "object of this type has no len()" ())))))
 
 ; NEGATIVE INDICES COUNT FROM THE END, which is Python and not x.  -1 is the
 ; last element, and an index past either end raises IndexError rather than
@@ -1005,37 +1011,33 @@
 ; from the subscript that produced it.
 (def %py-index
   (fn (_ v i)
-    (if (%py-obj-is v)
-      (let ((m (%py-dunder v "__getitem__")))
-        (if (null? m) (Err raise (lit type) "object is not subscriptable" ()) (m i)))
-    (if (str? v)
-      ; A string index yields a one-character STRING, as in Python -- there is
-      ; no character type at this surface -- and it counts CODE POINTS: a
-      ; two-byte character is one index.
-      (let ((n (Str length v)))
-        (let ((k (if (< i 0) (+ n i) i)))
-          (if (if (< k 0) #t (>= k n))
-            (Err raise (lit index) "string index out of range" ())
-            (Str sub k 1 v))))
-    ; a bytes index is the byte's value, an int
-    (if (%py-bytes-is v)
-      (let ((s (%py-bytes-str v)))
-        (let ((n (Str8 length s)))
+    (match
+      ((%py-obj-is v)
+        (let ((m (%py-dunder v "__getitem__")))
+          (if (null? m) (Err raise (lit type) "object is not subscriptable" ()) (m i))))
+      ((str? v)
+        (let ((n (Str length v)))
           (let ((k (if (< i 0) (+ n i) i)))
             (if (if (< k 0) #t (>= k n))
-              (Err raise (lit index) "index out of range" ())
-              (%py-char-code (%str-ref s k))))))
-    ; Subscripting a tuple and a dict are calls too -- see the list branch.
-    (if (%py-tuple-is v)
-      (v i)
-    (if (%py-dict? v)
-      (v i)
-    (if (not (%py-list? v))
-      (Err raise (lit type) "object is not subscriptable" ())
+              (Err raise (lit index) "string index out of range" ())
+              (Str sub k 1 v)))))
+      ; a bytes index is the byte's value, an int
+      ((%py-bytes-is v)
+        (let ((s (%py-bytes-str v)))
+          (let ((n (Str8 length s)))
+            (let ((k (if (< i 0) (+ n i) i)))
+              (if (if (< k 0) #t (>= k n))
+                (Err raise (lit index) "index out of range" ())
+                (%py-char-code (%str-ref s k)))))))
+      ; Subscripting a tuple and a dict are calls too -- see the list branch.
+      ((%py-tuple-is v) (v i))
+      ((%py-dict? v) (v i))
+      ((not (%py-list? v))
+        (Err raise (lit type) "object is not subscriptable" ()))
       ; SUBSCRIPTING A LIST IS A CALL.  x dispatches `(v i)` through the type's
       ; `call` handler, so negative indices and IndexError are stated once in
       ; python/types.x rather than copied here.
-      (v i)))))))))
+      (#t (v i)))))
 
 ; Store into a list at an index.  Rebuilds the element list and hangs it back on
 ; the SAME tag pair, so every reference sees the store -- the identity argument
@@ -1052,14 +1054,15 @@
     ; __delitem__ was the one of the three item methods nothing dispatched:
     ; __getitem__ and __setitem__ were already here, so `del c[k]` on a class
     ; that defines it raised as though the class had said nothing.
-    (if (%py-obj-is v)
-      (let ((m (%py-dunder v "__delitem__")))
-        (if (null? m)
-          (Err raise (lit type) "object does not support item deletion" ())
-          (m i)))
-      (if (%py-dict? v) (%py-ddel v i)
-        (if (%py-list? v) ((%py-list-attr v "__delitem__") i)
-          (Err raise (lit type) "object does not support item deletion" ()))))))
+    (match
+      ((%py-obj-is v)
+        (let ((m (%py-dunder v "__delitem__")))
+          (if (null? m)
+            (Err raise (lit type) "object does not support item deletion" ())
+            (m i))))
+      ((%py-dict? v) (%py-ddel v i))
+      ((%py-list? v) ((%py-list-attr v "__delitem__") i))
+      (#t (Err raise (lit type) "object does not support item deletion" ())))))
 ; the indices a slice selects, as (lo . hi) on a step of 1
 (def %py-slice-span
   (fn (_ n start stop step)
@@ -1083,20 +1086,21 @@
 
 (def %py-setindex
   (fn (_ obj i v)
-    (if (%py-obj-is obj)
-      (let ((m (%py-dunder obj "__setitem__")))
-        (if (null? m)
-          (Err raise (lit type) "object does not support item assignment" ())
-          (m i v)))
-    (if (%py-dict? obj)
-      (%py-dset obj i v)
-    (if (not (%py-list? obj))
-      (Err raise (lit type) "object does not support item assignment" ())
-      (let ((n (List length (%py-list-elems obj))))
-        (let ((k (if (< i 0) (+ n i) i)))
-          (if (if (< k 0) #t (>= k n))
-            (Err raise (lit index) "list assignment index out of range" ())
-            (%py-list-set! obj (%py-set-nth (%py-list-elems obj) k v))))))))))
+    (match
+      ((%py-obj-is obj)
+        (let ((m (%py-dunder obj "__setitem__")))
+          (if (null? m)
+            (Err raise (lit type) "object does not support item assignment" ())
+            (m i v))))
+      ((%py-dict? obj) (%py-dset obj i v))
+      ((not (%py-list? obj))
+        (Err raise (lit type) "object does not support item assignment" ()))
+      (#t
+        (let ((n (List length (%py-list-elems obj))))
+          (let ((k (if (< i 0) (+ n i) i)))
+            (if (if (< k 0) #t (>= k n))
+              (Err raise (lit index) "list assignment index out of range" ())
+              (%py-list-set! obj (%py-set-nth (%py-list-elems obj) k v)))))))))
 
 ; The escape continuation a `return` invokes.  Fetched rather than assumed
 ; global, the way every other prim in this bundle is reached.
@@ -1153,28 +1157,21 @@
 
 (def %py-iter-elems
   (fn (_ v)
-    (if (%py-obj-is v)
-      (%py-obj-elems v)
-    ; Iterating a dict yields its KEYS, as in Python.
-    (if (%py-dict? v)
-      (%py-dkeys (%py-dict-entries v))
-    (if (%py-tuple-is v)
-      (%py-tuple-elems v)
-    (if (%py-list? v)
-      (%py-list-elems v)
-      (if (%py-set-is v)
-        (%py-set-elems v)
-      (if (%py-view-is v)
-        (%py-view-elems v)
-      (if (str? v)
-        (%py-str-chars v 0 (Str8 length v))
+    (match
+      ((%py-obj-is v) (%py-obj-elems v))
+      ; Iterating a dict yields its KEYS, as in Python.
+      ((%py-dict? v) (%py-dkeys (%py-dict-entries v)))
+      ((%py-tuple-is v) (%py-tuple-elems v))
+      ((%py-list? v) (%py-list-elems v))
+      ((%py-set-is v) (%py-set-elems v))
+      ((%py-view-is v) (%py-view-elems v))
+      ((str? v) (%py-str-chars v 0 (Str8 length v)))
       ; iterating bytes yields ints
-      (if (%py-bytes-is v)
-        (%py-byte-list (%py-bytes-str v) (- (Str8 length (%py-bytes-str v)) 1) ())
+      ((%py-bytes-is v)
+        (%py-byte-list (%py-bytes-str v) (- (Str8 length (%py-bytes-str v)) 1) ()))
       ; a generator runs to its end; every consumer here wants the whole list
-      (if (%py-gen-is v)
-        (%py-gen-drain v ())
-        (Err raise (lit type) "object is not iterable" ()))))))))))))
+      ((%py-gen-is v) (%py-gen-drain v ()))
+      (#t (Err raise (lit type) "object is not iterable" ())))))
 
 ; range(stop) / range(start, stop) / range(start, stop, step)
 ;
@@ -1265,9 +1262,11 @@
   (fn (self l i v) (if (null? l) () (if (= i 0) (pair v (rest l)) (pair (first l) (self (rest l) (- i 1) v))))))
 (def %py-els-index
   (fn (self l i stop v)
-    (if (null? l) (- 0 1)
-      (if (>= i stop) (- 0 1)
-        (if (%py-truthy (%py-eq v (first l))) i (self (rest l) (+ i 1) stop v))))))
+    (match
+      ((null? l) (- 0 1))
+      ((>= i stop) (- 0 1))
+      ((%py-truthy (%py-eq v (first l))) i)
+      (#t (self (rest l) (+ i 1) stop v)))))
 (def %py-els-count
   (fn (self l v acc)
     (if (null? l) acc (self (rest l) v (if (%py-truthy (%py-eq v (first l))) (+ acc 1) acc)))))
@@ -1445,36 +1444,31 @@
     ; types, which was harmless while no instance could BE one -- a subclass
     ; of list would have gone to the list surface and lost its own methods
     ; and its own attributes.
-    (if (%py-obj-is obj)
-      (%py-obj-attr obj name)
-    (if (%py-list? obj)
-      (%py-list-attr obj name)
-      (if (%py-dict? obj)
-        (%py-dict-attr obj name)
-      (if (str? obj)
-        (%py-str-method obj name)
-      (if (%py-bytes-is obj)
-        (%py-bytes-attr obj name)
-      (if (%py-set-is obj)
-        (%py-set-attr obj name)
-      (if (%py-gen-is obj)
-        (%py-gen-attr obj name)
-      (if (%py-super-is obj)
-        (%py-super-attr obj name)
-      (if (%py-class-is obj)
-        (%py-class-attr obj name)
-      (if (%py-complex-is obj)
-        (if (Str8 =? name "real") (%py-cre obj)
-        (if (Str8 =? name "imag") (%py-cim obj)
-        (if (Str8 =? name "conjugate")
-          (fn (_) (Complex make (%py-cre obj) (- 0.0 (%py-cim obj))))
-          (Err raise (lit attribute)
-            (Str8 append (Str8 append "'complex' object has no attribute '" name) "'") ()))))
+    (match
+      ((%py-obj-is obj) (%py-obj-attr obj name))
+      ((%py-list? obj) (%py-list-attr obj name))
+      ((%py-dict? obj) (%py-dict-attr obj name))
+      ((str? obj) (%py-str-method obj name))
+      ((%py-bytes-is obj) (%py-bytes-attr obj name))
+      ((%py-set-is obj) (%py-set-attr obj name))
+      ((%py-gen-is obj) (%py-gen-attr obj name))
+      ((%py-super-is obj) (%py-super-attr obj name))
+      ((%py-class-is obj) (%py-class-attr obj name))
+      ((%py-complex-is obj)
+        (match
+          ((Str8 =? name "real") (%py-cre obj))
+          ((Str8 =? name "imag") (%py-cim obj))
+          ((Str8 =? name "conjugate")
+            (fn (_) (Complex make (%py-cre obj) (- 0.0 (%py-cim obj)))))
+          (#t
+            (Err raise (lit attribute)
+              (Str8 append (Str8 append "'complex' object has no attribute '" name) "'") ()))))
+      (#t
         (let ((sig (%py-sig-of obj)))
           (if (if (null? sig) #f (Str8 =? name "__name__"))
             (first sig)
             (Err raise (lit attribute)
-              (Str8 append (Str8 append "object has no attribute '" name) "'")())))))))))))))))
+              (Str8 append (Str8 append "object has no attribute '" name) "'")())))))))
 
 ; str.upper is the method as a function of its receiver -- str.upper("abc")
 ; -- and a user class's attribute is its function, unbound, callable with an
@@ -1498,41 +1492,39 @@
     ; asking either for __name__ used to reach `str.nosuch` and report that a
     ; 'str' object has no attribute __name__ -- when what was asked was the
     ; name of the class itself, which `type(x).__name__` asks constantly.
-    (if (Str8 =? name "__name__")
-      (%py-class-name cls)
-      (if (Str8 =? name "__bases__")
-        (%py-tuple-of-list (%py-class-bases cls))
-        (if (Str8 =? name "__dict__")
-          (%py-dict-new (%py-class-rows cls))
-          ; dict.fromkeys is a CLASSMETHOD: it answers a new dict, so it hangs
-          ; off the class rather than an instance
-          (if (eq? cls %py-cls-dict)
-            (if (Str8 =? name "fromkeys")
-              %py-dict-fromkeys
-              (Err raise (lit attribute)
-                (Str8 append (Str8 append "type object 'dict' has no attribute '" name) "'") ()))
-            (if (eq? cls %py-cls-str)
-              ; validate the name NOW, so str.nosuch raises at access, not at call
-              (do (%py-str-attr "" name)
-                  (fn (_ recv . args) (apply (%py-str-attr recv name) args)))
-              (let ((m (%py-method-find cls name)))
-                (if (null? m)
-                  (Err raise (lit attribute)
-                    (Str8 append (Str8 append "type object '" (%py-class-name cls))
-                      (Str8 append "' has no attribute '" (Str8 append name "'"))) ())
-                  ; FROM THE CLASS there is no instance to bind: a staticmethod
-                  ; is its function, a classmethod binds THIS class -- which is
-                  ; what makes `cls` the child in `Sub.method()` -- and a
-                  ; property stays the descriptor, since `C.v` in Python is the
-                  ; property object, not a value it has no instance to compute.
-                  (if (%py-desc-is m)
-                    (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
-                      (if (eq? k (lit static))
-                        f
-                        (if (eq? k (lit classmethod))
-                          (%py-bind-method f cls)
-                          m)))
-                    m))))))))))
+    (match
+      ((Str8 =? name "__name__") (%py-class-name cls))
+      ((Str8 =? name "__bases__") (%py-tuple-of-list (%py-class-bases cls)))
+      ((Str8 =? name "__dict__") (%py-dict-new (%py-class-rows cls)))
+      ; dict.fromkeys is a CLASSMETHOD: it answers a new dict, so it hangs
+      ; off the class rather than an instance
+      ((eq? cls %py-cls-dict)
+        (if (Str8 =? name "fromkeys")
+          %py-dict-fromkeys
+          (Err raise (lit attribute)
+            (Str8 append (Str8 append "type object 'dict' has no attribute '" name) "'") ())))
+      ((eq? cls %py-cls-str)
+        (do (%py-str-attr "" name)
+            (fn (_ recv . args) (apply (%py-str-attr recv name) args))))
+      (#t
+        (let ((m (%py-method-find cls name)))
+          (if (null? m)
+            (Err raise (lit attribute)
+              (Str8 append (Str8 append "type object '" (%py-class-name cls))
+                (Str8 append "' has no attribute '" (Str8 append name "'"))) ())
+            ; FROM THE CLASS there is no instance to bind: a staticmethod
+            ; is its function, a classmethod binds THIS class -- which is
+            ; what makes `cls` the child in `Sub.method()` -- and a
+            ; property stays the descriptor, since `C.v` in Python is the
+            ; property object, not a value it has no instance to compute.
+            (if (%py-desc-is m)
+              (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
+                (if (eq? k (lit static))
+                  f
+                  (if (eq? k (lit classmethod))
+                    (%py-bind-method f cls)
+                    m)))
+              m)))))))
 
 ; STRING METHODS MAP ONTO Str8, WHICH ALREADY HAS THEM -- upcase, downcase,
 ; trim, split, join, replace, starts?, ends?, index-of. The work here is the
@@ -1550,7 +1542,13 @@
 ; index/rindex raise ValueError where find/rfind answer -1.
 
 (def %py-s-ws?
-  (fn (_ c) (if (= c 32) #t (if (= c 9) #t (if (= c 10) #t (if (= c 13) #t (if (= c 11) #t (= c 12))))))))
+  (fn (_ c) (match
+              ((= c 32) #t)
+              ((= c 9) #t)
+              ((= c 10) #t)
+              ((= c 13) #t)
+              ((= c 11) #t)
+              (#t (= c 12)))))
 (def %py-s-code (fn (_ s i) (%py-char-code (%str-ref s i))))
 
 ; (lo . hi) for a start/end pair the way a slice clamps them.
@@ -1743,7 +1741,13 @@
         (fn (_ . a) (%py-list-new (%py-s-splitlines s (if (null? a) #f (%py-truthy (first a)))))))
       ((Str8 =? name "join")
         (fn (_ it)
-          (if (not (if (%py-list? it) #t (if (%py-tuple-is it) #t (if (str? it) #t (if (%py-dict? it) #t (if (%py-obj-is it) #t (%py-gen-is it)))))))
+          (if (not (match
+                     ((%py-list? it) #t)
+                     ((%py-tuple-is it) #t)
+                     ((str? it) #t)
+                     ((%py-dict? it) #t)
+                     ((%py-obj-is it) #t)
+                     (#t (%py-gen-is it))))
             (Err raise (lit type) "can only join an iterable of str" ())
             (let ((es (%py-iter-elems it)))
               (def all-str (fn (self l) (if (null? l) #t (if (str? (first l)) (self (rest l)) #f))))
@@ -1825,11 +1829,12 @@
       ((if (Str8 =? name "center") #t (if (Str8 =? name "ljust") #t (Str8 =? name "rjust")))
         (fn (_ width . a)
           (let ((f (let ((x (%py-s-arg a 0))) (if (null? x) " " x))))
-            (if (Str8 =? name "center") (%py-s-center s width f)
-              (if (<= width n) s
-                (if (Str8 =? name "ljust")
-                  (Str8 append s (%py-s-rep f (- width n)))
-                  (Str8 append (%py-s-rep f (- width n)) s)))))))
+            (match
+              ((Str8 =? name "center") (%py-s-center s width f))
+              ((<= width n) s)
+              ((Str8 =? name "ljust")
+                (Str8 append s (%py-s-rep f (- width n))))
+              (#t (Str8 append (%py-s-rep f (- width n)) s))))))
       ((Str8 =? name "isspace") (fn (_) (%py-s-all? s %py-s-ws?)))
       ((Str8 =? name "isalpha") (fn (_) (%py-s-all? s %py-s-alpha?)))
       ((Str8 =? name "isdigit") (fn (_) (%py-s-all? s %py-s-digit?)))
@@ -1871,13 +1876,14 @@
 (def %py-chr
   (fn (_ n0)
     (def n (%py-boolnorm n0))
-    (if (not (eq? (%py-num-kind n) (lit int)))
-      (Err raise (lit type) "an integer is required" ())
-      (if (if (< n 0) #t (> n 1114111))
-        (Err raise (lit value) "chr() arg not in range(0x110000)" ())
-        (if (= n 0)
-          (Err raise (lit value) "a NUL byte is not representable here" ())
-          (%py-list->string (list (%py-int->char n))))))))
+    (match
+      ((not (eq? (%py-num-kind n) (lit int)))
+        (Err raise (lit type) "an integer is required" ()))
+      ((if (< n 0) #t (> n 1114111))
+        (Err raise (lit value) "chr() arg not in range(0x110000)" ()))
+      ((= n 0)
+        (Err raise (lit value) "a NUL byte is not representable here" ()))
+      (#t (%py-list->string (list (%py-int->char n)))))))
 ; ord() counts CODE POINTS, not bytes: chr(955) is a two-byte string that
 ; is one character, so the utf-8-aware Str class measures and indexes it.
 (def %py-ord
@@ -1902,7 +1908,11 @@
 (def %py-spec-parse
   (fn (_ spec)
     (def n (Str8 length spec))
-    (def align? (fn (_ c) (if (= c 60) #t (if (= c 62) #t (if (= c 94) #t (= c 61))))))
+    (def align? (fn (_ c) (match
+                            ((= c 60) #t)
+                            ((= c 62) #t)
+                            ((= c 94) #t)
+                            (#t (= c 61)))))
     ; fill+align if the SECOND char is an align char, else align alone
     (def i0 0)
     (def fill " ")
@@ -1962,12 +1972,14 @@
     (if (if (null? width) #t (>= total width))
       (Str8 append sgn s)
       (let ((padn (- width total)))
-        (if (Str8 =? a "<") (Str8 append (Str8 append sgn s) (rep padn))
-        (if (Str8 =? a ">") (Str8 append (rep padn) (Str8 append sgn s))
-        (if (Str8 =? a "=") (Str8 append sgn (Str8 append (rep padn) s))
+        (match
+          ((Str8 =? a "<") (Str8 append (Str8 append sgn s) (rep padn)))
+          ((Str8 =? a ">") (Str8 append (rep padn) (Str8 append sgn s)))
+          ((Str8 =? a "=") (Str8 append sgn (Str8 append (rep padn) s)))
           ; ^ centres, the extra space on the right
-          (let ((l (Num quotient padn 2)))
-            (Str8 append (rep l) (Str8 append (Str8 append sgn s) (rep (- padn l))))))))))))
+          (#t
+            (let ((l (Num quotient padn 2)))
+              (Str8 append (rep l) (Str8 append (Str8 append sgn s) (rep (- padn l)))))))))))
 
 ; Thousands grouping on a digit string.
 (def %py-group3
@@ -2003,24 +2015,32 @@
         ; the 0 flag is fill 0 with = alignment, for numbers
         (def fill2 (if (if zero (Str8 =? fill " ") #f) "0" fill))
         (def align2 (if (if zero (null? align) #f) "=" align))
-        (if (if (str? v) #t (if (= tc 115) #t (if (%py-obj-is v) #t (if (null? v) #t (if (%py-list? v) #t (%py-tuple-is v))))))
+        (if (match
+              ((str? v) #t)
+              ((= tc 115) #t)
+              ((%py-obj-is v) #t)
+              ((null? v) #t)
+              ((%py-list? v) #t)
+              (#t (%py-tuple-is v)))
           ; strings (and anything shown as its str): s or empty type only
-          (if (if (not (= tc 0)) (not (= tc 115)) #f)
-            (Err raise (lit value)
-              (Str8 append "Unknown format code '" (Str8 append type "' for object of type 'str'")) ())
-          (if (if (= tc 115) (not (null? (%py-num-kind v))) #f)
-            (Err raise (lit value)
-              (Str8 append "Unknown format code 's' for object of type '"
-                (Str8 append (if (eq? (%py-num-kind v) (lit float)) "float" "int") "'")) ())
-          (if (if (null? sign) #f (not (Str8 =? sign "")))
-            (Err raise (lit value) "Sign not allowed in string format specifier" ())
-          (if (if (not (null? align)) (Str8 =? align "=") #f)
-            (Err raise (lit value) "'=' alignment not allowed in string format specifier" ())
-            (let ((s0 (%py-str v)))
-              (let ((s (if (if (not (null? prec)) (> (Str8 length s0) prec) #f) (Str8 sub 0 prec s0) s0)))
-                ; the 0 flag on text fills with zeros on the RIGHT ('{:06s}'
-                ; of ab is ab0000 -- measured)
-                (%py-spec-pad s width (if (if zero (Str8 =? fill " ") #f) "0" fill) align "<" "")))))))
+          (match
+            ((if (not (= tc 0)) (not (= tc 115)) #f)
+              (Err raise (lit value)
+                (Str8 append "Unknown format code '" (Str8 append type "' for object of type 'str'")) ()))
+            ((if (= tc 115) (not (null? (%py-num-kind v))) #f)
+              (Err raise (lit value)
+                (Str8 append "Unknown format code 's' for object of type '"
+                  (Str8 append (if (eq? (%py-num-kind v) (lit float)) "float" "int") "'")) ()))
+            ((if (null? sign) #f (not (Str8 =? sign "")))
+              (Err raise (lit value) "Sign not allowed in string format specifier" ()))
+            ((if (not (null? align)) (Str8 =? align "=") #f)
+              (Err raise (lit value) "'=' alignment not allowed in string format specifier" ()))
+            (#t
+              (let ((s0 (%py-str v)))
+                (let ((s (if (if (not (null? prec)) (> (Str8 length s0) prec) #f) (Str8 sub 0 prec s0) s0)))
+                  ; the 0 flag on text fills with zeros on the RIGHT ('{:06s}'
+                  ; of ab is ab0000 -- measured)
+                  (%py-spec-pad s width (if (if zero (Str8 =? fill " ") #f) "0" fill) align "<" "")))))
           (do
             (def w (if (eq? v #t) 1 (if (eq? v #f) 0 v)))
             (def kind (%py-num-kind w))
@@ -2028,51 +2048,77 @@
               (Err raise (lit type) "unsupported format string passed to object.__format__" ())
               ())
             ; integers with an integer or empty type
-            (if (if (eq? kind (lit int)) (= tc 99) #f)
-              ; c: the character with that code point, as text
-              (if (if (null? sign) #f (not (Str8 =? sign "")))
-                (Err raise (lit value) "Sign not allowed with integer format specifier 'c'" ())
-                (%py-spec-pad (%py-chr w) width fill align ">" ""))
-            (if (if (eq? kind (lit int))
-                  (if (= tc 0) #t (if (= tc 100) #t (if (= tc 120) #t (if (= tc 88) #t (if (= tc 111) #t (if (= tc 98) #t (= tc 110)))))))
+            (match
+              ((if (eq? kind (lit int)) (= tc 99) #f)
+                (if (if (null? sign) #f (not (Str8 =? sign "")))
+                  (Err raise (lit value) "Sign not allowed with integer format specifier 'c'" ())
+                  (%py-spec-pad (%py-chr w) width fill align ">" "")))
+              ((if (eq? kind (lit int))
+                  (match
+                    ((= tc 0) #t)
+                    ((= tc 100) #t)
+                    ((= tc 120) #t)
+                    ((= tc 88) #t)
+                    ((= tc 111) #t)
+                    ((= tc 98) #t)
+                    (#t (= tc 110)))
                   #f)
-              (do
-                (if (not (null? prec))
-                  (Err raise (lit value) "Precision not allowed in integer format specifier" ())
-                  ())
-                (def m
-                  (if (if (= tc 120) #t (= tc 88))
-                    (%py-fmt-base w 16 (if (= tc 88) "0123456789ABCDEF" "0123456789abcdef"))
-                    (if (= tc 111) (%py-fmt-base w 8 "01234567")
-                      (if (= tc 98) (%py-fmt-base w 2 "01")
-                        (%py-fmt-int-mag w)))))
-                ; _ groups binary, octal and hex digits by four
-                (def grp
-                  (fn (_ ds)
-                    (if (eq? comma #t) (%py-group3 ds)
-                      (if (eq? comma (lit under))
-                        (%py-group-sep ds
-                          (if (if (= tc 120) #t (if (= tc 88) #t (if (= tc 111) #t (= tc 98)))) 4 3)
-                          "_")
-                        ds))))
-                (def pfx (if alt (if (= tc 120) "0x" (if (= tc 88) "0X" (if (= tc 111) "0o" (if (= tc 98) "0b" "")))) ""))
-                (def sgn (Str8 append (%py-fmt-sign (first m) (Str8 =? sign "+") (Str8 =? sign " ")) pfx))
-                ; THE 0 FLAG WITH GROUPING GROUPS THE PADDING TOO: '{:05,d}'
-                ; of 0 is 0,000 -- the fewest leading zeros whose grouped
-                ; form fills the width, overshooting when a separator lands
-                (def digits
-                  (if (if (Str8 =? fill2 "0") (if (Str8 =? align2 "=") (if comma (not (null? width)) #f) #f) #f)
-                    (do
-                      (def target (- width (Str8 length sgn)))
-                      (def grow
-                        (fn (self k)
-                          (let ((g (grp (Str8 append (%py-fmt-zeros k) (rest m)))))
-                            (if (>= (Str8 length g) target) g (self (+ k 1))))))
-                      (grow 0))
-                    (grp (rest m))))
-                (%py-spec-pad digits width fill2 align2 ">" sgn))
+                (do
+                  (if (not (null? prec))
+                    (Err raise (lit value) "Precision not allowed in integer format specifier" ())
+                    ())
+                  (def m
+                    (match
+                      ((if (= tc 120) #t (= tc 88))
+                        (%py-fmt-base w 16 (if (= tc 88) "0123456789ABCDEF" "0123456789abcdef")))
+                      ((= tc 111) (%py-fmt-base w 8 "01234567"))
+                      ((= tc 98) (%py-fmt-base w 2 "01"))
+                      (#t (%py-fmt-int-mag w))))
+                  ; _ groups binary, octal and hex digits by four
+                  (def grp
+                    (fn (_ ds)
+                      (if (eq? comma #t) (%py-group3 ds)
+                        (if (eq? comma (lit under))
+                          (%py-group-sep ds
+                            (if (match
+                                  ((= tc 120) #t)
+                                  ((= tc 88) #t)
+                                  ((= tc 111) #t)
+                                  (#t (= tc 98))) 4 3)
+                            "_")
+                          ds))))
+                  (def pfx (if alt (match
+                                     ((= tc 120) "0x")
+                                     ((= tc 88) "0X")
+                                     ((= tc 111) "0o")
+                                     ((= tc 98) "0b")
+                                     (#t "")) ""))
+                  (def sgn (Str8 append (%py-fmt-sign (first m) (Str8 =? sign "+") (Str8 =? sign " ")) pfx))
+                  ; THE 0 FLAG WITH GROUPING GROUPS THE PADDING TOO: '{:05,d}'
+                  ; of 0 is 0,000 -- the fewest leading zeros whose grouped
+                  ; form fills the width, overshooting when a separator lands
+                  (def digits
+                    (if (if (Str8 =? fill2 "0") (if (Str8 =? align2 "=") (if comma (not (null? width)) #f) #f) #f)
+                      (do
+                        (def target (- width (Str8 length sgn)))
+                        (def grow
+                          (fn (self k)
+                            (let ((g (grp (Str8 append (%py-fmt-zeros k) (rest m)))))
+                              (if (>= (Str8 length g) target) g (self (+ k 1))))))
+                        (grow 0))
+                      (grp (rest m))))
+                  (%py-spec-pad digits width fill2 align2 ">" sgn)))
               ; floats -- and ints asked for a float type
-              (if (if (= tc 0) #t (if (= tc 101) #t (if (= tc 69) #t (if (= tc 102) #t (if (= tc 70) #t (if (= tc 103) #t (if (= tc 71) #t (if (= tc 110) #t (= tc 37)))))))))
+              ((match
+                 ((= tc 0) #t)
+                 ((= tc 101) #t)
+                 ((= tc 69) #t)
+                 ((= tc 102) #t)
+                 ((= tc 70) #t)
+                 ((= tc 103) #t)
+                 ((= tc 71) #t)
+                 ((= tc 110) #t)
+                 (#t (= tc 37)))
                 (do
                   (def fv (%py-fmt-float-of w))
                   (def ex (%py-f-exact fv))
@@ -2091,21 +2137,24 @@
                       (def x10 (first (rest (rest (rest ex)))))
                       (def p (if (null? prec) 6 prec))
                       (def body
-                        (if (if (= tc 101) #t (= tc 69)) (%py-fmt-e D x10 p upper)
-                        (if (if (= tc 102) #t (= tc 70)) (%py-fmt-f D x10 p)
-                        (if (if (= tc 103) #t (if (= tc 71) #t (= tc 110))) (%py-fmt-g D x10 p upper alt)
-                        (if (= tc 37)
-                          ; percent: value * 100 in f notation, then %
-                          (let ((ex2 (%py-f-exact (* fv 100.0))))
-                            (Str8 append (%py-fmt-f (first (rest (rest ex2))) (first (rest (rest (rest ex2)))) p) "%"))
+                        (match
+                          ((if (= tc 101) #t (= tc 69))
+                            (%py-fmt-e D x10 p upper))
+                          ((if (= tc 102) #t (= tc 70)) (%py-fmt-f D x10 p))
+                          ((if (= tc 103) #t (if (= tc 71) #t (= tc 110)))
+                            (%py-fmt-g D x10 p upper alt))
+                          ((= tc 37)
+                            (let ((ex2 (%py-f-exact (* fv 100.0))))
+                              (Str8 append (%py-fmt-f (first (rest (rest ex2))) (first (rest (rest (rest ex2)))) p) "%")))
                           ; the empty type: repr without precision; with
                           ; precision like g, but a fixed result keeps at
                           ; least one digit after the point
-                          (if (null? prec)
-                            (let ((r (%py-frepr fv))) (if neg (Str8 sub 1 (- (Str8 length r) 1) r) r))
-                            ; like g, but scientific already when the
-                            ; exponent reaches p-1 (format(0.0, '.1') is
-                            ; 0e+00), and fixed keeps one digit past the point
+                          ((null? prec)
+                            (let ((r (%py-frepr fv))) (if neg (Str8 sub 1 (- (Str8 length r) 1) r) r)))
+                          ; like g, but scientific already when the
+                          ; exponent reaches p-1 (format(0.0, '.1') is
+                          ; 0e+00), and fixed keeps one digit past the point
+                          (#t
                             (let ((sc (%py-fmt-sci D x10 (- p 1))))
                               (let ((xa (first (rest (rest sc)))))
                                 (if (if (>= xa (- 0 4)) (< xa (- p 1)) #f)
@@ -2115,14 +2164,15 @@
                                     (Str8 append
                                       (if (= (Str8 length fp) 0) (first sc)
                                         (Str8 append (first sc) (Str8 append "." fp)))
-                                      (%py-fmt-exp-str xa #f))))))))))))
+                                      (%py-fmt-exp-str xa #f)))))))))
                       (def body2 (if comma (%py-comma-float body (if (eq? comma #t) "," "_")) body))
-                      (%py-spec-pad body2 width fill2 align2 ">" sgn))))
+                      (%py-spec-pad body2 width fill2 align2 ">" sgn)))))
+              (#t
                 (Err raise (lit value)
                   (Str8 append "Unknown format code '"
                     (Str8 append type
                       (Str8 append "' for object of type '"
-                        (Str8 append (if (eq? kind (lit int)) "int" "float") "'")))) ()))))))))))
+                        (Str8 append (if (eq? kind (lit int)) "int" "float") "'")))) ())))))))))
 
 ; Digits grouped by k from the right with sep.
 (def %py-group-sep
@@ -2149,11 +2199,13 @@
 ; One field of an f-string or a .format template: conversion then spec.
 (def %py-fmtfield
   (fn (_ v conv spec)
-    (let ((cv (if (Str8 =? conv "r") (%py-repr-of v)
-              (if (Str8 =? conv "s") (%py-str v)
-              (if (Str8 =? conv "a") (%py-repr-of v)
-              (if (Str8 =? conv "") v
-                (Err raise (lit value) "Unknown conversion specifier" ())))))))
+    (let ((cv (match
+                ((Str8 =? conv "r") (%py-repr-of v))
+                ((Str8 =? conv "s") (%py-str v))
+                ((Str8 =? conv "a") (%py-repr-of v))
+                ((Str8 =? conv "") v)
+                (#t
+                  (Err raise (lit value) "Unknown conversion specifier" ())))))
       (%py-format-spec cv spec))))
 
 (def %py-fjoin
@@ -2389,10 +2441,11 @@
         (def h (Str8 sub 0 p D))
         (def c (%py-f-code D p))
         (def up
-          (if (> c 53) #t
-            (if (< c 53) #f
-              (if (%py-f-nonzero-from? D (+ p 1)) #t
-                (= (%py-mod (- (%py-f-code h (- p 1)) 48) 2) 1)))))
+          (match
+            ((> c 53) #t)
+            ((< c 53) #f)
+            ((%py-f-nonzero-from? D (+ p 1)) #t)
+            (#t (= (%py-mod (- (%py-f-code h (- p 1)) 48) 2) 1))))
         (if up (%py-f-inc h) h)))))
 
 (def %py-f-strip0
@@ -2591,26 +2644,26 @@
       (Complex make 0.0 0.0)
       (let ((x (first a)))
         (if (null? (rest a))
-          (if (str? x)
-            (%py-cparse x)
-          ; __complex__ first, and its answer must BE a complex; then
-          ; __float__, whose answer becomes the real part
-          (if (%py-obj-is x)
-            (let ((m (%py-dunder x "__complex__")))
-              (if (not (null? m))
-                (let ((r (m)))
-                  (if (%py-complex-is r)
-                    r
-                    (Err raise (lit type) "__complex__ returned non-complex" ())))
-                (let ((f (%py-dunder x "__float__")))
-                  (if (null? f)
-                    (Err raise (lit type)
-                      "complex() first argument must be a string or a number" ())
-                    (%py-complex-of (f))))))
-            (if (null? (%py-num-kind (if (eq? x #t) 1 (if (eq? x #f) 0 x))))
+          (match
+            ((str? x) (%py-cparse x))
+            ; __complex__ first, and its answer must BE a complex; then
+            ; __float__, whose answer becomes the real part
+            ((%py-obj-is x)
+              (let ((m (%py-dunder x "__complex__")))
+                (if (not (null? m))
+                  (let ((r (m)))
+                    (if (%py-complex-is r)
+                      r
+                      (Err raise (lit type) "__complex__ returned non-complex" ())))
+                  (let ((f (%py-dunder x "__float__")))
+                    (if (null? f)
+                      (Err raise (lit type)
+                        "complex() first argument must be a string or a number" ())
+                      (%py-complex-of (f)))))))
+            ((null? (%py-num-kind (if (eq? x #t) 1 (if (eq? x #f) 0 x))))
               (Err raise (lit type)
-                "complex() first argument must be a string or a number" ())
-              (%py-complex-of x))))
+                "complex() first argument must be a string or a number" ()))
+            (#t (%py-complex-of x)))
           ; complex(a, b) with two REALS builds the parts directly -- through
           ; the tower, -0.0 + 0.0 is +0.0 and the signed zero Python keeps
           ; ((-0+1j), (1-0j)) would be lost; with a complex on either side it
@@ -2704,39 +2757,26 @@
 (def %py-write ())
 (set! %py-write
   (fn (_ v)
-    (if (%py-float-is v)
-      (display (%py-frepr v))
-    (if (%py-complex-is v)
-      (display (%py-crepr v))
-    (if (str? v)
-      ; A string inside a container shows its repr; on its own it does not.
-      (display (%py-str-repr v))
-      (if (eq? v #t)
-        (display "True")
-        (if (eq? v #f)
-          (display "False")
-          (if (null? v)
-            (display "None")
-            (if (%py-tuple-is v)
-              (write v)
-            (if (%py-list? v)
-              ; The type's `write` handler renders it, calling back here per element.
-              (write v)
-              (if (%py-dict? v)
-                (write v)
-                ; str(e) in Python is the MESSAGE, not the repr -- `print(e)`
-                ; inside an except block shows "division by zero", not
-                ; "#<err:zero-division division by zero>".
-                (if (Err err? v)
-                  (display (v msg))
-                ; An exception INSTANCE prints as its message too -- print(e)
-                ; has to read the same whether the raise came from Python source
-                ; or from this runtime.
-                (if (%py-obj-is v)
-                  (display (%py-obj-repr v))
-                (if (eq? v %py-NotImplemented)
-                  (display "NotImplemented")
-                  (display v)))))))))))))))
+    (match
+      ((%py-float-is v) (display (%py-frepr v)))
+      ((%py-complex-is v) (display (%py-crepr v)))
+      ((str? v) (display (%py-str-repr v)))
+      ((eq? v #t) (display "True"))
+      ((eq? v #f) (display "False"))
+      ((null? v) (display "None"))
+      ((%py-tuple-is v) (write v))
+      ((%py-list? v) (write v))
+      ((%py-dict? v) (write v))
+      ; str(e) in Python is the MESSAGE, not the repr -- `print(e)`
+      ; inside an except block shows "division by zero", not
+      ; "#<err:zero-division division by zero>".
+      ((Err err? v) (display (v msg)))
+      ; An exception INSTANCE prints as its message too -- print(e)
+      ; has to read the same whether the raise came from Python source
+      ; or from this runtime.
+      ((%py-obj-is v) (display (%py-obj-repr v)))
+      ((eq? v %py-NotImplemented) (display "NotImplemented"))
+      (#t (display v)))))
 
 ; Close the loop: python/types.x forward-declares %py-repr and its PY-LIST write
 ; handler calls it per element, so that a string inside a list shows its quotes.
@@ -3100,44 +3140,36 @@
         (if (not (null? e))
           (rest e)
           (let ((m (%py-method-find (%py-obj-class obj) name)))
-            (if (%py-desc-is m)
-              ; WHAT A DESCRIPTOR ANSWERS FROM AN INSTANCE: a staticmethod is
-              ; its function untouched, a classmethod binds the CLASS where an
-              ; ordinary method binds the instance, and a property is CALLED
-              ; here -- `c.v` is the getter's result, not the getter.
-              (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
-                (if (eq? k (lit static))
-                  f
-                  (if (eq? k (lit classmethod))
-                    (%py-bind-method f (%py-obj-class obj))
-                    (f obj))))
+            (match
+              ((%py-desc-is m)
+                (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
+                  (if (eq? k (lit static))
+                    f
+                    (if (eq? k (lit classmethod))
+                      (%py-bind-method f (%py-obj-class obj))
+                      (f obj)))))
               ; A USER DESCRIPTOR answers through its own __get__, which takes
               ; the instance and the class -- the same protocol property is a
               ; special case of.
-              (if (%py-desc-get? m)
-                ((%py-dunder m "__get__") obj (%py-obj-class obj))
-                (if (if (null? m) #f (not (%py-fn-is m)))
-                  m
-                  (if (null? m)
-                    ; A SUBCLASS OF A BUILTIN falls back to the builtin's own
-                    ; surface: `mylist([1]).append` is list's append, working on
-                    ; the value the instance carries, while anything the class
-                    ; itself defines was already found above.
-                    (let ((n (%py-obj-native obj)))
-                      (if (not (null? n))
-                        (%py-getattr n name)
-                        ; the last resort is the class's own __getattr__, as in Python
-                        (let ((ga (%py-method-find (%py-obj-class obj) "__getattr__")))
-                          (if (null? ga)
-                            (Err raise (lit attribute)
-                              (Str8 append
-                                (Str8 append
-                                  (Str8 append "'" (%py-class-name (%py-obj-class obj)))
-                                  "' object has no attribute '")
-                                (Str8 append name "'"))
-                              ())
-                            (ga obj name)))))
-                    (%py-bind-method m obj)))))))))))
+              ((%py-desc-get? m)
+                ((%py-dunder m "__get__") obj (%py-obj-class obj)))
+              ((if (null? m) #f (not (%py-fn-is m))) m)
+              ((null? m)
+                (let ((n (%py-obj-native obj)))
+                  (if (not (null? n))
+                    (%py-getattr n name)
+                    ; the last resort is the class's own __getattr__, as in Python
+                    (let ((ga (%py-method-find (%py-obj-class obj) "__getattr__")))
+                      (if (null? ga)
+                        (Err raise (lit attribute)
+                          (Str8 append
+                            (Str8 append
+                              (Str8 append "'" (%py-class-name (%py-obj-class obj)))
+                              "' object has no attribute '")
+                            (Str8 append name "'"))
+                          ())
+                        (ga obj name))))))
+              (#t (%py-bind-method m obj)))))))))
 
 ; obj(...) is __call__, through the PY-OBJ type's call handler.
 (set! %py-obj-call
@@ -3489,13 +3521,11 @@
 ; builtin's own machinery, not the program's.
 (def %py-init-below-ctor?
   (fn (self cls)
-    (if (null? cls)
-      #f
-      (if (not (null? (%py-alist-find "%ctor" (%py-class-methods cls))))
-        #f
-        (if (not (null? (%py-alist-find "__init__" (%py-class-methods cls))))
-          #t
-          (%py-init-below-ctor-bases? (%py-class-bases cls)))))))
+    (match
+      ((null? cls) #f)
+      ((not (null? (%py-alist-find "%ctor" (%py-class-methods cls)))) #f)
+      ((not (null? (%py-alist-find "__init__" (%py-class-methods cls)))) #t)
+      (#t (%py-init-below-ctor-bases? (%py-class-bases cls))))))
 (def %py-init-below-ctor-bases?
   (fn (self bs)
     (if (null? bs)
@@ -3656,17 +3686,19 @@
 
 (def %py-gen-attr
   (fn (_ g name)
-    (if (Str8 =? name "__next__") (fn (_) (%py-gen-resume g (lit send) ()))
-    (if (Str8 =? name "send")     (fn (_ v) (%py-gen-resume g (lit send) v))
-    (if (Str8 =? name "throw")
-      (fn (_ e . a)
-        (%py-gen-resume g (lit throw)
-          (if (if (null? a) #t (if (null? (rest a)) (null? (first a)) #f)) e (%py-exc-instance e a))))
-    (if (Str8 =? name "close")    (fn (_) (%py-gen-close g))
-    (if (Str8 =? name "__iter__") (fn (_) g)
-    (if (Str8 =? name "__name__") (%py-gen-name g)
-      (Err raise (lit attribute)
-        (Str8 append (Str8 append "'generator' object has no attribute '" name) "'") ())))))))))
+    (match
+      ((Str8 =? name "__next__") (fn (_) (%py-gen-resume g (lit send) ())))
+      ((Str8 =? name "send") (fn (_ v) (%py-gen-resume g (lit send) v)))
+      ((Str8 =? name "throw")
+        (fn (_ e . a)
+          (%py-gen-resume g (lit throw)
+            (if (if (null? a) #t (if (null? (rest a)) (null? (first a)) #f)) e (%py-exc-instance e a)))))
+      ((Str8 =? name "close") (fn (_) (%py-gen-close g)))
+      ((Str8 =? name "__iter__") (fn (_) g))
+      ((Str8 =? name "__name__") (%py-gen-name g))
+      (#t
+        (Err raise (lit attribute)
+          (Str8 append (Str8 append "'generator' object has no attribute '" name) "'") ())))))
 
 ; yield from: a generator is driven send/throw for send/throw, and its
 ; return value is the expression's value; any other iterable is yielded
@@ -3727,14 +3759,15 @@
 ; compare equal -- stated as equality for ints and strings.
 (def %py-is
   (fn (_ a b)
-    (if (same? a b) #t
-      (if (null? a) (null? b)
-        (if (if (eq? a #t) #t (eq? a #f)) (eq? a b)
-          (if (if (null? b) #t (if (eq? b #t) #t (eq? b #f))) #f
-            (if (if (str? a) (str? b) #f) (Str8 =? a b)
-              (if (if (eq? (%py-num-kind a) (lit int)) (eq? (%py-num-kind b) (lit int)) #f)
-                (= a b)
-                #f))))))))
+    (match
+      ((same? a b) #t)
+      ((null? a) (null? b))
+      ((if (eq? a #t) #t (eq? a #f)) (eq? a b))
+      ((if (null? b) #t (if (eq? b #t) #t (eq? b #f))) #f)
+      ((if (str? a) (str? b) #f) (Str8 =? a b))
+      ((if (eq? (%py-num-kind a) (lit int)) (eq? (%py-num-kind b) (lit int)) #f)
+        (= a b))
+      (#t #f))))
 
 ; sum(iterable[, start]) -- NOT %py-sum, which is the parser's arithmetic level
 (def %py-builtin-sum
@@ -3808,11 +3841,12 @@
     (go (Num quotient n 2) l ())))
 (def %py-merge
   (fn (self a b)
-    (if (null? a) b
-      (if (null? b) a
-        (if (%py-truthy (%py-lt (first b) (first a)))
-          (pair (first b) (self a (rest b)))
-          (pair (first a) (self (rest a) b)))))))
+    (match
+      ((null? a) b)
+      ((null? b) a)
+      ((%py-truthy (%py-lt (first b) (first a)))
+        (pair (first b) (self a (rest b))))
+      (#t (pair (first a) (self (rest a) b))))))
 (def %py-msort-by
   (fn (self l key)
     (if (if (null? l) #t (null? (rest l))) l
@@ -3820,11 +3854,12 @@
         (%py-merge-by (self (first h) key) (self (rest h) key) key)))))
 (def %py-merge-by
   (fn (self a b key)
-    (if (null? a) b
-      (if (null? b) a
-        (if (%py-truthy (%py-lt (key (first b)) (key (first a))))
-          (pair (first b) (self a (rest b) key))
-          (pair (first a) (self (rest a) b key)))))))
+    (match
+      ((null? a) b)
+      ((null? b) a)
+      ((%py-truthy (%py-lt (key (first b)) (key (first a))))
+        (pair (first b) (self a (rest b) key)))
+      (#t (pair (first a) (self (rest a) b key))))))
 (def %py-ident (fn (_ v) v))
 (def %py-sorted
   (%py-sig!
@@ -3880,14 +3915,14 @@
         (pair (%py-iter-elems v) ())))))
 (def %py-iter-pull!
   (fn (_ src)
-    (if (%py-gen-is src)
-      (%py-gen-pull src)
-      (if (eq? (first src) (lit %py-cursor))
+    (match
+      ((%py-gen-is src) (%py-gen-pull src))
+      ((eq? (first src) (lit %py-cursor))
         (guard (e (if (%py-exc-match e %py-exc-StopIteration) %py-gen-done (error e)))
-          ((first (rest src))))
-        (if (null? (first src))
-          %py-gen-done
-          (let ((v (first (first src)))) (%set-first! src (rest (first src))) v))))))
+          ((first (rest src)))))
+      ((null? (first src)) %py-gen-done)
+      (#t
+        (let ((v (first (first src)))) (%set-first! src (rest (first src))) v)))))
 
 (def %py-mktuple (fn (_ . elems) (%py-tuple-new elems)))
 ; A *rest parameter arrives as an x list and becomes the tuple Python hands
@@ -3956,15 +3991,15 @@
         (if (null? ns) #f (if (Str8 =? k (first ns)) #t (self k (rest ns))))))
     (def check
       (fn (self ks)
-        (if (null? ks) ()
-          (if (known? (first (first ks)) names)
-            (self (rest ks))
-            ; A FUNCTION THAT DECLARES **kwargs TAKES THE REST rather than
-            ; refusing them, which is the whole point of declaring it.
-            (if (null? kwname)
-              (%py-kw-error fname
-                (Str8 append (Str8 append "got an unexpected keyword argument '" (first (first ks))) "'"))
-              (self (rest ks)))))))
+        (match
+          ((null? ks) ())
+          ((known? (first (first ks)) names) (self (rest ks)))
+          ; A FUNCTION THAT DECLARES **kwargs TAKES THE REST rather than
+          ; refusing them, which is the whole point of declaring it.
+          ((null? kwname)
+            (%py-kw-error fname
+              (Str8 append (Str8 append "got an unexpected keyword argument '" (first (first ks))) "'")))
+          (#t (self (rest ks))))))
     ; the keywords no parameter claimed, as dict rows
     (def spare
       (fn (self ks acc)
@@ -4024,19 +4059,14 @@
 
 (def %py-kwcall
   (fn (_ f pos kws)
-    (if (same? f %py-print)
-      (%py-print-kw pos kws)
-    (if (if (same? f %py-min) #t (same? f %py-max))
-      (%py-minmax-kw f pos kws)
-    ; dict(a=1): the keywords are the entries
-    (if (same? f %py-cls-dict)
-      (let ((d (if (null? pos) (%py-dict-new ()) (%py-dict-ctor (first pos)))))
-        (%seq (%py-dict-merge! d (%py-dict-new (%py-dict-kwargs kws))) d))
-      (if (%py-class-is f)
-        ; A BUILTIN CLASS ANSWERS THROUGH ITS %ctor, and the ctor is where its
-        ; signature lives: enumerate is a CLASS now, and asking only __init__
-        ; for one made `enumerate(x, start=1)` -- which had worked for as long
-        ; as enumerate was a function -- say it takes no keyword arguments.
+    (match
+      ((same? f %py-print) (%py-print-kw pos kws))
+      ((if (same? f %py-min) #t (same? f %py-max)) (%py-minmax-kw f pos kws))
+      ; dict(a=1): the keywords are the entries
+      ((same? f %py-cls-dict)
+        (let ((d (if (null? pos) (%py-dict-new ()) (%py-dict-ctor (first pos)))))
+          (%seq (%py-dict-merge! d (%py-dict-new (%py-dict-kwargs kws))) d)))
+      ((%py-class-is f)
         (let ((ctor (%py-alist-find "%ctor" (%py-class-methods f))))
           (let ((csig (if (null? ctor) () (%py-sig-of (rest ctor)))))
             (if (not (null? csig))
@@ -4047,11 +4077,12 @@
                     (Err raise (lit type)
                       (Str8 append (%py-class-name f) "() takes no keyword arguments") ())
                     ; the class's own call door, not apply: apply wants a closure
-                    (%py-instantiate f (%py-kw-args (%py-sig-shift sig) pos kws))))))))
+                    (%py-instantiate f (%py-kw-args (%py-sig-shift sig) pos kws)))))))))
+      (#t
         (let ((sig (%py-sig-of f)))
           (if (null? sig)
             (Err raise (lit type) "this callable takes no keyword arguments" ())
-            (apply f (%py-kw-args sig pos kws))))))))))
+            (apply f (%py-kw-args sig pos kws))))))))
 ; the str methods that take keywords, and their parameter names; a slot a
 ; keyword call leaves empty is None, which is every one of these defaults
 (def %py-str-kw-names
@@ -4065,46 +4096,47 @@
 (def %py-kwcall-attr
   (fn (_ obj name pos kws)
     ; d.update(a=1) merges the keywords
-    (if (if (%py-dict? obj) (Str8 =? name "update") #f)
-      (let ((d obj))
-        (%seq (if (null? pos) () (%py-dict-merge! d (first pos)))
-          (%py-dict-merge! d (%py-dict-new (%py-dict-kwargs kws)))))
-    (if (%py-list? obj)
-      (let ((names (%py-list-kw-names name)))
-        (if (null? names)
-          (Err raise (lit type)
-            (Str8 append (Str8 append "list." name) "() takes no keyword arguments") ())
-          (apply (%py-list-attr obj name)
-            (%py-none-holes (%py-kw-args (list (Str8 append "list." name) names 0 #f) pos kws)))))
-    (if (str? obj)
-      (if (Str8 =? name "format")
-        (%py-strformat-kw obj pos kws)
-        (let ((names (%py-str-kw-names name)))
+    (match
+      ((if (%py-dict? obj) (Str8 =? name "update") #f)
+        (let ((d obj))
+          (%seq (if (null? pos) () (%py-dict-merge! d (first pos)))
+            (%py-dict-merge! d (%py-dict-new (%py-dict-kwargs kws))))))
+      ((%py-list? obj)
+        (let ((names (%py-list-kw-names name)))
           (if (null? names)
             (Err raise (lit type)
-              (Str8 append (Str8 append "str." name) "() takes no keyword arguments") ())
-            (apply (%py-str-attr obj name)
-              (%py-none-holes
-                (%py-kw-args (list (Str8 append "str." name) names 0 #f) pos kws))))))
-      (if (%py-obj-is obj)
+              (Str8 append (Str8 append "list." name) "() takes no keyword arguments") ())
+            (apply (%py-list-attr obj name)
+              (%py-none-holes (%py-kw-args (list (Str8 append "list." name) names 0 #f) pos kws))))))
+      ((str? obj)
+        (if (Str8 =? name "format")
+          (%py-strformat-kw obj pos kws)
+          (let ((names (%py-str-kw-names name)))
+            (if (null? names)
+              (Err raise (lit type)
+                (Str8 append (Str8 append "str." name) "() takes no keyword arguments") ())
+              (apply (%py-str-attr obj name)
+                (%py-none-holes
+                  (%py-kw-args (list (Str8 append "str." name) names 0 #f) pos kws)))))))
+      ((%py-obj-is obj)
         (let ((m (%py-method-find (%py-obj-class obj) name)))
           (let ((sig (if (null? m) () (%py-sig-of m))))
             (if (null? sig)
               (%py-kwcall (%py-getattr obj name) pos kws)
-              (apply m (pair obj (%py-kw-args (%py-sig-shift sig) pos kws))))))
+              (apply m (pair obj (%py-kw-args (%py-sig-shift sig) pos kws)))))))
       ; SUPER HAS TO BE ASKED THE SAME WAY.  Reaching it through %py-getattr
       ; answers a BOUND method, and a bound method is a new closure with no
       ; signature of its own -- so `super().__init__(**kw)` came back saying
       ; the callable takes no keyword arguments, which it plainly did.
-      (if (%py-super-is obj)
+      ((%py-super-is obj)
         (let ((m (%py-method-find (%py-class-base (%py-super-from obj)) name)))
           (let ((sig (if (null? m) () (%py-sig-of m))))
             (if (null? sig)
               (%py-kwcall (%py-getattr obj name) pos kws)
               (apply m
                 (pair (%py-super-self obj)
-                  (%py-kw-args (%py-sig-shift sig) pos kws))))))
-        (%py-kwcall (%py-getattr obj name) pos kws))))))))
+                  (%py-kw-args (%py-sig-shift sig) pos kws)))))))
+      (#t (%py-kwcall (%py-getattr obj name) pos kws)))))
 (def %py-splat
   (fn (_ . segs)
     (def cat
@@ -4130,11 +4162,11 @@
 (def %py-unpack
   (fn (_ v n)
     (let ((got (%py-unpack-count v)))
-      (if (< got n)
-        (Err raise (lit value) "not enough values to unpack" ())
-        (if (> got n)
-          (Err raise (lit value) "too many values to unpack" ())
-          (if (%py-tuple-is v) (%py-tuple-elems v) (%py-list-elems v)))))))
+      (match
+        ((< got n) (Err raise (lit value) "not enough values to unpack" ()))
+        ((> got n) (Err raise (lit value) "too many values to unpack" ()))
+        ((%py-tuple-is v) (%py-tuple-elems v))
+        (#t (%py-list-elems v))))))
 
 ; --- super() -----------------------------------------------------------------
 ;
@@ -4166,29 +4198,29 @@
           (Str8 append (Str8 append "'super' object has no attribute '" name) "'")
           ())
         (let ((m (%py-method-find base name)))
-          (if (null? m)
-            (Err raise (lit attribute)
-              (Str8 append
-                (Str8 append "'super' object has no attribute '" name) "'")
-              ())
+          (match
+            ((null? m)
+              (Err raise (lit attribute)
+                (Str8 append
+                  (Str8 append "'super' object has no attribute '" name) "'")
+                ()))
             ; WHAT COMES BACK THROUGH super IS WHAT COMES BACK THROUGH THE
             ; INSTANCE: a class ATTRIBUTE is its value, not a method to bind --
             ; `super().bar` where bar = 123 answered #<fn> before, because
             ; everything found was bound.  The three built-in descriptors keep
             ; their meanings here too.
-            (if (%py-desc-is m)
+            ((%py-desc-is m)
               (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
                 (if (eq? k (lit static))
                   f
                   (if (eq? k (lit classmethod))
                     (%py-bind-method f (%py-obj-class (%py-super-self sup)))
-                    (f (%py-super-self sup)))))
-              (if (%py-desc-get? m)
-                ((%py-dunder m "__get__")
-                  (%py-super-self sup) (%py-obj-class (%py-super-self sup)))
-                (if (not (%py-fn-is m))
-                  m
-                  (%py-bind-method m (%py-super-self sup)))))))))))
+                    (f (%py-super-self sup))))))
+            ((%py-desc-get? m)
+              ((%py-dunder m "__get__")
+                (%py-super-self sup) (%py-obj-class (%py-super-self sup))))
+            ((not (%py-fn-is m)) m)
+            (#t (%py-bind-method m (%py-super-self sup)))))))))
 
 ; --- Builtins that render ----------------------------------------------------
 ;
@@ -4210,21 +4242,17 @@
 
 (def %py-str
   (fn (_ v)
-    (if (str? v)
-      v
-      (if (null? v) "None"
-      (if (eq? v #t) "True"
-      (if (eq? v #f) "False"
-      (if (%py-float-is v)
-        (%py-frepr v)
-      (if (%py-complex-is v)
-        (%py-crepr v)
-        ; str(e) is the MESSAGE, the same rule %py-write states for print(e)
-        (if (Err err? v)
-          (v msg)
-          (if (%py-obj-is v)
-            (%py-obj-str v)
-            (%py-write-to-str v)))))))))))
+    (match
+      ((str? v) v)
+      ((null? v) "None")
+      ((eq? v #t) "True")
+      ((eq? v #f) "False")
+      ((%py-float-is v) (%py-frepr v))
+      ((%py-complex-is v) (%py-crepr v))
+      ; str(e) is the MESSAGE, the same rule %py-write states for print(e)
+      ((Err err? v) (v msg))
+      ((%py-obj-is v) (%py-obj-str v))
+      (#t (%py-write-to-str v)))))
 
 ; A STRING'S repr IS PYTHON'S: single quotes unless the text holds a single
 ; quote and no double, backslash and the chosen quote escaped, \n \r \t by
@@ -4244,26 +4272,29 @@
           (let ((c (%py-char-code (%str-ref s i))))
             (self (+ i 1)
               (Str8 append acc
-                (if (= c 92) "\\\\"
-                (if (= c q) (Str8 append "\\" (Str8 sub i 1 s))
-                (if (= c 10) "\\n"
-                (if (= c 13) "\\r"
-                (if (= c 9) "\\t"
-                (if (if (< c 32) #t (= c 127)) (Str8 append "\\x" (%py-hex2 c))
-                  (Str8 sub i 1 s)))))))))))))
+                (match
+                  ((= c 92) "\\\\")
+                  ((= c q) (Str8 append "\\" (Str8 sub i 1 s)))
+                  ((= c 10) "\\n")
+                  ((= c 13) "\\r")
+                  ((= c 9) "\\t")
+                  ((if (< c 32) #t (= c 127))
+                    (Str8 append "\\x" (%py-hex2 c)))
+                  (#t (Str8 sub i 1 s)))))))))
     (let ((qs (Str8 sub (if (= q 34) 1 0) 1 "'\"")))
       (Str8 append qs (Str8 append (go 0 "") qs)))))
 
 (def %py-repr-of
   (fn (_ v)
-    (if (null? v) "None"
-    (if (eq? v #t) "True"
-    (if (eq? v #f) "False"
-    (if (str? v)
-      (%py-str-repr v)
-      (if (%py-float-is v) (%py-frepr v)
-        (if (%py-complex-is v) (%py-crepr v)
-          (if (%py-obj-is v) (%py-obj-repr v) (%py-write-to-str v))))))))))
+    (match
+      ((null? v) "None")
+      ((eq? v #t) "True")
+      ((eq? v #f) "False")
+      ((str? v) (%py-str-repr v))
+      ((%py-float-is v) (%py-frepr v))
+      ((%py-complex-is v) (%py-crepr v))
+      ((%py-obj-is v) (%py-obj-repr v))
+      (#t (%py-write-to-str v)))))
 
 ; str(o) and repr(o) for an object: __str__ (falling back to __repr__) and
 ; __repr__, each answering a string; an exception instance's str is its
@@ -4323,9 +4354,11 @@
 (def %py-fn-is (fn (_ v) (eq? (%py-typeof-prim v) %py-th-fn)))
 (def %py-callable
   (fn (_ v)
-    (if (%py-fn-is v) #t
-      (if (%py-class-is v) #t
-        (if (%py-obj-is v) (not (null? (%py-dunder v "__call__"))) #f)))))
+    (match
+      ((%py-fn-is v) #t)
+      ((%py-class-is v) #t)
+      ((%py-obj-is v) (not (null? (%py-dunder v "__call__"))))
+      (#t #f))))
 
 ; id() is an IDENTITY TABLE, not an address: the engine hands out no
 ; addresses, and what Python promises is only that the number is unique and
@@ -4393,20 +4426,22 @@
 
 (def %py-issubclass
   (fn (_ c b)
-    (if (not (%py-class-is c))
-      (Err raise (lit type) "issubclass() arg 1 must be a class" ())
-      (if (%py-tuple-is b)
-        (%py-any-subclass? c (%py-tuple-elems b))
-        (if (%py-class-is b)
-          (%py-subclass? c b)
-          (Err raise (lit type)
-            "issubclass() arg 2 must be a class or tuple of classes" ()))))))
+    (match
+      ((not (%py-class-is c))
+        (Err raise (lit type) "issubclass() arg 1 must be a class" ()))
+      ((%py-tuple-is b) (%py-any-subclass? c (%py-tuple-elems b)))
+      ((%py-class-is b) (%py-subclass? c b))
+      (#t
+        (Err raise (lit type)
+          "issubclass() arg 2 must be a class or tuple of classes" ())))))
 (def %py-any-subclass?
   (fn (self c bs)
-    (if (null? bs) #f
-      (if (not (%py-class-is (first bs)))
-        (Err raise (lit type) "issubclass() arg 2 must be a class or tuple of classes" ())
-        (if (%py-subclass? c (first bs)) #t (self c (rest bs)))))))
+    (match
+      ((null? bs) #f)
+      ((not (%py-class-is (first bs)))
+        (Err raise (lit type) "issubclass() arg 2 must be a class or tuple of classes" ()))
+      ((%py-subclass? c (first bs)) #t)
+      (#t (self c (rest bs))))))
 
 ; enumerate and filter are LAZY, like map: a generator pulling its source.
 (def %py-enumerate
@@ -4470,9 +4505,11 @@
 ; a set, list or dict cannot be a set element or a dict key; a frozenset can
 (def %py-hashable?
   (fn (_ v)
-    (if (%py-list-is v) #f
-      (if (%py-dict-is v) #f
-        (if (%py-set-is v) (%py-set-frozen? v) #t)))))
+    (match
+      ((%py-list-is v) #f)
+      ((%py-dict-is v) #f)
+      ((%py-set-is v) (%py-set-frozen? v))
+      (#t #t))))
 (def %py-check-hashable!
   (fn (_ v)
     (if (%py-hashable? v) ()
@@ -4480,8 +4517,11 @@
         (Str8 append (Str8 append "unhashable type: '" (%py-type-name v)) "'") ()))))
 (def %py-type-name
   (fn (_ v)
-    (if (%py-list-is v) "list"
-      (if (%py-dict-is v) "dict" (if (%py-set-is v) "set" "object")))))
+    (match
+      ((%py-list-is v) "list")
+      ((%py-dict-is v) "dict")
+      ((%py-set-is v) "set")
+      (#t "object"))))
 ; append v unless an equal element is already there
 (def %py-set-put
   (fn (_ es v)
@@ -4559,10 +4599,13 @@
   (fn (_ a b op)
     (if (if (%py-set-is a) (%py-set-is b) #f)
       (let ((x (%py-set-elems a)) (y (%py-set-elems b)))
-        (if (Str8 =? op "<=") (%py-set-subset? x y)
-          (if (Str8 =? op "<") (if (%py-set-subset? x y) (< (List length x) (List length y)) #f)
-            (if (Str8 =? op ">=") (%py-set-subset? y x)
-              (if (%py-set-subset? y x) (> (List length x) (List length y)) #f)))))
+        (match
+          ((Str8 =? op "<=") (%py-set-subset? x y))
+          ((Str8 =? op "<")
+            (if (%py-set-subset? x y) (< (List length x) (List length y)) #f))
+          ((Str8 =? op ">=") (%py-set-subset? y x))
+          ((%py-set-subset? y x) (> (List length x) (List length y)))
+          (#t #f)))
       (%py-ord-refuse op))))
 
 (def %py-set-attr
@@ -4663,9 +4706,11 @@
     (def n (Str8 length s))
     (def val
       (fn (_ c)
-        (if (if (>= c 48) (<= c 57) #f) (- c 48)
-          (if (if (>= c 97) (<= c 122) #f) (- c 87)
-            (if (if (>= c 65) (<= c 90) #f) (- c 55) 99)))))
+        (match
+          ((if (>= c 48) (<= c 57) #f) (- c 48))
+          ((if (>= c 97) (<= c 122) #f) (- c 87))
+          ((if (>= c 65) (<= c 90) #f) (- c 55))
+          (#t 99))))
     (def go
       (fn (self i acc)
         (if (>= i n) acc
@@ -4720,19 +4765,19 @@
         (if (>= i n)
           seen-digit
           (let ((c (code i)))
-            (if (if (>= c 48) (<= c 57) #f)
-              (self (+ i 1) #t seen-dot seen-e)
-              (if (= c 46)
-                (if (if seen-dot #t seen-e) #f (self (+ i 1) seen-digit #t seen-e))
-                (if (if (= c 101) #t (= c 69))
-                  (if seen-e #f
-                    (if (not seen-digit) #f
-                      (let ((j (if (< (+ i 1) n)
-                                 (if (if (= (code (+ i 1)) 43) #t (= (code (+ i 1)) 45))
-                                   (+ i 2) (+ i 1))
-                                 (+ i 1))))
-                        (self j #f seen-dot #t))))
-                  #f)))))))
+            (match
+              ((if (>= c 48) (<= c 57) #f) (self (+ i 1) #t seen-dot seen-e))
+              ((= c 46)
+                (if (if seen-dot #t seen-e) #f (self (+ i 1) seen-digit #t seen-e)))
+              ((if (= c 101) #t (= c 69))
+                (if seen-e #f
+                  (if (not seen-digit) #f
+                    (let ((j (if (< (+ i 1) n)
+                               (if (if (= (code (+ i 1)) 43) #t (= (code (+ i 1)) 45))
+                                 (+ i 2) (+ i 1))
+                               (+ i 1))))
+                      (self j #f seen-dot #t)))))
+              (#t #f))))))
     (if (= n 0)
       #f
       (let ((c0 (code 0)))
@@ -4747,7 +4792,11 @@
 (def %py-f-trim
   (fn (_ s)
     (def n (Str8 length s))
-    (def ws? (fn (_ c) (if (= c 32) #t (if (= c 9) #t (if (= c 10) #t (= c 13))))))
+    (def ws? (fn (_ c) (match
+                         ((= c 32) #t)
+                         ((= c 9) #t)
+                         ((= c 10) #t)
+                         (#t (= c 13)))))
     (def a
       (fn (self i)
         (if (>= i n) i (if (ws? (%py-f-code s i)) (self (+ i 1)) i))))
@@ -4819,75 +4868,81 @@
 (def %py-num-kind
   (fn (_ v)
     (let ((h (%py-typeof-prim v)))
-      (if (eq? h %py-th-int) (lit int)
-      (if (eq? h %py-th-big) (lit int)
-      (if (eq? h %py-th-float) (lit float)
-      (if (eq? h %py-th-complex) (lit complex)
-        ())))))))
+      (match
+        ((eq? h %py-th-int) (lit int))
+        ((eq? h %py-th-big) (lit int))
+        ((eq? h %py-th-float) (lit float))
+        ((eq? h %py-th-complex) (lit complex))
+        (#t ())))))
 
 (def %py-int-ctor
   (fn (_ . a)
     (if (null? a)
       0
       (let ((v (first a)))
-        (if (eq? v #t) 1
-        (if (eq? v #f) 0
-        (if (str? v) (%py-int-of-str v)
-        (if (%py-obj-is v)
-          (let ((m (%py-dunder v "__int__")))
-            (if (null? m)
-              (Err raise (lit type) "int() argument must be a number or string" ())
-              (m)))
-          (let ((k (%py-num-kind v)))
-            (if (eq? k (lit int)) v
-            (if (eq? k (lit float))
-              ; toward zero through the EXACT DIGITS, so int(1e19) and
-              ; int(2.0 ** 100) answer bigints instead of a wrapped int64
-              (let ((m (%py-fmt-int-mag v)))
-                (let ((n (%py-int-of-str (rest m))))
-                  (if (first m) (- 0 n) n)))
-              (Err raise (lit type) "int() argument must be a number or string" ()))))))))))))
+        (match
+          ((eq? v #t) 1)
+          ((eq? v #f) 0)
+          ((str? v) (%py-int-of-str v))
+          ((%py-obj-is v)
+            (let ((m (%py-dunder v "__int__")))
+              (if (null? m)
+                (Err raise (lit type) "int() argument must be a number or string" ())
+                (m))))
+          (#t
+            (let ((k (%py-num-kind v)))
+              (if (eq? k (lit int)) v
+              (if (eq? k (lit float))
+                ; toward zero through the EXACT DIGITS, so int(1e19) and
+                ; int(2.0 ** 100) answer bigints instead of a wrapped int64
+                (let ((m (%py-fmt-int-mag v)))
+                  (let ((n (%py-int-of-str (rest m))))
+                    (if (first m) (- 0 n) n)))
+                (Err raise (lit type) "int() argument must be a number or string" ()))))))))))
 
 (def %py-float-ctor
   (fn (_ . a)
     (if (null? a)
       0.0
       (let ((v (first a)))
-        (if (eq? v #t) 1.0
-        (if (eq? v #f) 0.0
-        (if (str? v) (%py-float-of-str v)
-        (if (%py-obj-is v)
-          (let ((m (%py-dunder v "__float__")))
-            (if (null? m)
-              (Err raise (lit type) "float() argument must be a number or string" ())
-              (m)))
-        (if (%py-bytes-is v) (%py-float-of-str (%py-bytes-str v))
-          (let ((k (%py-num-kind v)))
-            (if (eq? k (lit float)) v
-            (if (eq? k (lit int)) (* v 1.0)
-              (Err raise (lit type) "float() argument must be a number or string" ())))))))))))))
+        (match
+          ((eq? v #t) 1.0)
+          ((eq? v #f) 0.0)
+          ((str? v) (%py-float-of-str v))
+          ((%py-obj-is v)
+            (let ((m (%py-dunder v "__float__")))
+              (if (null? m)
+                (Err raise (lit type) "float() argument must be a number or string" ())
+                (m))))
+          ((%py-bytes-is v) (%py-float-of-str (%py-bytes-str v)))
+          (#t
+            (let ((k (%py-num-kind v)))
+              (if (eq? k (lit float)) v
+              (if (eq? k (lit int)) (* v 1.0)
+                (Err raise (lit type) "float() argument must be a number or string" ()))))))))))
 
 ; Python's truthiness, stated once: the empties and the zeros are false and
 ; everything else is true.  Objects and classes are unconditionally true.
 (def %py-truthy
   (fn (_ v)
-    (if (eq? v #f) #f
-    (if (eq? v #t) #t
-    (if (null? v) #f
-    (if (str? v) (> (Str8 length v) 0)
-    (if (%py-list-is v) (not (null? (%py-list-elems v)))
-    (if (%py-set-is v) (not (null? (%py-set-elems v)))
-    (if (%py-view-is v) (not (null? (%py-view-elems v)))
-    (if (%py-dict-is v) (not (null? (%py-dict-entries v)))
-    (if (%py-tuple-is v) (not (null? (%py-tuple-elems v)))
-    (if (%py-obj-is v)
-      (let ((b (%py-dunder v "__bool__")))
-        (if (not (null? b))
-          (%py-truthy (b))
-          (let ((l (%py-dunder v "__len__")))
-            (if (null? l) #t (not (= (l) 0))))))
-    (if (%py-class-is v) #t
-      (not (= v 0)))))))))))))))
+    (match
+      ((eq? v #f) #f)
+      ((eq? v #t) #t)
+      ((null? v) #f)
+      ((str? v) (> (Str8 length v) 0))
+      ((%py-list-is v) (not (null? (%py-list-elems v))))
+      ((%py-set-is v) (not (null? (%py-set-elems v))))
+      ((%py-view-is v) (not (null? (%py-view-elems v))))
+      ((%py-dict-is v) (not (null? (%py-dict-entries v))))
+      ((%py-tuple-is v) (not (null? (%py-tuple-elems v))))
+      ((%py-obj-is v)
+        (let ((b (%py-dunder v "__bool__")))
+          (if (not (null? b))
+            (%py-truthy (b))
+            (let ((l (%py-dunder v "__len__")))
+              (if (null? l) #t (not (= (l) 0)))))))
+      ((%py-class-is v) #t)
+      (#t (not (= v 0))))))
 
 (def %py-bool-ctor
   (fn (_ . a) (if (null? a) #f (%py-truthy (first a)))))
@@ -5060,15 +5115,15 @@
     (if (null? args)
       (%py-bytes-new "")
       (let ((v (first args)))
-        (if (%py-bytes-is v)
-          v
-          (if (%py-list? v)
-            (%py-bytes-new (%py-bytes-of-codes (%py-list-elems v) ""))
-            (if (%py-tuple-is v)
-              (%py-bytes-new (%py-bytes-of-codes (%py-tuple-elems v) ""))
-              (if (str? v)
-                (Err raise (lit type) "string argument without an encoding" ())
-                (%py-bytes-new (%py-bytes-zeros v ""))))))))))
+        (match
+          ((%py-bytes-is v) v)
+          ((%py-list? v)
+            (%py-bytes-new (%py-bytes-of-codes (%py-list-elems v) "")))
+          ((%py-tuple-is v)
+            (%py-bytes-new (%py-bytes-of-codes (%py-tuple-elems v) "")))
+          ((str? v)
+            (Err raise (lit type) "string argument without an encoding" ()))
+          (#t (%py-bytes-new (%py-bytes-zeros v ""))))))))
 
 ; A NUL BYTE CANNOT BE CARRIED HERE, and saying so is better than answering a
 ; short bytes.  A string on this platform is a C STRING BY AN ENGINE GUARANTEE
@@ -5229,27 +5284,26 @@
 (def %py-slice
   (fn (_ obj start stop step)
     (let ((st (if (null? step) 1 step)))
-      (if (= st 0)
-        (Err raise (lit value) "slice step cannot be zero" ())
-        (if (str? obj)
-          ; code points, like len and indexing
+      (match
+        ((= st 0) (Err raise (lit value) "slice step cannot be zero" ()))
+        ((str? obj)
           (Str8 join ""
             (%py-sl-chars obj
-              (%py-slice-idxs (Str length obj) start stop st) ()))
-          (if (%py-bytes-is obj)
-            (let ((s (%py-bytes-str obj)))
-              (%py-bytes-new
-                (Str8 join "" (%py-sl-bytes s (%py-slice-idxs (Str8 length s) start stop st) ()))))
-          (if (%py-list-is obj)
-            (%py-list-new
-              (%py-sl-pick (%py-list-elems obj)
-                (%py-slice-idxs (List length (%py-list-elems obj)) start stop st) ()))
-            (if (%py-tuple-is obj)
-              (%py-tuple-new
-                (%py-sl-pick (%py-tuple-elems obj)
-                  (%py-slice-idxs (List length (%py-tuple-elems obj)) start stop st) ()))
-              ; a dict gets Python's own complaint: a slice is not a key
-              (Err raise (lit type) "unhashable type: 'slice'" ())))))))))
+              (%py-slice-idxs (Str length obj) start stop st) ())))
+        ((%py-bytes-is obj)
+          (let ((s (%py-bytes-str obj)))
+            (%py-bytes-new
+              (Str8 join "" (%py-sl-bytes s (%py-slice-idxs (Str8 length s) start stop st) ())))))
+        ((%py-list-is obj)
+          (%py-list-new
+            (%py-sl-pick (%py-list-elems obj)
+              (%py-slice-idxs (List length (%py-list-elems obj)) start stop st) ())))
+        ((%py-tuple-is obj)
+          (%py-tuple-new
+            (%py-sl-pick (%py-tuple-elems obj)
+              (%py-slice-idxs (List length (%py-tuple-elems obj)) start stop st) ())))
+        ; a dict gets Python's own complaint: a slice is not a key
+        (#t (Err raise (lit type) "unhashable type: 'slice'" ()))))))
 
 ; --- def, whatever the frame depth -------------------------------------------
 ;
