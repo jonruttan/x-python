@@ -314,23 +314,21 @@
 
 (def %py-seq-eq
   (fn (self a b)
-    (if (null? a)
-      (null? b)
-      (if (null? b)
-        #f
-        (if (%py-equal (first a) (first b)) (self (rest a) (rest b)) #f)))))
+    (match
+      ((null? a) (null? b))
+      ((null? b) #f)
+      ((%py-equal (first a) (first b)) (self (rest a) (rest b)))
+      (#t #f))))
 
 ; Lexicographic, as Python compares sequences: the first differing element
 ; decides, and a proper prefix is the smaller.
 (def %py-seq-lt
   (fn (self a b)
-    (if (null? a)
-      (not (null? b))
-      (if (null? b)
-        #f
-        (if (%py-equal (first a) (first b))
-          (self (rest a) (rest b))
-          (< (first a) (first b)))))))
+    (match
+      ((null? a) (not (null? b)))
+      ((null? b) #f)
+      ((%py-equal (first a) (first b)) (self (rest a) (rest b)))
+      (#t (< (first a) (first b))))))
 
 ; Multiplying a sequence by a non-number is a TypeError in Python, and the
 ; guard has to name the cases rather than test for "number": the tower's ints,

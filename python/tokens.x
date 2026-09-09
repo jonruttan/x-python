@@ -239,15 +239,14 @@
     (def go
       (fn (self acc)
         (let ((v (%py-token-read buffer)))
-          (if (null? v)
-            (mk-tok-block (List reverse acc))
-            (if (eq? v (lit %py-dedent))
-              (mk-tok-block (List reverse acc))
-              ; a nested block may have closed more levels than its own
-              (if (> (first %py-owed) 0)
-                (%seq (%set-first! %py-owed (- (first %py-owed) 1))
-                  (mk-tok-block (List reverse (pair v acc))))
-                (self (pair v acc))))))))
+          (match
+            ((null? v) (mk-tok-block (List reverse acc)))
+            ((eq? v (lit %py-dedent)) (mk-tok-block (List reverse acc)))
+            ; a nested block may have closed more levels than its own
+            ((> (first %py-owed) 0)
+              (%seq (%set-first! %py-owed (- (first %py-owed) 1))
+                (mk-tok-block (List reverse (pair v acc)))))
+            (#t (self (pair v acc)))))))
     (go ())))
 
 ; A BLANK OR COMMENT-ONLY LINE IS DISCARDED HERE, where the decision is cheap.
@@ -370,13 +369,11 @@
 ; `2j`, `1.5j`, `1e3j`.  The parse strips it and builds the complex.
 (set! %py-number-exp-digits
   (fn (_ buffer score chr)
-    (if (%py-digit? chr)
-      %py-number-exp-digits
-      (if (= chr 95)
-        %py-number-exp-digits
-        (if (if (= chr 106) #t (= chr 74))
-          (%score-set score 1 buffer)
-          (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))
+    (match
+      ((%py-digit? chr) %py-number-exp-digits)
+      ((= chr 95) %py-number-exp-digits)
+      ((if (= chr 106) #t (= chr 74)) (%score-set score 1 buffer))
+      (#t (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
 
 ; After the `e`: an optional sign, then at least one digit.
 (def %py-number-exp-first
@@ -391,50 +388,54 @@
 
 (set! %py-number-frac
   (fn (_ buffer score chr)
-    (if (%py-digit? chr)
-      %py-number-frac
-      (if (= chr 95)
-        %py-number-frac
-        (if (if (= chr 101) #t (= chr 69))
-          %py-number-exp-sign
-          (if (if (= chr 106) #t (= chr 74))
-            (%score-set score 1 buffer)
-            (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))))
+    (match
+      ((%py-digit? chr) %py-number-frac)
+      ((= chr 95) %py-number-frac)
+      ((if (= chr 101) #t (= chr 69)) %py-number-exp-sign)
+      ((if (= chr 106) #t (= chr 74)) (%score-set score 1 buffer))
+      (#t (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
 
 (set! %py-number-body
   (fn (_ buffer score chr)
-    (if (%py-digit? chr)
-      %py-number-body
-      (if (= chr 95)
-        %py-number-body
-        (if (= chr 46)
-          %py-number-frac
-          (if (if (= chr 101) #t (= chr 69))
-            %py-number-exp-sign
-            (if (if (= chr 106) #t (= chr 74))
-              (%score-set score 1 buffer)
-              (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))))
+    (match
+      ((%py-digit? chr) %py-number-body)
+      ((= chr 95) %py-number-body)
+      ((= chr 46) %py-number-frac)
+      ((if (= chr 101) #t (= chr 69)) %py-number-exp-sign)
+      ((if (= chr 106) #t (= chr 74)) (%score-set score 1 buffer))
+      (#t (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
 
 ; 0x 0o 0b: a zero, the base letter, then that base's digits (underscores
 ; allowed).  The parse reads the base back off the text.
 (def %py-number-based ())
 (set! %py-number-based
   (fn (_ buffer score chr)
-    (if (if (%py-digit? chr) #t
-          (if (if (>= chr 97) (<= chr 102) #f) #t
-            (if (if (>= chr 65) (<= chr 70) #f) #t (= chr 95))))
+    (if (match
+          ((%py-digit? chr) #t)
+          ((if (>= chr 97) (<= chr 102) #f) #t)
+          ((if (>= chr 65) (<= chr 70) #f) #t)
+          (#t (= chr 95)))
       %py-number-based
       (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
 (def %py-number-base-first
   (fn (_ buffer score chr)
-    (if (if (%py-digit? chr) #t
-          (if (if (>= chr 97) (<= chr 102) #f) #t (if (>= chr 65) (<= chr 70) #f)))
+    (if (match
+          ((%py-digit? chr) #t)
+          ((if (>= chr 97) (<= chr 102) #f) #t)
+          ((>= chr 65) (<= chr 70))
+          (#t #f))
       %py-number-based
       ())))
 ; After a leading 0: x/X o/O b/B open a based literal; otherwise the body.
 (def %py-number-zero
   (fn (_ buffer score chr)
-    (if (if (= chr 120) #t (if (= chr 88) #t (if (= chr 111) #t (if (= chr 79) #t (if (= chr 98) #t (= chr 66))))))
+    (if (match
+          ((= chr 120) #t)
+          ((= chr 88) #t)
+          ((= chr 111) #t)
+          ((= chr 79) #t)
+          ((= chr 98) #t)
+          (#t (= chr 66)))
       %py-number-base-first
       (%py-number-body buffer score chr))))
 
@@ -471,13 +472,12 @@
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
-        (if (= chr 48)
-          %py-number-zero
-        (if (%py-digit? chr)
-          %py-number-body
-          (if (= chr 46)
-            %py-number-dot-first
-            (if (if (= chr 43) #t (= chr 45)) %py-number-signed ()))))))
+        (match
+          ((= chr 48) %py-number-zero)
+          ((%py-digit? chr) %py-number-body)
+          ((= chr 46) %py-number-dot-first)
+          ((if (= chr 43) #t (= chr 45)) %py-number-signed)
+          (#t ()))))
     (pair (lit read)
       (fn (_ . args) (mk-tok-number (%buffer-token (first args)))))))
 (%py-tok-type! "PY-NUMBER" %py-t-number)
@@ -541,9 +541,11 @@
       (%py-list->string (list (%py-int->char n))))))
 (def %py-hexval
   (fn (_ c)
-    (if (if (>= c 48) (<= c 57) #f) (- c 48)
-      (if (if (>= c 97) (<= c 102) #f) (- c 87)
-        (if (if (>= c 65) (<= c 70) #f) (- c 55) ())))))
+    (match
+      ((if (>= c 48) (<= c 57) #f) (- c 48))
+      ((if (>= c 97) (<= c 102) #f) (- c 87))
+      ((if (>= c 65) (<= c 70) #f) (- c 55))
+      (#t ()))))
 
 ; A BYTES LITERAL'S \xhh IS ONE BYTE, not a code point: b'\xff' has length
 ; 1.  The engine's byte packer (bytes ->str: one byte per character, low
@@ -686,8 +688,15 @@
 
 (def %py-prefix-char?
   (fn (_ c)
-    (if (= c 98) #t (if (= c 66) #t (if (= c 102) #t (if (= c 70) #t
-      (if (= c 114) #t (if (= c 82) #t (if (= c 117) #t (= c 85))))))))))
+    (match
+      ((= c 98) #t)
+      ((= c 66) #t)
+      ((= c 102) #t)
+      ((= c 70) #t)
+      ((= c 114) #t)
+      ((= c 82) #t)
+      ((= c 117) #t)
+      (#t (= c 85)))))
 
 (def %py-prefixed-read
   (fn (_ . args)
@@ -706,13 +715,11 @@
       (if triple
         (%py-crlf->lf (Str8 sub 4 (- len 7) raw))
         (Str8 sub 2 (- len 3) raw)))
-    (if (if (= p 98) #t (= p 66))
-      (mk-tok-bytes (%py-unescape body #t))
-      (if (if (= p 102) #t (= p 70))
-        (mk-tok-fstring (%py-unescape body #f))
-        (if (if (= p 114) #t (= p 82))
-          (mk-tok-string body)
-          (mk-tok-string (%py-unescape body #f)))))))
+    (match
+      ((if (= p 98) #t (= p 66)) (mk-tok-bytes (%py-unescape body #t)))
+      ((if (= p 102) #t (= p 70)) (mk-tok-fstring (%py-unescape body #f)))
+      ((if (= p 114) #t (= p 82)) (mk-tok-string body))
+      (#t (mk-tok-string (%py-unescape body #f))))))
 
 (def %py-t-psq
   (list
@@ -844,14 +851,27 @@
 ; Which pairs extend: a second `=`, or one of the four doubled operators.
 (def %py-op-pair?
   (fn (_ a b)
-    (if (= b 61)
-      ; ==  !=  <=  >=  +=  -=  *=  /=  %=  |=  &=  ^=
-      (if (= a 61) #t (if (= a 33) #t (if (= a 60) #t (if (= a 62) #t (if (= a 43) #t (if (= a 45) #t (if (= a 42) #t (if (= a 47) #t (if (= a 37) #t (if (= a 124) #t (if (= a 38) #t (= a 94))))))))))))
+    (match
+      ((= b 61)
+        (match
+          ((= a 61) #t)
+          ((= a 33) #t)
+          ((= a 60) #t)
+          ((= a 62) #t)
+          ((= a 43) #t)
+          ((= a 45) #t)
+          ((= a 42) #t)
+          ((= a 47) #t)
+          ((= a 37) #t)
+          ((= a 124) #t)
+          ((= a 38) #t)
+          (#t (= a 94))))
       ; // ** << >>
-      (if (if (= a 47) (= b 47) #f) #t
-        (if (if (= a 42) (= b 42) #f) #t
-          (if (if (= a 60) (= b 60) #f) #t
-            (if (= a 62) (= b 62) #f)))))))
+      ((if (= a 47) (= b 47) #f) #t)
+      ((if (= a 42) (= b 42) #f) #t)
+      ((if (= a 60) (= b 60) #f) #t)
+      ((= a 62) (= b 62))
+      (#t #f))))
 
 (def %py-op-pairable?
   (fn (_ c)
@@ -878,7 +898,11 @@
 (def %py-op-triple?
   (fn (_ a b)
     (if (= a b)
-      (if (= a 47) #t (if (= a 42) #t (if (= a 62) #t (= a 60))))
+      (match
+        ((= a 47) #t)
+        ((= a 42) #t)
+        ((= a 62) #t)
+        (#t (= a 60)))
       #f)))
 
 ; The third character is `=` and nothing else, so this state closes over
@@ -1033,26 +1057,21 @@
     (def nfrac
       (compile-asm
         (lit (fn (me buffer score chr)
-          (if (or (and (>= chr 48) (<= chr 57)) (= chr 95))
-            me
-            (if (or (= chr 101) (= chr 69))
-              es
-              (if (or (= chr 106) (= chr 74))
-                (%score-set score 1 buffer)
-                (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))
+          (match
+            ((or (and (>= chr 48) (<= chr 57)) (= chr 95)) me)
+            ((or (= chr 101) (= chr 69)) es)
+            ((or (= chr 106) (= chr 74)) (%score-set score 1 buffer))
+            (#t (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
         (list (pair (lit es) nexps))))
     (def nbody
       (compile-asm
         (lit (fn (me buffer score chr)
-          (if (or (and (>= chr 48) (<= chr 57)) (= chr 95))
-            me
-            (if (= chr 46)
-              frac
-              (if (or (= chr 101) (= chr 69))
-                es
-                (if (or (= chr 106) (= chr 74))
-                  (%score-set score 1 buffer)
-                  (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))))
+          (match
+            ((or (and (>= chr 48) (<= chr 57)) (= chr 95)) me)
+            ((= chr 46) frac)
+            ((or (= chr 101) (= chr 69)) es)
+            ((or (= chr 106) (= chr 74)) (%score-set score 1 buffer))
+            (#t (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
         (list (pair (lit frac) nfrac) (pair (lit es) nexps))))
     (def ndotf
       (compile-asm
@@ -1120,13 +1139,12 @@
     (def e-number
       (compile-asm
         (lit (fn (_ buffer score chr)
-          (if (= chr 48)
-            zero
-            (if (and (>= chr 48) (<= chr 57))
-              body
-              (if (= chr 46)
-                dotf
-                (if (or (= chr 43) (= chr 45)) signed ()))))))
+          (match
+            ((= chr 48) zero)
+            ((and (>= chr 48) (<= chr 57)) body)
+            ((= chr 46) dotf)
+            ((or (= chr 43) (= chr 45)) signed)
+            (#t ()))))
         ; the leading-zero state stays interpreted: it is rare (0x, 0o, 0b
         ; and plain zeros) and hands the digit run back to the compiled body
         (list (pair (lit zero) %py-number-zero) (pair (lit body) nbody)
@@ -1277,15 +1295,13 @@
             (let ((v (%py-token-read buffer)))
               ; EOF inside a bracket: give back what there is and let the parser
               ; say so.  A lexer that raised here would report the wrong place.
-              (if (null? v)
-                (List reverse acc)
-                (if (%py-group-close? v)
-                  (List reverse acc)
-                  ; A newline inside brackets is not line structure, it is
-                  ; whitespace -- which used to need a depth counter to know.
-                  (if (%py-group-nl? v)
-                    (self acc)
-                    (self (pair v acc))))))))
+              (match
+                ((null? v) (List reverse acc))
+                ((%py-group-close? v) (List reverse acc))
+                ; A newline inside brackets is not line structure, it is
+                ; whitespace -- which used to need a depth counter to know.
+                ((%py-group-nl? v) (self acc))
+                (#t (self (pair v acc)))))))
         (let ((elems (go ())))
           (%set-first! %py-in-group (- (first %py-in-group) 1))
           (mk-tok-group open elems))))))
