@@ -3321,30 +3321,210 @@
         (pair "name" "x-python")
         (pair "_machine" x-machine)))))
 
+; --- the math module ------------------------------------------------------
+;
+; Python's math is libm's surface with Python's edges: an argument may be an
+; int and comes back a float, a domain error is a ValueError rather than a
+; NaN, and floor/ceil/trunc answer INTS.  The platform's Float class already
+; carries the libm calls, so this is the translation layer and not an
+; implementation of anything numeric.
+;
+; NOT OFFERED: erf, erfc, gamma and lgamma.  The platform binds no libm entry
+; for them, and an approximation written here would answer digits CPython does
+; not -- which is worse than an AttributeError saying plainly that they are
+; missing.
+
+(def %py-mfloat (fn (_ x) (Float from (%py-boolnorm x))))
+
+; a domain error is Python's, not a NaN
+(def %py-mdomain
+  (fn (_) (%py-raise (%py-instantiate %py-exc-ValueError (list "math domain error")))))
+
+(def %py-mcheck
+  (fn (_ v) (if (Float nan? v) (%py-mdomain) v)))
+
+; A LOGARITHM'S DOMAIN IS THE ARGUMENT, not the answer: log(0) is -inf rather
+; than NaN, so checking what came back lets it through where Python raises.
+(def %py-mfinite
+  (fn (_ v)
+    (if (Float nan? v)
+      (%py-mdomain)
+      (if (Float inf? v)
+        (%py-raise (%py-instantiate %py-exc-OverflowError
+          (list "cannot convert float infinity to integer")))
+        v))))
+
+; AN INT IS ALREADY WHOLE, and answering it unchanged is not an optimisation
+; but the only correct answer: routing 10**25 through a double loses it to
+; 9.22e+18, and Python keeps the exact integer.  Everything else converts,
+; refuses an infinity or a NaN, and comes back an int.
+(def %py-mwhole
+  (fn (_ x k)
+    (let ((n (%py-boolnorm x)))
+      (if (eq? (%py-num-kind n) (lit int))
+        n
+        (let ((v (%py-mfinite (%py-mfloat n))))
+          (Float ->int
+            (match
+              ((eq? k (lit floor)) (Float floor v))
+              ((eq? k (lit ceil)) (Float ceil v))
+              (#t (Float trunc v)))))))))
+
+(def %py-mlog-arg
+  (fn (_ v)
+    (if (Float < (%py-mfloat 0) v) v (%py-mdomain))))
+
+; sinh/cosh/tanh and their inverses are not bound in the platform, and each is
+; one line of the exponential that is.
+(def %py-msinh
+  (fn (_ x) (Float / (Float - (Float exp x) (Float exp (Float - (%py-mfloat 0) x))) (%py-mfloat 2))))
+(def %py-mcosh
+  (fn (_ x) (Float / (Float + (Float exp x) (Float exp (Float - (%py-mfloat 0) x))) (%py-mfloat 2))))
+
+(def %py-mfactorial
+  (fn (self n acc)
+    (if (< n 2) acc (self (- n 1) (* acc n)))))
+
+; fmod keeps the DIVIDEND's sign, which is C's rule and not Python's %
+(def %py-mfmod
+  (fn (_ a b)
+    (if (Float = b (%py-mfloat 0))
+      (%py-mdomain)
+      (Float - a (Float * b (Float trunc (Float / a b)))))))
+
+(def %py-mcopysign
+  (fn (_ a b)
+    (let ((m (Float abs a)))
+      (if (Float < b (%py-mfloat 0)) (Float - (%py-mfloat 0) m) m))))
+
+(def %py-mldexp
+  (fn (self x n)
+    (if (= n 0)
+      x
+      (if (> n 0)
+        (self (Float * x (%py-mfloat 2)) (- n 1))
+        (self (Float / x (%py-mfloat 2)) (+ n 1))))))
+
+; isclose is Python's own formula, keywords and all
+(def %py-misclose
+  (fn (_ a b . kw)
+    ; Python's default rel_tol, written as a division because the reader does
+    ; not take 1e-9 here
+    (let ((rel (%py-opt kw 0 (Float / (%py-mfloat 1) (%py-mfloat 1000000000))))
+          (abs- (%py-opt kw 1 (%py-mfloat 0))))
+      ; Python's rule is abs(a-b) <= max(rel_tol * max(|a|, |b|), abs_tol), and
+      ; the <= is load-bearing: isclose(0.0, 0.0) is True on the equality, not
+      ; on any tolerance.
+      (let ((d (Float abs (Float - a b))))
+        (let ((ma (Float abs a)) (mb (Float abs b)))
+          (let ((t (Float * rel (if (Float < ma mb) mb ma))))
+            (let ((lim (if (Float < t abs-) abs- t)))
+              (if (Float < d lim) #t (Float = d lim)))))))))
+
+(def %py-math-module
+  (fn (_)
+    (%py-module-new "math"
+      (list
+        (pair "pi" (Float pi))
+        (pair "e" (Float e))
+        (pair "tau" (Float tau))
+        (pair "inf" (%py-float-ctor "inf"))
+        (pair "nan" (%py-float-ctor "nan"))
+        (pair "sqrt" (fn (_ x) (%py-mcheck (Float sqrt (%py-mfloat x)))))
+        (pair "exp" (fn (_ x) (Float exp (%py-mfloat x))))
+        (pair "log"
+          (fn (_ x . b)
+            (let ((v (Float log (%py-mlog-arg (%py-mfloat x)))))
+              (if (null? b) v (Float / v (Float log (%py-mfloat (first b))))))))
+        (pair "log2" (fn (_ x) (Float log2 (%py-mlog-arg (%py-mfloat x)))))
+        (pair "log10" (fn (_ x) (Float log10 (%py-mlog-arg (%py-mfloat x)))))
+        (pair "sin" (fn (_ x) (Float sin (%py-mfloat x))))
+        (pair "cos" (fn (_ x) (Float cos (%py-mfloat x))))
+        (pair "tan" (fn (_ x) (Float tan (%py-mfloat x))))
+        (pair "asin" (fn (_ x) (%py-mcheck (Float asin (%py-mfloat x)))))
+        (pair "acos" (fn (_ x) (%py-mcheck (Float acos (%py-mfloat x)))))
+        (pair "atan" (fn (_ x) (Float atan (%py-mfloat x))))
+        (pair "atan2" (fn (_ y x) (Float atan2 (%py-mfloat y) (%py-mfloat x))))
+        (pair "hypot" (fn (_ a b) (Float hypot (%py-mfloat a) (%py-mfloat b))))
+        (pair "pow" (fn (_ a b) (Float pow (%py-mfloat a) (%py-mfloat b))))
+        (pair "fabs" (fn (_ x) (Float abs (%py-mfloat x))))
+        (pair "fmod" (fn (_ a b) (%py-mfmod (%py-mfloat a) (%py-mfloat b))))
+        (pair "copysign" (fn (_ a b) (%py-mcopysign (%py-mfloat a) (%py-mfloat b))))
+        (pair "ldexp" (fn (_ x n) (%py-mldexp (%py-mfloat x) (%py-boolnorm n))))
+        (pair "sinh" (fn (_ x) (%py-msinh (%py-mfloat x))))
+        (pair "cosh" (fn (_ x) (%py-mcosh (%py-mfloat x))))
+        (pair "tanh"
+          (fn (_ x)
+            (let ((v (%py-mfloat x)))
+              (Float / (%py-msinh v) (%py-mcosh v)))))
+        (pair "asinh"
+          (fn (_ x)
+            (let ((v (%py-mfloat x)))
+              (Float log (Float + v (Float sqrt (Float + (Float * v v) (%py-mfloat 1))))))))
+        (pair "acosh"
+          (fn (_ x)
+            (let ((v (%py-mfloat x)))
+              (%py-mcheck
+                (Float log (Float + v (Float sqrt (Float - (Float * v v) (%py-mfloat 1)))))))))
+        (pair "atanh"
+          (fn (_ x)
+            (let ((v (%py-mfloat x)))
+              (%py-mcheck
+                (Float / (Float log (Float / (Float + (%py-mfloat 1) v)
+                                             (Float - (%py-mfloat 1) v)))
+                         (%py-mfloat 2))))))
+        (pair "degrees"
+          (fn (_ x) (Float / (Float * (%py-mfloat x) (%py-mfloat 180)) (Float pi))))
+        (pair "radians"
+          (fn (_ x) (Float / (Float * (%py-mfloat x) (Float pi)) (%py-mfloat 180))))
+        ; floor, ceil and trunc answer INTS in Python, unlike libm's -- and an
+        ; infinity has no integer to answer with (OverflowError), a NaN no
+        ; value at all (ValueError)
+        (pair "floor" (fn (_ x) (%py-mwhole x (lit floor))))
+        (pair "ceil" (fn (_ x) (%py-mwhole x (lit ceil))))
+        (pair "trunc" (fn (_ x) (%py-mwhole x (lit trunc))))
+        (pair "factorial"
+          (fn (_ n)
+            (let ((k (%py-boolnorm n)))
+              (if (< k 0) (%py-mdomain) (%py-mfactorial k 1)))))
+        (pair "isnan" (fn (_ x) (Float nan? (%py-mfloat x))))
+        (pair "isinf" (fn (_ x) (Float inf? (%py-mfloat x))))
+        (pair "isfinite" (fn (_ x) (Float finite? (%py-mfloat x))))
+        ; the keywords have to be HANDED ON: the signature declares rel_tol and
+        ; abs_tol, and a wrapper that ignores them makes every tolerance the
+        ; default while looking as though it took one
+        (pair "isclose"
+          (%py-sig! (fn (_ a b . kw) (apply %py-misclose (pair (%py-mfloat a) (pair (%py-mfloat b) kw))))
+            "isclose" (list "a" "b" "rel_tol" "abs_tol") 2 #f))
+        (pair "expm1" (fn (_ x) (Float - (Float exp (%py-mfloat x)) (%py-mfloat 1))))
+        (pair "log1p"
+          (fn (_ x) (Float log (%py-mlog-arg (Float + (%py-mfloat 1) (%py-mfloat x))))))))))
+
 (def %py-module-build
   (fn (_ name)
-    (if (Str8 =? name "sys")
-      (%py-module-new "sys"
-        (list
-          (pair "version" "3.14.7")
-          (pair "platform" (%py-platform-of x-machine %py-platform-names))
-          ; every architecture this platform builds for is little-endian;
-          ; a big-endian port would have to say so here
-          (pair "byteorder" "little")
-          (pair "implementation" (%py-sys-implementation))
-          ; the largest int a CPython machine word holds; this runtime has
-          ; bigints and no such limit, and the number is what programs test
-          (pair "maxsize" 9223372036854775807)
-          (pair "path" (%py-list-new ()))
-          (pair "argv" (%py-list-new ()))
-          (pair "modules" (%py-dict-new ()))
-          (pair "exit"
-            (fn (_ . a)
-              (%py-raise (%py-instantiate %py-exc-SystemExit
-                (if (null? a) () (list (first a)))))))))
-      (if (Str8 =? name "builtins")
-        (%py-module-new "builtins" ())
-        ()))))
+    (match
+      ((Str8 =? name "sys")
+        (%py-module-new "sys"
+                (list
+                  (pair "version" "3.14.7")
+                  (pair "platform" (%py-platform-of x-machine %py-platform-names))
+                  ; every architecture this platform builds for is little-endian;
+                  ; a big-endian port would have to say so here
+                  (pair "byteorder" "little")
+                  (pair "implementation" (%py-sys-implementation))
+                  ; the largest int a CPython machine word holds; this runtime has
+                  ; bigints and no such limit, and the number is what programs test
+                  (pair "maxsize" 9223372036854775807)
+                  (pair "path" (%py-list-new ()))
+                  (pair "argv" (%py-list-new ()))
+                  (pair "modules" (%py-dict-new ()))
+                  (pair "exit"
+                    (fn (_ . a)
+                      (%py-raise (%py-instantiate %py-exc-SystemExit
+                        (if (null? a) () (list (first a))))))))))
+      ((Str8 =? name "math") (%py-math-module))
+      ((Str8 =? name "builtins") (%py-module-new "builtins" ()))
+      (#t ()))))
 
 (def %py-import
   (fn (_ name)
