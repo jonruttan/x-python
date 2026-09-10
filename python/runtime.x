@@ -36,6 +36,7 @@
   %py-mklist %py-index %py-len %py-list? %py-write %py-getattr %py-setindex
   %py-range %py-iter-elems %py-callcc
   %py-escape %py-wind-push! %py-wind-drop!
+  %py-Ellipsis %py-dir
   %py-raise %py-exc-match %py-exc-match-any
   %py-mkclass %py-setattr %py-super
   %py-str %py-repr-of %py-mklist-of %py-hasattr
@@ -70,6 +71,12 @@
 ;
 ; NotImplemented is one unique value; identity is the test, as in Python.
 (def %py-NotImplemented (pair (lit %py-NotImplemented) ()))
+
+; ELLIPSIS IS THE OTHER SINGLETON PYTHON SPELLS AS A LITERAL, `...`, and it
+; takes the same shape for the same reason: one unique pair, identity the
+; test.  Nothing here reads it -- it exists so that a program that passes it
+; around, hashes it, or compares it gets the answer Python gives.
+(def %py-Ellipsis (pair (lit %py-Ellipsis) ()))
 
 ; The bound dunder, or nil.  A method compiles to (fn (_ py-self ...) ...),
 ; so binding is closing over the object -- the same shape %py-obj-attr uses.
@@ -425,7 +432,10 @@
           (go (Num modulo a m) b (Num modulo 1 m)))))))
 (def %py-pow3
   (fn (_ a b . m)
-    (if (null? m)
+    ; `pow(x, y, None)` IS `pow(x, y)` -- Python says so, and the modulus
+    ; arrives here as () either way, so an absent one and an explicit None
+    ; are the same question.
+    (if (if (null? m) #t (null? (first m)))
       (%py-pow a b)
       (if (if (%py-num? a) (if (%py-num? b) (%py-num? (first m)) #f) #f)
         (%py-powmod (%py-boolnorm a) (%py-boolnorm b) (%py-boolnorm (first m)))
@@ -2790,6 +2800,7 @@
       ; reaches here as an ordinary pair that nothing else claims, so it used
       ; to fall through to "unhashable type".
       ((eq? v %py-NotImplemented) (%py-id v))
+      ((eq? v %py-Ellipsis) (%py-id v))
       ((%py-float-is v) (if (= v (Float floor v)) (Float ->int v) (first v)))
       ((%py-complex-is v)
         (+ (%py-hash (%py-cre v)) (* 1000003 (%py-hash (%py-cim v)))))
@@ -2841,6 +2852,7 @@
       ; or from this runtime.
       ((%py-obj-is v) (display (%py-obj-repr v)))
       ((eq? v %py-NotImplemented) (display "NotImplemented"))
+      ((eq? v %py-Ellipsis) (display "Ellipsis"))
       (#t (display v)))))
 
 ; Close the loop: python/types.x forward-declares %py-repr and its PY-LIST write
@@ -4613,6 +4625,7 @@
       ((%py-float-is v) (%py-frepr v))
       ((%py-complex-is v) (%py-crepr v))
       ((%py-obj-is v) (%py-obj-repr v))
+      ((eq? v %py-Ellipsis) "Ellipsis")
       (#t (%py-write-to-str v)))))
 
 ; str(o) and repr(o) for an object: __str__ (falling back to __repr__) and
@@ -4987,6 +5000,66 @@
 
 (def %py-mklist-of
   (fn (_ v) (%py-list-new (%py-iter-elems v))))
+
+; --- dir ---------------------------------------------------------------------
+;
+; The names a thing answers to: its own, then its class's, then the bases' --
+; sorted, and each name once however many ancestors offer it.
+;
+; NO BARE dir().  Python's answers with the current local namespace; here a
+; Python name is an x global and no dictionary stands for the module, so there
+; is nothing truthful to answer.  Refused rather than answered wrongly, which
+; is the same call `globals()` and `locals()` are still waiting on.
+;
+; A BUILTIN TYPE ANSWERS ITS OWN NAMES ONLY.  `dir(list)` does not list
+; `append`: this runtime reaches a list's methods by type at the seam rather
+; than hanging them off the class object, so they are not there to be found.
+; Whatever a class DOES carry is reported.
+(def %py-dir-keys
+  (fn (self rows acc)
+    (if (null? rows)
+      acc
+      (self (rest rows) (pair (first (first rows)) acc)))))
+
+(def %py-dir-class
+  (fn (self c acc)
+    (if (null? c)
+      acc
+      (%py-dir-bases (%py-class-bases c) (%py-dir-keys (%py-class-methods c) acc)))))
+
+(def %py-dir-bases
+  (fn (self bs acc)
+    (if (null? bs)
+      acc
+      (self (rest bs) (%py-dir-class (first bs) acc)))))
+
+(def %py-dir-of
+  (fn (_ v)
+    (match
+      ((%py-class-is v) (%py-dir-class v ()))
+      ((%py-obj-is v) (%py-dir-class (%py-obj-class v) (%py-dir-keys (%py-obj-attrs v) ())))
+      (#t ()))))
+
+(def %py-dir-seen?
+  (fn (self n seen)
+    (if (null? seen) #f
+      (if (Str8 =? n (first seen)) #t (self n (rest seen))))))
+
+(def %py-dir-uniq
+  (fn (self names acc)
+    (if (null? names)
+      acc
+      (self (rest names)
+        (if (%py-dir-seen? (first names) acc) acc (pair (first names) acc))))))
+
+(def %py-dir
+  (%py-sig!
+    (fn (_ . a)
+      (if (null? a)
+        (Err raise (lit type)
+          "dir() with no arguments needs a namespace this runtime does not keep" ())
+        (%py-list-new (%py-msort-by (%py-dir-uniq (%py-dir-of (first a)) ()) %py-ident))))
+    "dir" (list "object") 0 #f))
 
 ; `hasattr` is defined in terms of getattr in Python too: it is "does this
 ; raise?", not a separate lookup, so anything reachable by attribute access is
