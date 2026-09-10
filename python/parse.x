@@ -45,6 +45,7 @@
 ; that x's reader does not spell the same way, and they will need handling here
 ; rather than a different reader.
 
+(import python/util)
 (import python/tokens)
 (import python/indent)
 (import python/runtime)
@@ -525,15 +526,15 @@
 ; colon; its body is a %py-test and stops at a comma on its own.
 (def %py-lambda-head
   (fn (self toks acc)
-    (if (null? toks) (pair (List reverse acc) ())
+    (if (null? toks) (pair (%py-reverse acc) ())
       (if (%py-op-is? (first toks) ":")
-        (pair (List reverse (pair (first toks) acc)) (rest toks))
+        (pair (%py-reverse (pair (first toks) acc)) (rest toks))
         (self (rest toks) (pair (first toks) acc))))))
 (def %py-comma-split
   (fn (self toks cur acc)
     (match
       ((null? toks)
-        (List reverse (if (null? cur) acc (pair (List reverse cur) acc))))
+        (%py-reverse (if (null? cur) acc (pair (%py-reverse cur) acc))))
       ; AN EMPTY PART IS ONLY EVER THE LAST ONE.  `[1,]` is a trailing comma
       ; and ends at the arm above; a comma reached with nothing gathered is
       ; `[1,,]` or `[,1]`, which Python refuses in every one of the four
@@ -542,10 +543,10 @@
       ((%py-op-is? (first toks) ",")
         (if (null? cur)
           (Err raise (lit syntax) "expected an expression before ','" (first toks))
-          (self (rest toks) () (pair (List reverse cur) acc))))
+          (self (rest toks) () (pair (%py-reverse cur) acc))))
       ((%py-name-is? (first toks) "lambda")
         (let ((h (%py-lambda-head toks ())))
-          (self (rest h) (%py-append (List reverse (first h)) cur) acc)))
+          (self (rest h) (%py-append (%py-reverse (first h)) cur) acc)))
       (#t (self (rest toks) (pair (first toks) cur) acc)))))
 
 (def %py-has-comma?
@@ -589,7 +590,7 @@
     (def split
       (fn (self ts acc)
         (if (null? ts) (Err raise (lit syntax) "expected : after lambda parameters" ())
-          (if (%py-op-is? (first ts) ":") (pair (List reverse acc) (rest ts))
+          (if (%py-op-is? (first ts) ":") (pair (%py-reverse acc) (rest ts))
             (self (rest ts) (pair (first ts) acc))))))
     (let ((sp (split (rest toks) ())))
       (let ((sig (%py-params-of (first sp))) (b (%py-test (rest sp))))
@@ -598,14 +599,14 @@
         (def dflts (first (rest sig)))
         (def rest-name (first (rest (rest sig))))
         (def rest-sym (if (null? rest-name) () (%py-name->sym rest-name)))
-        (def nreq (- (List length names) (List length dflts)))
+        (def nreq (- (%py-length names) (%py-length dflts)))
         (def body
           (if (null? dflts)
             (if (null? rest-sym) (first b)
               (list (lit let) (list (list rest-sym (list (lit %py-tuple-of-list) rest-sym))) (first b)))
             (if (null? rest-sym)
               (list (lit %seq)
-                (list (lit %py-arity!) "<lambda>" (lit %py-more) nreq (List length dflts))
+                (list (lit %py-arity!) "<lambda>" (lit %py-more) nreq (%py-length dflts))
                 (list (lit let) (%py-opt-lets dflts 0 ()) (first b)))
               (list (lit let) (%py-opt-lets dflts 0 rest-sym) (first b)))))
         (def params
@@ -670,7 +671,7 @@
 (def %py-exprs-of
   (fn (self parts acc)
     (if (null? parts)
-      (List reverse acc)
+      (%py-reverse acc)
       (self (rest parts) (pair (%py-expr-of (first parts)) acc)))))
 
 (def %py-group-exprs
@@ -706,11 +707,11 @@
         (def segs
           (fn (self ps run acc)
             (if (null? ps)
-              (List reverse (if (null? run) acc (pair (pair (lit list) (List reverse run)) acc)))
+              (%py-reverse (if (null? run) acc (pair (pair (lit list) (%py-reverse run)) acc)))
               (if (%py-spread-part? (first ps))
                 (self (rest ps) ()
                   (pair (list (lit %py-iter-elems) (%py-expr-of (rest (first ps))))
-                    (if (null? run) acc (pair (pair (lit list) (List reverse run)) acc))))
+                    (if (null? run) acc (pair (pair (lit list) (%py-reverse run)) acc))))
                 (self (rest ps) (pair (%py-expr-of (first ps)) run) acc)))))
         (pair (lit %py-splat) (segs parts () ()))))))
 
@@ -770,13 +771,13 @@
     (if (null? toks)
       (Err raise (lit syntax) "expected : after a dict key" ())
       (if (%py-op-is? (first toks) ":")
-        (pair (List reverse acc) (rest toks))
+        (pair (%py-reverse acc) (rest toks))
         (self (rest toks) (pair (first toks) acc))))))
 
 (def %py-entries-of
   (fn (self parts acc)
     (if (null? parts)
-      (List reverse acc)
+      (%py-reverse acc)
       (let ((kv (%py-colon-split (first parts) ())))
         (self (rest parts)
           (pair
@@ -814,11 +815,11 @@
 (set! %py-slice-segs
   (fn (self toks cur acc)
     (if (null? toks)
-      (List reverse (pair (List reverse cur) acc))
+      (%py-reverse (pair (%py-reverse cur) acc))
       (if (%py-op-is? (first toks) ":")
         (if (>= (%py-count acc) 2)
           (Err raise (lit syntax) "too many colons in a subscript" ())
-          (self (rest toks) () (pair (List reverse cur) acc)))
+          (self (rest toks) () (pair (%py-reverse cur) acc)))
         (self (rest toks) (pair (first toks) cur) acc)))))
 
 ; An empty segment is the default, spelled () in the emission; a present one is
@@ -856,7 +857,7 @@
 (def %py-comp-refs
   (fn (self syms i acc)
     (if (null? syms)
-      (List reverse acc)
+      (%py-reverse acc)
       (self (rest syms) (+ i 1)
         (pair
           (list (first syms)
@@ -891,7 +892,7 @@
 (set! %py-comp-clauses
   (fn (self toks acc)
     (match
-      ((null? toks) (List reverse acc))
+      ((null? toks) (%py-reverse acc))
       ((%py-name-is? (first toks) "for")
         (let ((n (%py-for-names (rest toks) ())))
           (let ((it (%py-or-e (rest n))))
@@ -974,11 +975,11 @@
     (if (if (null? toks) #t
           (if (eq? (%py-tag (first toks)) (lit tok-newline)) #t
             (%py-block? (first toks))))
-      (pair (List reverse acc) toks)
+      (pair (%py-reverse acc) toks)
       (let ((r (%py-test toks)))
         (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ",")
           (self (rest (rest r)) (pair (first r) acc))
-          (pair (List reverse (pair (first r) acc)) (rest r)))))))
+          (pair (%py-reverse (pair (first r) acc)) (rest r)))))))
 
 (def %py-exprlist
   (fn (_ toks)
@@ -1182,7 +1183,7 @@
       (fn (self i lit acc)
         (def flush (fn (_) (if (Str8 =? lit "") acc (pair lit acc))))
         (if (>= i n)
-          (List reverse (flush))
+          (%py-reverse (flush))
           (let ((c (%py-fs-code s i)))
             (if (= c 123)
               (if (if (< (+ i 1) n) (= (%py-fs-code s (+ i 1)) 123) #f)
@@ -1420,7 +1421,7 @@
   (fn (self toks acc)
     (if (if (null? toks) #t
           (if (eq? (%py-tag (first toks)) (lit tok-newline)) (null? (rest (first toks))) #f))
-      (pair (List reverse acc) toks)
+      (pair (%py-reverse acc) toks)
       (self (rest toks) (pair (first toks) acc)))))
 
 ; Statements until the token list runs out.  A block IS its token list now, so
@@ -1440,7 +1441,7 @@
   (fn (self toks acc)
     (let ((t (%py-skip-nl toks)))
       (if (null? t)
-        (pair (List reverse acc) t)
+        (pair (%py-reverse acc) t)
         (let ((r (%py-stmt t)))
           (self (rest r) (pair (first r) acc)))))))
 
@@ -1514,15 +1515,15 @@
                 (rest-toks (first (rest bound))))
             (if (%py-op-is? (if (null? rest-toks) () (first rest-toks)) ",")
               (self (rest rest-toks) acc2)
-              (pair (pair (lit do) (List reverse acc2)) rest-toks))))))))
+              (pair (pair (lit do) (%py-reverse acc2)) rest-toks))))))))
 
 (def %py-from-imports
   (fn (self name toks acc)
     (match
-      ((null? toks) (pair (pair (lit do) (List reverse acc)) toks))
+      ((null? toks) (pair (pair (lit do) (%py-reverse acc)) toks))
       ((%py-op-is? (first toks) ",") (self name (rest toks) acc))
       ((eq? (%py-tag (first toks)) (lit tok-newline))
-        (pair (pair (lit do) (List reverse acc)) toks))
+        (pair (pair (lit do) (%py-reverse acc)) toks))
       ((not (eq? (%py-tag (first toks)) (lit tok-name)))
         (Err raise (lit syntax) "expected a name after import" ()))
       (#t
@@ -1601,11 +1602,11 @@
                     (more (rest (rest after))))
                 (if (%py-op-is? (if (null? more) () (first more)) ",")
                   (self (rest more) acc2)
-                  (pair (List reverse acc2) more)))))
+                  (pair (%py-reverse acc2) more)))))
           (let ((acc2 (pair (pair (first e) ()) acc)))
             (if (%py-op-is? (if (null? after) () (first after)) ",")
               (self (rest after) acc2)
-              (pair (List reverse acc2) after))))))))
+              (pair (%py-reverse acc2) after))))))))
 
 (set! %py-stmt
   (fn (_ toks)
@@ -1752,7 +1753,7 @@
   (fn (self toks acc)
     (let ((t (if (null? toks) () (first toks))))
       (match
-        ((%py-name-is? t "in") (pair (List reverse acc) (rest toks)))
+        ((%py-name-is? t "in") (pair (%py-reverse acc) (rest toks)))
         ((%py-op-is? t ",") (self (rest toks) acc))
         ((eq? (%py-tag t) (lit tok-name))
           (self (rest toks) (pair (%py-val t) acc)))
@@ -1761,7 +1762,7 @@
 (def %py-syms-of
   (fn (self names acc)
     (if (null? names)
-      (List reverse acc)
+      (%py-reverse acc)
       (self (rest names) (pair (%py-name->sym (first names)) acc)))))
 
 (def %py-for-bind
@@ -1933,7 +1934,7 @@
 (def %py-group-names
   (fn (self toks acc)
     (if (null? toks)
-      (List reverse acc)
+      (%py-reverse acc)
       (let ((t (first toks)))
         (match
           ((%py-op-is? t ",") (self (rest toks) acc))
@@ -1974,7 +1975,7 @@
     (def go
       (fn (self parts names dflts rest-name kw-name)
         (if (null? parts)
-          (list (List reverse names) (List reverse dflts) rest-name kw-name)
+          (list (%py-reverse names) (%py-reverse dflts) rest-name kw-name)
           (let ((p (first parts)))
             (let ((t (first p)))
               (match
@@ -2060,7 +2061,7 @@
   (fn (self toks acc)
     (let ((t (%py-skip-nl toks)))
       (if (not (%py-name-is? (if (null? t) () (first t)) "except"))
-        (pair (List reverse acc) t)
+        (pair (%py-reverse acc) t)
         (let ((r (%py-except-clause (rest t))))
           (self (rest r) (pair (first r) acc)))))))
 
@@ -2198,7 +2199,7 @@
       (if (if (null? t) #f (%py-op-is? (first t) "@"))
         (let ((d (%py-exprlist (rest t))))
           (self (rest d) (pair (first d) acc)))
-        (pair (List reverse acc) t)))))
+        (pair (%py-reverse acc) t)))))
 
 (def %py-wrap-decos ())
 (set! %py-wrap-decos
@@ -2223,7 +2224,7 @@
   (fn (self toks acc)
     (let ((t (%py-skip-nl toks)))
       (match
-        ((null? t) (pair (List reverse acc) t))
+        ((null? t) (pair (%py-reverse acc) t))
         ; A DECORATED METHOD is the same entry with a call around its function:
         ; the decorators are collected, the def is parsed as it always was, and
         ; what goes in the alist is deco(fn) rather than fn.
@@ -2348,7 +2349,7 @@
   (fn (self toks acc)
     (let ((t (first toks)))
       (if (%py-op-is? t "=")
-        (pair (List reverse acc) (rest toks))
+        (pair (%py-reverse acc) (rest toks))
         (if (%py-op-is? t ",")
           (self (rest toks) acc)
           (self (rest toks) (pair (%py-name->sym (%py-val t)) acc)))))))
@@ -2356,7 +2357,7 @@
 (def %py-unpack-sets
   (fn (self syms i acc)
     (if (null? syms)
-      (List reverse acc)
+      (%py-reverse acc)
       (self (rest syms) (+ i 1)
         (pair
           (list (lit set!) (first syms)
@@ -2430,7 +2431,7 @@
             (def rest-sym (if (null? rest-name) () (%py-name->sym rest-name)))
             (def kw-name (List ref 3 sig))
             (def kw-sym (if (null? kw-name) () (%py-name->sym kw-name)))
-            (def nreq (- (List length names) (List length dflts)))
+            (def nreq (- (%py-length names) (%py-length dflts)))
             (def all-syms
               (let ((withrest (if (null? rest-sym) syms (%py-append syms (list rest-sym)))))
                 (if (null? kw-sym) withrest (%py-append withrest (list kw-sym)))))
@@ -2487,7 +2488,7 @@
                         (if (null? rest-sym)
                           (list (lit %seq)
                             (list (lit %py-arity!) (%py-val name) (lit %py-more)
-                              nreq (List length dflts))
+                              nreq (%py-length dflts))
                             (list (lit let) (%py-opt-lets dflts 0 ()) body0))
                           (list (lit let) (%py-opt-lets dflts 0 rest-sym) body0)))))
                   (def params
@@ -2570,7 +2571,7 @@
 (def %py-lets
   (fn (self syms acc)
     (if (null? syms)
-      (List reverse acc)
+      (%py-reverse acc)
       (self (rest syms) (pair (list (first syms) ()) acc)))))
 
 (def %py-minus
@@ -2639,27 +2640,27 @@
 (def %py-mentioned
   (fn (self toks acc)
     (if (null? toks)
-      (List reverse acc)
+      (%py-reverse acc)
       (let ((t (first toks)))
         (match
           ((eq? (%py-tag t) (lit tok-name))
             (self (rest toks) (pair (%py-val t) acc)))
           ((eq? (%py-tag t) (lit tok-group))
-            (self (rest toks) (%py-append (List reverse (self (%py-group-of t) ())) acc)))
+            (self (rest toks) (%py-append (%py-reverse (self (%py-group-of t) ())) acc)))
           ((%py-block? t)
-            (self (rest toks) (%py-append (List reverse (self (%py-block-toks t) ())) acc)))
+            (self (rest toks) (%py-append (%py-reverse (self (%py-block-toks t) ())) acc)))
           (#t (self (rest toks) acc)))))))
 
 ; Every name the program BINDS: assignment targets, def names, parameters.
 (def %py-bound-names
   (fn (self toks acc)
     (if (null? toks)
-      (List reverse acc)
+      (%py-reverse acc)
       (let ((t (first toks)))
         (match
           ((%py-for-target? toks)
             (let ((u (%py-for-names (rest toks) ())))
-              (self (rest u) (%py-append (List reverse (first u)) acc))))
+              (self (rest u) (%py-append (%py-reverse (first u)) acc))))
           ((%py-name-is? t "as")
             (let ((n (if (null? (rest toks)) () (first (rest toks)))))
               (self (rest (rest toks))
@@ -2677,7 +2678,7 @@
 (def %py-assign-targets
   (fn (self toks acc)
     (if (null? toks)
-      (List reverse acc)
+      (%py-reverse acc)
       (let ((t (first toks)))
         ; DESCEND INTO BLOCKS.  `if x:` then `y = 1` binds y at MODULE level in
         ; Python, and the body is a nested token now -- a scan that stayed at
@@ -2685,15 +2686,15 @@
         ; bodies are still skipped below: those targets are the function's own.
         (match
           ((%py-block? t)
-            (self (rest toks) (%py-append (List reverse (self (%py-block-toks t) ())) acc)))
+            (self (rest toks) (%py-append (%py-reverse (self (%py-block-toks t) ())) acc)))
           ((%py-for-target? toks)
             (let ((u (%py-for-names (rest toks) ())))
-              (self (rest u) (%py-append (List reverse (%py-syms-of (first u) ())) acc))))
+              (self (rest u) (%py-append (%py-reverse (%py-syms-of (first u) ())) acc))))
           ((%py-block? t)
-            (self (rest toks) (%py-append (List reverse (self (%py-block-toks t) ())) acc)))
+            (self (rest toks) (%py-append (%py-reverse (self (%py-block-toks t) ())) acc)))
           ((%py-unpack-stmt? toks)
             (let ((u (%py-unpack-names toks ())))
-              (self (rest u) (%py-append (List reverse (first u)) acc))))
+              (self (rest u) (%py-append (%py-reverse (first u)) acc))))
           ((%py-name-is? t "class")
             (let ((n (if (null? (rest toks)) () (first (rest toks)))))
               (self (rest (rest toks))
@@ -2751,7 +2752,7 @@
 (def %py-dedupe
   (fn (self seen syms acc)
     (if (null? syms)
-      (List reverse acc)
+      (%py-reverse acc)
       (if (%py-seen? (first syms) seen)
         (self seen (rest syms) acc)
         (self (pair (first syms) seen) (rest syms) (pair (first syms) acc))))))
@@ -2765,7 +2766,7 @@
 (def %py-undefined
   (fn (self names bound acc)
     (if (null? names)
-      (List reverse acc)
+      (%py-reverse acc)
       (let ((n (first names)))
         (if (if (%py-str-seen? n bound) #t
               (if (%py-str-seen? n %py-keywords) #t
@@ -2790,7 +2791,7 @@
 (def %py-shims
   (fn (self names acc)
     (if (null? names)
-      (List reverse acc)
+      (%py-reverse acc)
       (self (rest names)
         (pair
           (list (lit guard)
@@ -2831,7 +2832,7 @@
 (def %py-param-names
   (fn (self toks acc)
     (if (null? toks)
-      (List reverse acc)
+      (%py-reverse acc)
       (if (%py-name-is? (first toks) "def")
         (let ((r (%py-param-span (rest (rest toks)) ())))
           (self (first r) (%py-append (rest r) acc)))
@@ -2848,7 +2849,7 @@
 (def %py-raw-names
   (fn (self toks acc)
     (if (null? toks)
-      (List reverse acc)
+      (%py-reverse acc)
       (if (eq? (%py-tag (first toks)) (lit tok-name))
         (self (rest toks) (pair (%py-val (first toks)) acc))
         (self (rest toks) acc)))))
@@ -2859,7 +2860,7 @@
 (def %py-decls
   (fn (self syms acc)
     (if (null? syms)
-      (List reverse acc)
+      (%py-reverse acc)
       (self (rest syms)
         (pair
           (list (lit guard)

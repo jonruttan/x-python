@@ -43,6 +43,8 @@
 ; cell.  Every reference to the list holds the same instance, the instance
 ; holds the same cell, so every reference sees the store.
 
+(import python/util)
+
 (provide python/types
   %py-bytes %py-bytes-new %py-bytes-is %py-bytes-str %py-bytes-only?
   %py-barr %py-barr-new %py-barr-is %py-barr-set!
@@ -128,7 +130,7 @@
       ; len() reaches this through the runtime's %py-len, which still dispatches
       ; across str and dict; registering it here is what makes the type honest
       ; to anything else that asks.
-      (pair (lit length) (fn (_ self) (List length (rest (first self)))))
+      (pair (lit length) (fn (_ self) (%py-length (rest (first self)))))
       ; SUBSCRIPTING IS A CALL.  x dispatches `(v i)` through a type's `call`
       ; handler, so `lst[0]` needs no runtime function at all -- and negative
       ; indices and IndexError, which are Python and not x, are stated here
@@ -137,7 +139,7 @@
         (lit call)
         (fn (_ self . args)
           (def l (rest (first self)))
-          (def n (List length l))
+          (def n (%py-length l))
           (def i (first args))
           ; `x[1.0]` is a TypeError in Python, not an index -- and without
           ; this check the float silently truncates to a working index, the
@@ -210,7 +212,7 @@
                       (recur (rest l) #t)))))
               (go es #f)
               (display (if frozen "})" "}"))))))
-      (pair (lit length) (fn (_ self) (List length (rest (first self)))))
+      (pair (lit length) (fn (_ self) (%py-length (rest (first self)))))
       (pair (lit iter) (fn (_ self) (%i-make %py-set-step (rest (first self))))))))
 
 ; --- PY-VIEW -----------------------------------------------------------------
@@ -240,7 +242,7 @@
                   (recur (rest l) #t)))))
           (go (rest (first self)) #f)
           (display "])")))
-      (pair (lit length) (fn (_ self) (List length (rest (first self)))))
+      (pair (lit length) (fn (_ self) (%py-length (rest (first self)))))
       (pair (lit iter) (fn (_ self) (%i-make %py-view-step (rest (first self))))))))
 
 (def %py-dict ())
@@ -275,7 +277,7 @@
                   (recur (rest es) #t)))))
           (go (rest (first self)) #f)
           (display "}")))
-      (pair (lit length) (fn (_ self) (List length (rest (first self)))))
+      (pair (lit length) (fn (_ self) (%py-length (rest (first self)))))
       (pair
         (lit call)
         (fn (_ self . args) (%py-dict-get self (first args))))
@@ -395,7 +397,7 @@
   (fn (_ a b)
     (if (if (%py-dict-is a) (%py-dict-is b) #f)
       (let ((as (rest (first a))) (bs (rest (first b))))
-        (if (= (List length as) (List length bs)) (%py-entries-eq as bs) #f))
+        (if (= (%py-length as) (%py-length bs)) (%py-entries-eq as bs) #f))
       #f)))
 
 ; --- PY-CLASS and PY-OBJ -----------------------------------------------------
@@ -642,12 +644,12 @@
             ()
             (if (null? (rest (first self))) (display ",") ()))
           (display ")")))
-      (pair (lit length) (fn (_ self) (List length (first self))))
+      (pair (lit length) (fn (_ self) (%py-length (first self))))
       (pair
         (lit call)
         (fn (_ self . args)
           (def l (first self))
-          (def n (List length l))
+          (def n (%py-length l))
           (def i (first args))
           (def k (if (< i 0) (+ n i) i))
           (if (if (< k 0) #t (>= k n))

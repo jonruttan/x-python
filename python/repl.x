@@ -31,6 +31,7 @@
 ; ending with `:` switches to "... " prompts and accumulates until an empty
 ; line closes the entry.
 
+(import python/util)
 (import python/base)
 (import x/sys/posix)
 ; Catalog fetches, once at load.
@@ -48,7 +49,7 @@
     ; as empty: two prompts per line and nothing evaluated, ever.
     (def %line-of
       (fn (_ acc)
-        (if (null? acc) "" (%py-repl-cvt (List reverse acc) %py-repl-str-t))))
+        (if (null? acc) "" (%py-repl-cvt (%py-reverse acc) %py-repl-str-t))))
     (def go
       (fn (self acc)
         (let ((c (Io read-char)))
@@ -156,9 +157,9 @@
         (display "... ")
         (let ((line (%py-repl-line)))
           (if (eq? line (lit eof))
-            (List reverse acc)
+            (%py-reverse acc)
             (if (= (Str8 length line) 0)
-              (List reverse acc)
+              (%py-reverse acc)
               (self (pair line acc)))))))
     (if (%py-opens-block? first-line)
       (Str8 join "\n" (more (list first-line)))
