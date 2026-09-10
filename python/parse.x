@@ -1562,16 +1562,17 @@
         ((%py-name-is? t "while")
           (let ((c (%py-test (rest toks))))
             (let ((b (%py-block (rest c))))
-              (pair
-                (%py-wrap-escape
-                  (list
-                    (list (lit fn) (list (lit self))
-                      (list (lit if) (list (lit %py-truthy) (first c))
-                        (list (lit %seq) (%py-wrap-escape (first b) (lit %py-continue))
-                          (list (lit self)))
-                        ())))
-                  (lit %py-break))
-                (rest b)))))
+              (let ((e (%py-loop-else (rest b))))
+                (pair
+                  (%py-loop-tail
+                    (list
+                      (list (lit fn) (list (lit self))
+                        (list (lit if) (list (lit %py-truthy) (first c))
+                          (list (lit %seq) (%py-wrap-escape (first b) (lit %py-continue))
+                            (list (lit self)))
+                          ())))
+                    (first e))
+                  (rest e))))))
         ((%py-op-is? t "@")
           (let ((ds (%py-decos-of toks ())))
             (let ((t2 (rest ds)))
@@ -1718,6 +1719,47 @@
         (Err raise (lit syntax) "'continue' not properly in loop" ())
         body))))
 
+; `for ... else:` / `while ... else:` -- the clause that runs when the loop RAN
+; OUT.  Not %py-else: that one also takes `elif`, which Python does not allow
+; after a loop and which is left to be the syntax error it is.
+(def %py-loop-else
+  (fn (_ toks)
+    (let ((t (%py-skip-nl toks)))
+      (if (null? t)
+        (pair () t)
+        (if (%py-name-is? (first t) "else")
+          (let ((b (%py-block (rest t))))
+            (pair (first b) (rest b)))
+          (pair () t))))))
+
+; THE ELSE IS GUARDED ON WHICH WAY THE LOOP LEFT, and it sits OUTSIDE the
+; escape the loop binds.  Both halves are the semantics:
+;
+;   outside, because a `break` written in an else belongs to the ENCLOSING
+;   loop -- `for i: (for j: pass else: break)` breaks the OUTER one -- so the
+;   else must not be inside this loop's binding, which also leaves a break
+;   with no loop around it free for %py-check-escapes to refuse;
+;
+;   guarded, because %py-callcc answers what the escape was passed when
+;   `break` jumped -- () -- and the body's own value when the loop ran out.
+;   That value is 1 here, chosen for nothing but being something () is not.
+;
+; A loop with no `break` in it always runs its else, and pays no continuation
+; to find that out.
+(def %py-loop-tail
+  (fn (_ loop els)
+    (match
+      ((null? els) (%py-wrap-escape loop (lit %py-break)))
+      ((not (%py-free-ref? loop (lit %py-break))) (list (lit %seq) loop els))
+      (#t
+        (list (lit if)
+          (list (lit null?)
+            (list (lit %py-callcc)
+              (list (lit fn) (list (lit _) (lit %py-break))
+                (list (lit %seq) loop 1))))
+          ()
+          els)))))
+
 (def %py-for
   (fn (_ toks)
     (if (not (eq? (%py-tag (if (null? toks) () (first toks))) (lit tok-name)))
@@ -1729,20 +1771,21 @@
               ; THE LOOP PULLS ONE ITEM AT A TIME from %py-iter-open's source:
               ; a generator yields lazily (its prints interleave with the
               ; body's), anything else is its materialized element list.
-              (pair
-                (%py-wrap-escape
-                  (list
-                    (list (lit fn) (list (lit self) (lit %py-src))
-                      (list (lit let) (list (list (lit %py-item) (list (lit %py-iter-pull!) (lit %py-src))))
-                        (list (lit if) (list (lit same?) (lit %py-item) (lit %py-gen-done))
-                          ()
-                          (list (lit %seq)
-                            (%py-for-bind syms)
-                            (list (lit %seq) (%py-wrap-escape (first b) (lit %py-continue))
-                              (list (lit self) (lit %py-src)))))))
-                    (list (lit %py-iter-open) (first it)))
-                  (lit %py-break))
-                (rest b)))))))))
+              (let ((e (%py-loop-else (rest b))))
+                (pair
+                  (%py-loop-tail
+                    (list
+                      (list (lit fn) (list (lit self) (lit %py-src))
+                        (list (lit let) (list (list (lit %py-item) (list (lit %py-iter-pull!) (lit %py-src))))
+                          (list (lit if) (list (lit same?) (lit %py-item) (lit %py-gen-done))
+                            ()
+                            (list (lit %seq)
+                              (%py-for-bind syms)
+                              (list (lit %seq) (%py-wrap-escape (first b) (lit %py-continue))
+                                (list (lit self) (lit %py-src)))))))
+                      (list (lit %py-iter-open) (first it)))
+                    (first e))
+                  (rest e))))))))))
 
 ; --- try / except / finally --------------------------------------------------
 ;
