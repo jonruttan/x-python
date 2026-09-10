@@ -176,7 +176,7 @@ and `(Indent make)`'s default is Python's answer.
 (%seq (write (python-lex "def f():\n    return 1\nf()")) (newline))
 ```
 ---
-    (('tok-name "def") ('tok-name "f") ('tok-group "(" () ")") ('tok-op ":") ('tok-block (('tok-name "return") ('tok-number "1"))) ('tok-name "f") ('tok-group "(" () ")"))
+    (('tok-kw "def") ('tok-name "f") ('tok-group "(" () ")") ('tok-op ":") ('tok-block (('tok-kw "return") ('tok-number "1"))) ('tok-name "f") ('tok-group "(" () ")"))
 
 ## implicit line joining
 

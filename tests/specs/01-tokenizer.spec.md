@@ -1,6 +1,7 @@
 Python's lexical layer, on a base isolated from the sexp reader's types
-(`python/tokens.x`). Keywords are not distinguished here — `if` is a name to the
-tokenizer and a keyword to the parser, which is where the difference is used.
+(`python/tokens.x`). A keyword is its own token kind: PY-KEYWORD, an analyser
+registered ahead of PY-NAME, decides `if` per character, and the parser asks
+the tag rather than comparing the name against a list.
 
 Every case ends with `(newline)`. Without it the runner has no line boundary
 between cases and attributes one case's output to another, which reads as a
@@ -32,13 +33,65 @@ tokenizer bug and is not one.
 ---
     (('tok-name "_x"))
 
-### a keyword is just a name here
+### a keyword is its own token kind
 
 ```python
 (%seq (write (python-tokenize "if")) (newline))
 ```
 ---
-    (('tok-name "if"))
+    (('tok-kw "if"))
+
+## tokenizer keywords
+
+The analyser decides these per character, from a trie generated out of
+`%py-keywords` (`python/tokens.x`). The list is CPython 3.14's `keyword.kwlist`
+less `True`, `False` and `None`, which this bundle carries as builtins.
+
+### every keyword, in the list's own order
+
+```python
+(%seq (write (python-tokenize "if elif else while def return pass and or not in is for break continue class import from as try except finally raise with lambda global nonlocal assert del yield async await")) (newline))
+```
+---
+    (('tok-kw "if") ('tok-kw "elif") ('tok-kw "else") ('tok-kw "while") ('tok-kw "def") ('tok-kw "return") ('tok-kw "pass") ('tok-kw "and") ('tok-kw "or") ('tok-kw "not") ('tok-kw "in") ('tok-kw "is") ('tok-kw "for") ('tok-kw "break") ('tok-kw "continue") ('tok-kw "class") ('tok-kw "import") ('tok-kw "from") ('tok-kw "as") ('tok-kw "try") ('tok-kw "except") ('tok-kw "finally") ('tok-kw "raise") ('tok-kw "with") ('tok-kw "lambda") ('tok-kw "global") ('tok-kw "nonlocal") ('tok-kw "assert") ('tok-kw "del") ('tok-kw "yield") ('tok-kw "async") ('tok-kw "await"))
+
+### a keyword followed by a name character is a name
+
+The terminal state rejects when a name character follows, and PY-NAME's
+longer match takes the token. Case matters: `If` is a name.
+
+```python
+(%seq (write (python-tokenize "ifx if_ if1 If elsewhere")) (newline))
+```
+---
+    (('tok-name "ifx") ('tok-name "if_") ('tok-name "if1") ('tok-name "If") ('tok-name "elsewhere"))
+
+### a keyword that prefixes another: as, assert, async
+
+`as` is the one terminal with children; a node tries its children before it
+accepts, and a prefix that is not itself a keyword is a name.
+
+```python
+(%seq (write (python-tokenize "as assert async await ass asx awai")) (newline))
+```
+---
+    (('tok-kw "as") ('tok-kw "assert") ('tok-kw "async") ('tok-kw "await") ('tok-name "ass") ('tok-name "asx") ('tok-name "awai"))
+
+### a keyword against punctuation and at the ends
+
+```python
+(%seq (write (python-tokenize "if(x)or not[y]")) (newline))
+```
+---
+    (('tok-kw "if") ('tok-group "(" (('tok-name "x")) ")") ('tok-kw "or") ('tok-kw "not") ('tok-group "[" (('tok-name "y")) "]"))
+
+### True, False and None are builtins here, not keywords
+
+```python
+(%seq (write (python-tokenize "True False None match case type _")) (newline))
+```
+---
+    (('tok-name "True") ('tok-name "False") ('tok-name "None") ('tok-name "match") ('tok-name "case") ('tok-name "type") ('tok-name "_"))
 
 ## tokenizer whitespace and comments
 
@@ -272,7 +325,7 @@ second is, so `//` before a name is still floor division.
 (%seq (write (python-tokenize "def f(x):")) (newline))
 ```
 ---
-    (('tok-name "def") ('tok-name "f") ('tok-group "(" (('tok-name "x")) ")") ('tok-op ":"))
+    (('tok-kw "def") ('tok-name "f") ('tok-group "(" (('tok-name "x")) ")") ('tok-op ":"))
 
 ### a group records the closer it met
 

@@ -47,8 +47,8 @@
 (import python/util)
 
 (provide python/tokens
-  python-tokenize %py-base
-  mk-tok-name mk-tok-number mk-tok-string mk-tok-op mk-tok-newline
+  python-tokenize %py-base %py-keywords
+  mk-tok-name mk-tok-kw mk-tok-number mk-tok-string mk-tok-op mk-tok-newline
   mk-tok-bytes mk-tok-fstring mk-tok-group mk-tok-block)
 
 ; (Base make-tok) is the isolated, type-free base -- 2024's make-token-base.
@@ -91,6 +91,7 @@
 ; --- Token values ------------------------------------------------------------
 ; Plain lists, the shape ash settled on: readable in a spec without a printer.
 (def mk-tok-name    (fn (_ s) (list (lit tok-name) s)))
+(def mk-tok-kw      (fn (_ s) (list (lit tok-kw) s)))
 (def mk-tok-number  (fn (_ s) (list (lit tok-number) s)))
 (def mk-tok-string  (fn (_ s) (list (lit tok-string) s)))
 (def mk-tok-op      (fn (_ s) (list (lit tok-op) s)))
@@ -329,11 +330,161 @@
               (mk-tok-newline))))))))))
 (%py-tok-type! "PY-NL" %py-t-nl)
 
-; --- PY-NAME: identifiers and keywords ---------------------------------------
-; Keywords are NOT distinguished here.  `if` is a name to the tokenizer and a
-; keyword to the parser, which is where the distinction is actually used; a
-; tokenizer that knows the keyword list has to be edited every time the grammar
-; grows one.
+; --- PY-KEYWORD: the keywords, decided by the analyser ------------------------
+;
+; A KEYWORD IS DECIDED HERE, PER CHARACTER, NOT IN THE PARSER BY STRING.  The
+; analyser is the engine's own per-character path -- C driving it in the
+; interpreted base, native code in the compiled one -- and it already visits
+; every character of every name.  Deciding `if` there costs nothing more;
+; deciding it in the parser cost a string compare at every grammar question
+; that asked, 444 of them for an eight-line program, each a Str8 =? class call
+; (19,347 objects on a hit).  So the token arrives classified, (tok-kw "if"),
+; and the parser asks the tag.
+;
+; THE TRIE IS GENERATED FROM %py-keywords, once, at load: one node per
+; distinct prefix (121 for these 32), each a state that dispatches on the next
+; character to a child state.  A TERMINAL accepts only when the character
+; after the keyword is not a name character: `ifx` is a name, and the terminal
+; answering nil is what lets PY-NAME's longer match take it.  `as` is the one
+; terminal with children (assert, async), so every node tries its children
+; before it accepts.
+;
+; REGISTERED BEFORE PY-NAME, AND THE ORDER IS THE RULE.  Registration prepends
+; to the base's type alist, analyse iterates it, and the C loop's >= hands a
+; tie to the LATER-iterated type -- so the EARLIER-registered type wins an
+; equal-length match, the same rule by which PY-NAME's `b` beats PY-PSQ's.
+; `if` scores 2 for both types; PY-KEYWORD wins by being registered first.
+; The compiled base registers in the same order for the same reason.
+;
+; True, False and None are not here: this bundle carries them as builtins, and
+; keyword.kwlist's three extra rows are the whole difference.  The soft
+; keywords (match, case, type, _) are names, as they are in Python.
+(def %py-keywords
+  (list "if" "elif" "else" "while" "def" "return" "pass" "and" "or" "not"
+        "in" "is" "for" "break" "continue" "class" "import" "from" "as"
+        "try" "except" "finally" "raise" "with" "lambda" "global" "nonlocal"
+        "assert" "del" "yield" "async" "await"))
+
+; A trie node is (terminal? . children), the children an alist of
+; (code . node).  Insertion is immutable: the path to a keyword is rebuilt,
+; everything beside it shared.
+(def %py-kw-child
+  (fn (self kids c)
+    (if (null? kids) ()
+      (if (= (first (first kids)) c) (rest (first kids)) (self (rest kids) c)))))
+
+(def %py-kw-replace
+  (fn (self kids c node)
+    (if (null? kids) (list (pair c node))
+      (if (= (first (first kids)) c)
+        (pair (pair c node) (rest kids))
+        (pair (first kids) (self (rest kids) c node))))))
+
+(def %py-kw-insert
+  (fn (self node cs)
+    (if (null? cs)
+      (pair #t (rest node))
+      (let ((c (first cs)))
+        (let ((kid (%py-kw-child (rest node) c)))
+          (pair (first node)
+            (%py-kw-replace (rest node) c
+              (self (if (null? kid) (pair #f ()) kid) (rest cs)))))))))
+
+(def %py-kw-codes
+  (fn (self s i acc)
+    (if (< i 0) acc
+      (self s (- i 1) (pair (%py-char->int (Str8 ref i s)) acc)))))
+
+(def %py-kw-trie
+  ((fn (self ks node)
+     (if (null? ks) node
+       (self (rest ks)
+         (%py-kw-insert node (%py-kw-codes (first ks) (- (Str8 length (first ks)) 1) ())))))
+   %py-keywords (pair #f ())))
+
+; The interpreted states: one closure per node, built bottom-up, each holding
+; its own (code . state) table.  A state receives the NEXT character: a child
+; for it is a transition; none, and a terminal accepts unless a name
+; character follows (a longer identifier -- PY-NAME's match must win), a
+; non-terminal rejects.  The walk per character is over that node's own
+; children only: the root's sixteen first letters at a token start, one or
+; two deeper in.
+(def %py-kw-state
+  (fn (kw-state node)
+    (let ((terminal (first node))
+          (kids ((fn (go ks acc)
+                   (if (null? ks) acc
+                     (go (rest ks) (pair (pair (first (first ks)) (kw-state (rest (first ks)))) acc))))
+                 (rest node) ())))
+      (fn (_ buffer score chr)
+        (let ((next (%py-kw-child kids chr)))
+          (if (not (null? next))
+            next
+            (if terminal
+              (if (%py-name-rest? chr) () (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))
+              ())))))))
+
+(def %py-kw-entry (%py-kw-state %py-kw-trie))
+
+(def %py-t-kw
+  (list
+    (pair (lit analyse) %py-kw-entry)
+    (pair (lit read)
+      (fn (_ . args) (mk-tok-kw (%buffer-token (first args)))))))
+(%py-tok-type! "PY-KEYWORD" %py-t-kw)
+
+; The compiled states: the same trie, one native state per node, generated
+; as forms for compile-asm.  A node's children are its free variables, named
+; from %py-kw-fvar-names in order (sixteen: the root's count).  The 31 leaves
+; are ONE compiled state shared by all -- a terminal has no free variable, so
+; it carries the unused `u` that forces analyser mode.  Nested ifs, not match:
+; the assembler lane has no match and refuses the form, which is also why the
+; number states in %py-jit-compile! are spelled that way.
+(def %py-kw-namechar-form
+  (lit (or (and (>= chr 97) (<= chr 122))
+           (and (>= chr 65) (<= chr 90))
+           (or (= chr 95) (and (>= chr 48) (<= chr 57))))))
+(def %py-kw-accept-form
+  (lit (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))
+(def %py-kw-fvar-names (lit (a b c d e f g h i j k l m n o p)))
+
+(def %py-kw-tail-form
+  (fn (_ terminal)
+    (if terminal (list (lit if) %py-kw-namechar-form () %py-kw-accept-form) ())))
+
+; (if (= chr c1) n1 (if (= chr c2) n2 ... tail))
+(def %py-kw-dispatch-form
+  (fn (self kids names tail)
+    (if (null? kids) tail
+      (list (lit if) (list (lit =) (lit chr) (first (first kids))) (first names)
+        (self (rest kids) (rest names) tail)))))
+
+(def %py-kw-fvars
+  (fn (self kids names acc)
+    (if (null? kids) acc
+      (self (rest kids) (rest names) (pair (pair (first names) (rest (first kids))) acc)))))
+
+; The shared compiled leaf, made fresh by each JIT attempt (native code is
+; this process's alone, like every compiled state).
+(def %py-kw-leaf (pair () ()))
+
+(def %py-kw-compile
+  (fn (kw-compile node)
+    (if (if (first node) (null? (rest node)) #f)
+      (first %py-kw-leaf)
+      (let ((kids ((fn (go ks acc)
+                     (if (null? ks) acc
+                       (go (rest ks) (pair (pair (first (first ks)) (kw-compile (rest (first ks)))) acc))))
+                   (rest node) ())))
+        (%py-jit-keep!
+          (compile-asm
+            (list (lit fn) (lit (_ buffer score chr))
+              (%py-kw-dispatch-form kids %py-kw-fvar-names (%py-kw-tail-form (first node))))
+            (%py-kw-fvars kids %py-kw-fvar-names ())))))))
+
+; --- PY-NAME: identifiers ------------------------------------------------------
+; Keywords are PY-KEYWORD's, above, and take the tie by registration order;
+; what reaches here is every name that is not one.
 (def %py-name-body ())
 (set! %py-name-body
   (fn (_ buffer score chr)
@@ -989,6 +1140,23 @@
 (def %py-jit-threshold (pair 51200 ()))  ; bytes of source before one attempt
 (def %py-active-raw (pair () ()))         ; what python-tokenize reads; %py-tok-reset! fills it
 (def %py-cbase (pair () ()))             ; roots the compiled base's wrapper
+; EVERY COMPILED STATE IS ROOTED HERE, and the reason is a segfault.  A
+; compiled state reaches the states it hands off to through addresses BAKED
+; into its machine code (asm-compile.x: "an fvar is baked as its object's
+; ADDRESS"), and the collector cannot see an address inside code.  So a body
+; state -- nb, wsc, nexpd, every node of the keyword trie -- was reachable
+; only while %py-jit-compile!'s frame held it, and unreachable the moment
+; the frame returned; the entry states survive through the second base's
+; type structs, their targets did not.  The compile itself collects (the
+; assembler sweeps every %asm-gc-window nodes), so states compiled AFTER the
+; trie could free its children mid-attempt; small inputs then tokenized by
+; luck and a larger one reused the freed memory and died.  Measured: an
+; explicit (Heap collect) after the attempt killed `q qq` -- names, the
+; e-name -> nb handoff.  Native code is this process's alone, so the list
+; is a transient and %py-tok-reset! empties it with the base.
+(def %py-jit-states (pair () ()))
+(def %py-jit-keep!
+  (fn (_ p) (%seq (%set-first! %py-jit-states (pair p (first %py-jit-states))) p)))
 
 (def %py-hdl-of
   (fn (self hs k)
@@ -1004,23 +1172,25 @@
     ; built.  The result is never called -- a direct call to an fvar-compiled
     ; function is outside the contract.
     (compile-asm (lit (fn (_ x) (+ x k))) (list (pair (lit k) 1)))
+    ; each state rooted as it is made -- see %py-jit-states
+    (def jc (fn (_ form fvars) (%py-jit-keep! (compile-asm form fvars))))
     ; -- body states --
     (def wsc
-      (compile-asm
+      (jc
         (lit (fn (me buffer score chr)
           (if (or (= chr 32) (= chr 9))
             me
             (%seq (%buffer-unread buffer) (%score-set score -1 buffer)))))
         (list (pair (lit u) 1))))
     (def cb
-      (compile-asm
+      (jc
         (lit (fn (me buffer score chr)
           (if (= chr 10)
             (%seq (%buffer-unread buffer) (%score-set score -1 buffer))
             me)))
         (list (pair (lit u) 1))))
     (def bws
-      (compile-asm
+      (jc
         (lit (fn (me buffer score chr)
           (if (or (= chr 32) (= chr 9))
             me
@@ -1029,7 +1199,7 @@
               ()))))
         (list (pair (lit u) 1))))
     (def nb
-      (compile-asm
+      (jc
         (lit (fn (me buffer score chr)
           (if (or (and (>= chr 97) (<= chr 122))
                   (and (>= chr 65) (<= chr 90))
@@ -1039,7 +1209,7 @@
             (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
         (list (pair (lit u) 1))))
     (def nexpd
-      (compile-asm
+      (jc
         (lit (fn (me buffer score chr)
           (if (or (and (>= chr 48) (<= chr 57)) (= chr 95))
             me
@@ -1048,43 +1218,53 @@
               (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
         (list (pair (lit u) 1))))
     (def nexpf
-      (compile-asm
+      (jc
         (lit (fn (_ buffer score chr)
           (if (and (>= chr 48) (<= chr 57)) k ())))
         (list (pair (lit k) nexpd))))
     (def nexps
-      (compile-asm
+      (jc
         (lit (fn (_ buffer score chr)
           (if (and (>= chr 48) (<= chr 57))
             k
             (if (or (= chr 43) (= chr 45)) f ()))))
         (list (pair (lit k) nexpd) (pair (lit f) nexpf))))
+    ; NESTED IFS, NOT MATCH, in every compiled state from here down: the
+    ; assembler lane has no match and REFUSES the form ("unsupported form:
+    ; match"), and this function runs under a guard that pins `failed` on any
+    ; raise -- so the three states that were written with match had pinned
+    ; the whole JIT off, silently, since they were written.  The
+    ; "compiled equals interpreted" spec held because nothing was compiled.
     (def nfrac
-      (compile-asm
+      (jc
         (lit (fn (me buffer score chr)
-          (match
-            ((or (and (>= chr 48) (<= chr 57)) (= chr 95)) me)
-            ((or (= chr 101) (= chr 69)) es)
-            ((or (= chr 106) (= chr 74)) (%score-set score 1 buffer))
-            (#t (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+          (if (or (and (>= chr 48) (<= chr 57)) (= chr 95))
+            me
+            (if (or (= chr 101) (= chr 69))
+              es
+              (if (or (= chr 106) (= chr 74))
+                (%score-set score 1 buffer)
+                (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))
         (list (pair (lit es) nexps))))
     (def nbody
-      (compile-asm
+      (jc
         (lit (fn (me buffer score chr)
-          (match
-            ((or (and (>= chr 48) (<= chr 57)) (= chr 95)) me)
-            ((= chr 46) frac)
-            ((or (= chr 101) (= chr 69)) es)
-            ((or (= chr 106) (= chr 74)) (%score-set score 1 buffer))
-            (#t (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+          (if (or (and (>= chr 48) (<= chr 57)) (= chr 95))
+            me
+            ; a fraction or exponent marker continues the literal: which
+            (if (or (= chr 46) (or (= chr 101) (= chr 69)))
+              (if (= chr 46) frac es)
+              (if (or (= chr 106) (= chr 74))
+                (%score-set score 1 buffer)
+                (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))
         (list (pair (lit frac) nfrac) (pair (lit es) nexps))))
     (def ndotf
-      (compile-asm
+      (jc
         (lit (fn (_ buffer score chr)
           (if (and (>= chr 48) (<= chr 57)) frac ())))
         (list (pair (lit frac) nfrac))))
     (def nsigned
-      (compile-asm
+      (jc
         (lit (fn (_ buffer score chr)
           (if (= chr 48)
             zero
@@ -1094,14 +1274,14 @@
     ; the compiled body by evaluating its own global, which after adoption is
     ; only ever reached from here -- so the handoff is fvar out, global back.
     (def sqb
-      (compile-asm
+      (jc
         (lit (fn (me buffer score chr)
           (if (= chr 39)
             (%score-set score 1 buffer)
             (if (= chr 92) esc me))))
         (list (pair (lit esc) %py-sq-esc))))
     (def dqb
-      (compile-asm
+      (jc
         (lit (fn (me buffer score chr)
           (if (= chr 34)
             (%score-set score 1 buffer)
@@ -1109,31 +1289,31 @@
         (list (pair (lit esc) %py-dq-esc))))
     ; -- entry states: one per type, run at every token start --
     (def e-ws
-      (compile-asm
+      (jc
         (lit (fn (_ buffer score chr)
           (if (or (= chr 32) (= chr 9))
             (%seq (%score-set score -1 buffer) k)
             ())))
         (list (pair (lit k) wsc))))
     (def e-comment
-      (compile-asm
+      (jc
         (lit (fn (_ buffer score chr)
           (if (= chr 35)
             (%seq (%score-set score -1 buffer) k)
             ())))
         (list (pair (lit k) cb))))
     (def e-blank
-      (compile-asm
+      (jc
         (lit (fn (_ buffer score chr)
           (if (= chr 10) k ())))
         (list (pair (lit k) bws))))
     (def e-nl
-      (compile-asm
+      (jc
         (lit (fn (_ buffer score chr)
           (if (= chr 10) k ())))
         (list (pair (lit k) %py-nl-ws))))
     (def e-name
-      (compile-asm
+      (jc
         (lit (fn (_ buffer score chr)
           (if (or (and (>= chr 97) (<= chr 122))
                   (and (>= chr 65) (<= chr 90))
@@ -1142,37 +1322,37 @@
             ())))
         (list (pair (lit k) nb))))
     (def e-number
-      (compile-asm
+      (jc
         (lit (fn (_ buffer score chr)
-          (match
-            ((= chr 48) zero)
-            ((and (>= chr 48) (<= chr 57)) body)
-            ((= chr 46) dotf)
-            ((or (= chr 43) (= chr 45)) signed)
-            (#t ()))))
+          ; a digit: the leading zero has its own state, the rest the body
+          (if (and (>= chr 48) (<= chr 57))
+            (if (= chr 48) zero body)
+            (if (= chr 46)
+              dotf
+              (if (or (= chr 43) (= chr 45)) signed ())))))
         ; the leading-zero state stays interpreted: it is rare (0x, 0o, 0b
         ; and plain zeros) and hands the digit run back to the compiled body
         (list (pair (lit zero) %py-number-zero) (pair (lit body) nbody)
           (pair (lit dotf) ndotf) (pair (lit signed) nsigned))))
     (def e-sq
-      (compile-asm
+      (jc
         (lit (fn (_ buffer score chr)
           (if (= chr 39) k ())))
         (list (pair (lit k) sqb))))
     (def e-dq
-      (compile-asm
+      (jc
         (lit (fn (_ buffer score chr)
           (if (= chr 34) k ())))
         (list (pair (lit k) dqb))))
     (def e-close
-      (compile-asm
+      (jc
         (lit (fn (_ buffer score chr)
           (if (or (= chr 41) (= chr 93) (= chr 125))
             (%score-set score 1 buffer)
             ())))
         (list (pair (lit u) 1))))
     (def e-open
-      (compile-asm
+      (jc
         (lit (fn (_ buffer score chr)
           (if (or (= chr 40) (= chr 91) (= chr 123))
             (%score-set score 1 buffer)
@@ -1191,6 +1371,13 @@
     (reg "PY-COMMENT" e-comment %py-t-comment)
     (reg "PY-BLANK" e-blank %py-t-blank)
     (reg "PY-NL" e-nl %py-t-nl)
+    ; the keyword trie: the shared leaf first, then one native state per node
+    (%set-first! %py-kw-leaf
+      (jc
+        (list (lit fn) (lit (_ buffer score chr)) (%py-kw-tail-form #t))
+        (list (pair (lit u) 1))))
+    (def e-kw (%py-kw-compile %py-kw-trie))
+    (reg "PY-KEYWORD" e-kw %py-t-kw)
     (reg "PY-NAME" e-name %py-t-name)
     (reg "PY-NUMBER" e-number %py-t-number)
     (reg "PY-SQ" e-sq %py-t-sq)
@@ -1329,6 +1516,8 @@
     (set! %py-base (%py-tok-base-make))
     (%set-first! %py-active-raw (Base raw-of %py-base))
     (%set-first! %py-cbase ())
+    (%set-first! %py-jit-states ())
+    (%set-first! %py-kw-leaf ())
     (%set-first! %py-jit (lit off))
     (%set-first! %py-jit-bytes 0)))
 (%py-tok-reset!)
@@ -1336,6 +1525,8 @@
   (pair (fn (_)
           (set! %py-base ())
           (%set-first! %py-active-raw ())
-          (%set-first! %py-cbase ()))
+          (%set-first! %py-cbase ())
+          (%set-first! %py-jit-states ())
+          (%set-first! %py-kw-leaf ()))
         %image-transients))
 (set! %image-recache-hooks (pair (fn (_) (%py-tok-reset!)) %image-recache-hooks))
