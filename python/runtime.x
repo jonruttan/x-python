@@ -30,6 +30,7 @@
 (import python/types)
 (import python/format)
 (import python/bytes)
+(import python/str)
 
 (provide python/runtime
   %py-add %py-sub %py-mul %py-div %py-floordiv %py-mod %py-pow %py-neg

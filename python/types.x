@@ -46,6 +46,7 @@
 (import python/util)
 
 (provide python/types
+  %py-str %py-str-new %py-str-is %py-str-cps %py-str-of-x
   %py-bytes %py-bytes-new %py-bytes-of-str %py-bytes-is %py-bytes-str
   %py-bytes-list %py-bytes-only?
   %py-barr %py-barr-new %py-barr-of-str %py-barr-is %py-barr-set!
@@ -548,6 +549,27 @@
 ; argument for that: a string here ends at its first NUL and a bytes must not.
 ; %py-bytes-new takes the list; %py-bytes-of-str is for the callers that
 ; start from source text (a literal, a decoded name) and cannot contain one.
+; --- PY-STR ------------------------------------------------------------------
+; A Python str is a sequence of CODE POINTS, and this carries one: a list of
+; ints.  python/str.x is the argument -- the short of it is that a platform
+; string ends at its first NUL and counts BYTES, and a Python str does
+; neither.
+;
+; The payload is the list.  There is no cell: a str is immutable, so unlike
+; bytearray nothing here has to be visible through a second name.
+(def %py-str ())
+(def %py-str-new (fn (_ cps) (%make-instance %py-str cps)))
+(def %py-str-is (fn (_ v) (%type? v %py-str)))
+(def %py-str-cps (fn (_ v) (first v)))
+(def %py-str-of-x (fn (_ s) (%make-instance %py-str (%ps-of-x s))))
+(set! %py-str
+  (%make-type
+    "PY-STR"
+    (list
+      (pair (lit write)
+        (fn (_ self) (%py-str-display (first self))))
+      (pair (lit length) (fn (_ self) (List length (first self)))))))
+
 (def %py-bytes ())
 (def %py-bytes-new (fn (_ l) (%make-instance %py-bytes l)))
 (def %py-bytes-of-str (fn (_ s) (%make-instance %py-bytes (%pb-of-str s))))
