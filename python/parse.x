@@ -479,8 +479,15 @@
     (match
       ((null? toks)
         (List reverse (if (null? cur) acc (pair (List reverse cur) acc))))
+      ; AN EMPTY PART IS ONLY EVER THE LAST ONE.  `[1,]` is a trailing comma
+      ; and ends at the arm above; a comma reached with nothing gathered is
+      ; `[1,,]` or `[,1]`, which Python refuses in every one of the four
+      ; places this splits -- a list, a call, a dict, a parameter list.  It
+      ; used to be DROPPED, in silence: eval("[1,,]") answered [1].
       ((%py-op-is? (first toks) ",")
-        (self (rest toks) () (if (null? cur) acc (pair (List reverse cur) acc))))
+        (if (null? cur)
+          (Err raise (lit syntax) "expected an expression before ','" (first toks))
+          (self (rest toks) () (pair (List reverse cur) acc))))
       ((%py-name-is? (first toks) "lambda")
         (let ((h (%py-lambda-head toks ())))
           (self (rest h) (%py-append (List reverse (first h)) cur) acc)))
@@ -984,7 +991,21 @@
                     (pair (lit %py-mktuple) (%py-group-exprs elems))
                     (rest toks))
                   (pair (%py-expr-of elems) (rest toks))))))
+          ; `...` -- three `.` operators where a primary belongs.  The
+          ; tokenizer pairs nothing on `.` and a pair rule there would have
+          ; to be told apart from `1.` and `.5` first; here a `.` cannot
+          ; mean attribute access, so the three read unambiguously.
+          ((%py-ellipsis? toks) (pair (lit %py-Ellipsis) (rest (rest (rest toks)))))
           (#t (Err raise (lit syntax) "unexpected token in expression" t)))))))
+
+(def %py-ellipsis?
+  (fn (_ toks)
+    (if (%py-op-is? (if (null? toks) () (first toks)) ".")
+      (let ((r (rest toks)))
+        (if (%py-op-is? (if (null? r) () (first r)) ".")
+          (%py-op-is? (if (null? (rest r)) () (first (rest r))) ".")
+          #f))
+      #f)))
 
 ; --- f-strings ---------------------------------------------------------------
 ;
@@ -1153,6 +1174,11 @@
         (list "complex"   (lit %py-cls-complex))
         (list "hash"      (lit %py-hash))
         (list "NotImplemented" (lit %py-NotImplemented))
+        (list "Ellipsis"       (lit %py-Ellipsis))
+        (list "eval"           (lit %py-eval))
+        (list "exec"           (lit %py-exec))
+        (list "compile"        (lit %py-compile))
+        (list "dir"            (lit %py-dir))
         (list "chr"       (lit %py-chr))
         (list "ord"       (lit %py-ord))
         (list "StopIteration"  (lit %py-exc-StopIteration))
