@@ -145,44 +145,65 @@ negative count
 b'' 0
 ```
 
-## what this runtime cannot do here
+## a NUL byte, and where the limit actually is
 
-### a NUL byte is refused in a literal, while the program is read
+### bytes carries one
 
 A string on this platform is a C STRING, by an engine guarantee rather than an
 accident -- `str/nul-terminated`, in x-lang's `docs/engine-contract.md` -- so
-it ends at its first NUL and nothing this bundle can pass changes that.  There
-is no fix available here, only a choice of failure, and every spelling now
-makes the same one.  What they did instead, measured against CPython 3.14.7:
+it ends at its first NUL.  While `bytes` was a wrapper over one, every
+spelling of a zero byte was refused, and `docs/nul-and-the-string-layer.md`
+said the platform could not carry one at all.
 
-| | CPython | here, before |
-|---|---:|---:|
-| `len(chr(0))` | 1 | 0 |
-| `len(b'\x00')` | 1 | 0 |
-| `len('a' + chr(0) + 'b')` | 3 | 2 |
-| `repr(b'\x00')` | `b'\x00'` | `b''` |
-
-The value did not raise and did not survive -- it SHORTENED, silently, which
-is the worst of the three answers a runtime can give.
-`docs/nul-and-the-string-layer.md` is the decision, including why carrying a
-NUL in `bytes` alone was rejected: `bytes` is a wrapper and could have held a
-byte list, but a NUL-bearing `bytes` in a runtime whose `str` cannot hold one
-has nowhere to `.decode()` to, so the silent loss moves to the seam rather
-than going away.
-
-A literal is refused while the program is being READ, so it takes the whole
-program with it and no `try` in that program catches it -- the shape CPython
-gives a `SyntaxError`.  CPython prints `1` here.
+That was wrong, and the platform's own code said so: `x/codec/zlib.x` copies a
+byte list into a `(str make)` region through the pointer door, and
+`x/codec/sha256-jit.x` builds `"A\0B\0C"` the same way.  The true statement is
+narrower and it is about a CLASS: **Str8** cannot, because every one of its
+doors takes a C string.  So `bytes` carries a byte list now (python/bytes.x),
+and this is CPython's answer rather than a refusal.
 
 ```python
 (python-run "print(len(b'\\x00'))")
 ```
 ---
-    Error: #<err:value a NUL byte is not representable here>
+```output
+1
+```
 
-### a str literal's NUL is refused the same way
+### and every operation reads through it
 
-CPython prints `3`.
+```python
+(python-run "b = b'\\x00\\x01\\x00'\nprint(b, len(b), b.count(b'\\x00'), b.find(b'\\x01'), b[0], list(b))\nprint(bytes(3), bytes([0]), bytearray(2))")
+```
+---
+```output
+b'\x00\x01\x00' 3 2 1 0 [0, 1, 0]
+b'\x00\x00\x00' b'\x00' bytearray(b'\x00\x00')
+```
+
+### octal names a NUL too
+
+`\0` and `\000` are the same byte by another spelling.
+
+```python
+(python-run "print(b'\\0', b'\\000')")
+```
+---
+```output
+b'\x00' b'\x00'
+```
+
+### a str literal's NUL is still refused
+
+DIVERGENCE, and the one the bytes carrier MOVED rather than removed.  `str` is
+still the platform's string, so it still ends at its first NUL -- and a
+literal is refused while the program is being READ, so it takes the whole
+program with it and no `try` in that program catches it.  That is the shape
+CPython gives a `SyntaxError`.  CPython prints `3`.
+
+Giving `str` the same treatment is its own arc: it is a bigger change than
+this one, because `str` is the platform's string everywhere a Python program
+touches text, and this bundle's whole str surface is Str8's.
 
 ```python
 (python-run "print(len('a\\x00b'))")
@@ -190,18 +211,7 @@ CPython prints `3`.
 ---
     Error: #<err:value a NUL byte is not representable here>
 
-### octal names a NUL too
-
-`\0` and `\000` are the same byte by another spelling, in either kind of
-literal.  CPython prints `b'\x00' b'\x00'`.
-
-```python
-(python-run "print(b'\\0', b'\\000')")
-```
----
-    Error: #<err:value a NUL byte is not representable here>
-
-### an f-string body is read like any other literal
+### an f-string body is read like any other str literal
 
 CPython prints the three-character string `x\x00y`.
 
@@ -211,21 +221,20 @@ CPython prints the three-character string `x\x00y`.
 ---
     Error: #<err:value a NUL byte is not representable here>
 
-### at runtime it is a ValueError carrying the same sentence
+### at runtime the str paths raise and the bytes paths do not
 
-`chr(0)` is the one every other runtime path goes through -- `%c` and an
-f-string's `{chr(0)}` included -- and the two `bytes()` arms answer for
-themselves.  One sentence, five spellings, and `except ValueError` catches
-every one.  CPython raises none of them.
+`chr(0)` is the one every remaining runtime path goes through -- `%c` and an
+f-string's `{chr(0)}` included -- because each of them is asking for a str.
+The two `bytes()` arms used to be on this list and have left it.
 
 ```python
-(python-run "try:\n    chr(0)\nexcept ValueError as e:\n    print('chr', e)\ntry:\n    bytes([0])\nexcept ValueError as e:\n    print('list', e)\ntry:\n    bytes(3)\nexcept ValueError as e:\n    print('count', e)\ntry:\n    '%c' % 0\nexcept ValueError as e:\n    print('pct', e)\ntry:\n    f'{chr(0)}'\nexcept ValueError as e:\n    print('fstr', e)")
+(python-run "try:\n    chr(0)\nexcept ValueError as e:\n    print('chr', e)\nprint('list', bytes([0]))\nprint('count', bytes(3))\ntry:\n    '%c' % 0\nexcept ValueError as e:\n    print('pct', e)\ntry:\n    f'{chr(0)}'\nexcept ValueError as e:\n    print('fstr', e)")
 ```
 ---
 ```output
 chr a NUL byte is not representable here
-list a NUL byte is not representable here
-count a NUL byte is not representable here
+list b'\x00'
+count b'\x00\x00\x00'
 pct a NUL byte is not representable here
 fstr a NUL byte is not representable here
 ```

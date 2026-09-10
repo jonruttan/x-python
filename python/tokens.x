@@ -49,7 +49,7 @@
 (provide python/tokens
   python-tokenize %py-base %py-keywords
   mk-tok-name mk-tok-kw mk-tok-number mk-tok-string mk-tok-op mk-tok-newline
-  mk-tok-bytes mk-tok-fstring mk-tok-group mk-tok-block)
+  mk-tok-bytes mk-tok-fstring mk-tok-group mk-tok-block %py-unescape-bytes)
 
 ; (Base make-tok) is the isolated, type-free base -- 2024's make-token-base.
 (import x/reader/indent)
@@ -736,15 +736,51 @@
 ; it already uses is one the reader has proved safe.
 (def %py-nul-esc (fn (_) (let ((noted (%set-first! %py-nul-error #t))) "")))
 ; One escape's text: the byte a bytes literal names, the code point a str
-; literal names, and a note instead of either when the value is zero.
+; literal names.
+;
+; A ZERO IS WHERE THE TWO PART COMPANY NOW.  A bytes literal carries a BYTE
+; LIST out of here (python/bytes.x says why), so `b'\x00'` hands back the
+; one-element list (0) -- there is no text that carries it, which is the
+; whole reason this used to refuse.  A str literal still parks the note,
+; because a str is still a C string; that is the seam the bytes arc moved
+; rather than removed, and str's own arc is where it goes next.
 (def %py-esc-cp
   (fn (_ v raw?)
-    (if (= v 0)
-      (%py-nul-esc)
-      (if raw? (%py-byte->str v) (%py-cp->str v)))))
+    (if raw?
+      (if (= v 0) (list 0) (%py-byte->str v))
+      (if (= v 0) (%py-nul-esc) (%py-cp->str v)))))
 
 ; raw? decodes \xhh and octal escapes to raw bytes (bytes literals) rather
 ; than code points (str literals)
+; A BYTES LITERAL DECODES TO BYTES.  Same walk as %py-unescape below and the
+; same %py-esc-at underneath it; what differs is the accumulator, which is a
+; list of ints and can therefore hold a zero.  A piece comes back as text
+; unless it IS a zero, in which case it comes back as a byte list already.
+(def %py-unescape-bytes
+  (fn (_ s)
+    (def len (Str8 length s))
+    (def %go
+      (fn (self i acc)
+        (if (>= i len)
+          (List reverse acc)
+          (if (if (= (%py-char->int (Str8 ref i s)) 92) (< (+ i 1) len) #f)
+            (let ((r (%py-esc-at s i len #t)))
+              (self (first r) (%py-piece-onto (rest r) acc)))
+            (self (+ i 1) (pair (%py-char->int (Str8 ref i s)) acc))))))
+    (%go 0 ())))
+
+(def %py-piece-onto
+  (fn (_ piece acc)
+    (if (pair? piece)
+      (%py-onto-rev piece acc)
+      (%py-str-onto piece 0 (Str8 length piece) acc))))
+(def %py-onto-rev
+  (fn (self l acc) (if (null? l) acc (self (rest l) (pair (first l) acc)))))
+(def %py-str-onto
+  (fn (self s i n acc)
+    (if (>= i n) acc
+      (self s (+ i 1) n (pair (%py-char->int (Str8 ref i s)) acc)))))
+
 (def %py-unescape
   (fn (_ s raw?)
     (def len (Str8 length s))
@@ -872,7 +908,7 @@
         (%py-crlf->lf (Str8 sub 4 (- len 7) raw))
         (Str8 sub 2 (- len 3) raw)))
     (match
-      ((if (= p 98) #t (= p 66)) (mk-tok-bytes (%py-unescape body #t)))
+      ((if (= p 98) #t (= p 66)) (mk-tok-bytes (%py-unescape-bytes body)))
       ((if (= p 102) #t (= p 70)) (mk-tok-fstring (%py-unescape body #f)))
       ((if (= p 114) #t (= p 82)) (mk-tok-string body))
       (#t (mk-tok-string (%py-unescape body #f))))))

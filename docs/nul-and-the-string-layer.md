@@ -1,5 +1,32 @@
 # A NUL byte is refused, not carried
 
+> **SUPERSEDED for bytes, 2026-09-10.** The claim below that the platform
+> cannot carry a NUL is **wrong**, and this note is kept because the reasoning
+> that was wrong is worth reading. What is true is narrower and is about a
+> CLASS: **`Str8` cannot**, because every one of its doors takes a C string.
+> The platform has carried NULs the whole time -- `x/codec/zlib.x` copies a
+> byte list into a `(str make)` region through the pointer door, and
+> `x/codec/sha256-jit.x` builds `"A\0B\0C"` and says so in a comment.
+>
+> Measured on the same engine: a region written that way answers `#\A`,
+> `#\null`, `#\B` to `str byte-ref`. `str byte-len` answers **1**, which is
+> the real constraint -- the length cannot be read back and must be carried,
+> which is why zlib.x passes `n` alongside every buffer.
+>
+> `bytes` and `bytearray` now carry a **byte list**, and `python/bytes.x` is
+> the string library written once more against one. The section below headed
+> "Why bytes was not fixed alone" priced that at "the whole string algorithm
+> library, twice" and declined it; that price was correct and has now been
+> paid, once, in one file.
+>
+> **What survives** is the second objection, and it is why `str` is a separate
+> arc: a NUL-bearing `bytes` has nowhere to `.decode()` to while `str` is the
+> platform's string. So `'\x00'`, `chr(0)`, `'%c' % 0` and an f-string body
+> still refuse, with this note's own sentence. The seam moved to where it is
+> actually true instead of standing in front of every constructor that could
+> name a zero.
+
+
 **Status:** **decided and built.** Every spelling that names a NUL byte —
 `chr(0)`, `'\x00'`, `b'\x00'`, `'%c' % 0`, `bytes([0])`, `bytes(n)` for a
 positive `n` — raises `ValueError: a NUL byte is not representable here`.
