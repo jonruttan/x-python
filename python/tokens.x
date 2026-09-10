@@ -44,6 +44,8 @@
 ; hazard.  Here `analyse` only finds the closing quote; `read` slices
 ; `%buffer-token` and unescapes.  No shared state, no per-character allocation.
 
+(import python/util)
+
 (provide python/tokens
   python-tokenize %py-base
   mk-tok-name mk-tok-number mk-tok-string mk-tok-op mk-tok-newline
@@ -243,12 +245,12 @@
       (fn (self acc)
         (let ((v (%py-token-read buffer)))
           (match
-            ((null? v) (mk-tok-block (List reverse acc)))
-            ((eq? v (lit %py-dedent)) (mk-tok-block (List reverse acc)))
+            ((null? v) (mk-tok-block (%py-reverse acc)))
+            ((eq? v (lit %py-dedent)) (mk-tok-block (%py-reverse acc)))
             ; a nested block may have closed more levels than its own
             ((> (first %py-owed) 0)
               (%seq (%set-first! %py-owed (- (first %py-owed) 1))
-                (mk-tok-block (List reverse (pair v acc)))))
+                (mk-tok-block (%py-reverse (pair v acc)))))
             (#t (self (pair v acc)))))))
     (go ())))
 
@@ -1306,8 +1308,8 @@
               ; would report the wrong place -- and it is the parser, not the
               ; reader, that knows a closer has to MATCH.
               (match
-                ((null? v) (pair (List reverse acc) ()))
-                ((%py-group-close? v) (pair (List reverse acc) (%py-close-text v)))
+                ((null? v) (pair (%py-reverse acc) ()))
+                ((%py-group-close? v) (pair (%py-reverse acc) (%py-close-text v)))
                 ; A newline inside brackets is not line structure, it is
                 ; whitespace -- which used to need a depth counter to know.
                 ((%py-group-nl? v) (self acc))

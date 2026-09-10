@@ -26,6 +26,7 @@
 ; Python rule can be stated. Today most of them are thin; that is the point --
 ; they are named seams, not indirection for its own sake.
 
+(import python/util)
 (import python/types)
 (import python/format)
 
@@ -369,7 +370,7 @@
 (def %py-dflt (list (lit %py-default)))
 (def %py-opt
   (fn (_ more i dflt)
-    (if (>= i (List length more)) dflt
+    (if (>= i (%py-length more)) dflt
       (let ((v (List ref i more))) (if (same? v %py-dflt) dflt v)))))
 (def %py-floordiv
   (fn (_ a b)
@@ -857,7 +858,7 @@
     (if (< i 0) acc (self s (- i 1) (pair (%py-char-code (%str-ref s i)) acc)))))
 (def %py-sl-bytes
   (fn (self s idxs acc)
-    (if (null? idxs) (List reverse acc)
+    (if (null? idxs) (%py-reverse acc)
       (self s (rest idxs) (pair (Str8 sub (first idxs) 1 s) acc)))))
 ; bytearray(), bytearray(b'..'), bytearray('..', 'utf-8'), bytearray([..]),
 ; bytearray(n).  A str WITHOUT an encoding is Python's TypeError; with one it
@@ -1102,11 +1103,11 @@
       ((%py-obj-is v)
         (let ((m (%py-dunder v "__len__")))
           (if (null? m) (Err raise (lit type) "object of this type has no len()" ()) (m))))
-      ((%py-dict? v) (List length (%py-dict-entries v)))
-      ((%py-tuple-is v) (List length (%py-tuple-elems v)))
-      ((%py-list? v) (List length (%py-list-elems v)))
-      ((%py-set-is v) (List length (%py-set-elems v)))
-      ((%py-view-is v) (List length (%py-view-elems v)))
+      ((%py-dict? v) (%py-length (%py-dict-entries v)))
+      ((%py-tuple-is v) (%py-length (%py-tuple-elems v)))
+      ((%py-list? v) (%py-length (%py-list-elems v)))
+      ((%py-set-is v) (%py-length (%py-set-elems v)))
+      ((%py-view-is v) (%py-length (%py-view-elems v)))
       ((str? v) (Str length v))
       ((%py-bytes-is v) (Str8 length (%py-bytes-str v)))
       (#t (Err raise (lit type) "object of this type has no len()" ())))))
@@ -1180,7 +1181,7 @@
     (if (not (%py-list? v))
       (Err raise (lit type) "object does not support slice assignment" ())
       (let ((els (%py-list-elems v)))
-        (let ((sp (%py-slice-span (List length els) start stop step)))
+        (let ((sp (%py-slice-span (%py-length els) start stop step)))
           (let ((lo (first sp)))
             (let ((hi (if (< (rest sp) lo) lo (rest sp))))
               (%py-list-set! v
@@ -1202,7 +1203,7 @@
       ((not (%py-list? obj))
         (Err raise (lit type) "object does not support item assignment" ()))
       (#t
-        (let ((n (List length (%py-list-elems obj))))
+        (let ((n (%py-length (%py-list-elems obj))))
           (let ((k (if (< i 0) (+ n i) i)))
             (if (if (< k 0) #t (>= k n))
               (Err raise (lit index) "list assignment index out of range" ())
@@ -1307,7 +1308,7 @@
                                             (error e)))
                                 (nx))))
                       (if (eq? r %py-NotImplemented)
-                        (List reverse acc)
+                        (%py-reverse acc)
                         (self (pair r acc))))))
                 (go ())))))
         (let ((gi (%py-dunder v "__getitem__")))
@@ -1321,7 +1322,7 @@
                                           (error e)))
                               (gi i))))
                     (if (eq? r %py-NotImplemented)
-                      (List reverse acc)
+                      (%py-reverse acc)
                       (self (+ i 1) (pair r acc))))))
               (go 0 ()))))))))
 
@@ -1356,7 +1357,7 @@
 (def %py-range-build
   (fn (self i stop step acc)
     (if (if (> step 0) (>= i stop) (<= i stop))
-      (List reverse acc)
+      (%py-reverse acc)
       (self (+ i step) stop step (pair i acc)))))
 
 (def %py-range
@@ -1452,7 +1453,7 @@
 (def %py-list-attr
   (fn (_ obj name)
     (let ((els (%py-list-elems obj)))
-      (let ((n (List length els)))
+      (let ((n (%py-length els)))
         (match
           ((Str8 =? name "append")
             (fn (_ v) (%py-list-set! obj (%py-append-elem (%py-list-elems obj) v))))
@@ -1465,9 +1466,9 @@
               (let ((key (%py-opt a 0 ())))
                 (let ((rev (%py-opt a 1 #f)))
                   (let ((l (%py-msort-by (%py-list-elems obj) (if (null? key) %py-ident key))))
-                    (%py-list-set! obj (if (%py-truthy rev) (List reverse l) l)))))))
+                    (%py-list-set! obj (if (%py-truthy rev) (%py-reverse l) l)))))))
           ((Str8 =? name "reverse")
-            (fn (_) (%py-list-set! obj (List reverse (%py-list-elems obj)))))
+            (fn (_) (%py-list-set! obj (%py-reverse (%py-list-elems obj)))))
           ((Str8 =? name "clear") (fn (_) (%py-list-set! obj ())))
           ((Str8 =? name "copy")
             (fn (_) (%py-list-new (%py-list-elems obj))))
@@ -1517,13 +1518,13 @@
         (pair (first es) (self (rest es) k))))))
 (def %py-pairs-of
   (fn (self vs acc)
-    (if (null? vs) (List reverse acc)
+    (if (null? vs) (%py-reverse acc)
       (let ((kv (%py-iter-elems (first vs))))
-        (if (not (= (List length kv) 2))
+        (if (not (= (%py-length kv) 2))
           (error (%py-instantiate %py-exc-ValueError
             (list (Str8 append
                     (Str8 append "dictionary update sequence element has length "
-                      (%py-str (List length kv)))
+                      (%py-str (%py-length kv)))
                     "; 2 is required"))))
           (self (rest vs) (pair (pair (first kv) (first (rest kv))) acc)))))))
 (def %py-dict-merge!
@@ -1539,7 +1540,7 @@
 (def %py-dict-fromkeys
   (fn (_ it . v)
     (let ((val (if (null? v) () (first v))))
-      (let ((go (fn (self ks acc) (if (null? ks) (List reverse acc) (self (rest ks) (pair (pair (first ks) val) acc))))))
+      (let ((go (fn (self ks acc) (if (null? ks) (%py-reverse acc) (self (rest ks) (pair (pair (first ks) val) acc))))))
         (%py-dict-new (go (%py-iter-elems it) ()))))))
 
 (def %py-dict-attr
@@ -1573,7 +1574,7 @@
           (let ((rows (%py-dict-entries d)))
             (if (null? rows)
               (error (%py-instantiate %py-exc-KeyError (list "popitem(): dictionary is empty")))
-              (let ((last (List ref (- (List length rows) 1) rows)))
+              (let ((last (List ref (- (%py-length rows) 1) rows)))
                 (%seq (%py-dict-set! d (%py-drop-last rows))
                   (%py-tuple-new (list (first last) (rest last)))))))))
       ((Str8 =? name "update")
@@ -1830,10 +1831,10 @@
       (fn (self i k acc)
         (let ((st (skip i)))
           (if (>= st n)
-            (List reverse acc)
+            (%py-reverse acc)
             (if (if (>= maxsplit 0) (>= k maxsplit) #f)
               ; the remainder is kept verbatim, trailing whitespace and all
-              (List reverse (pair (Str8 sub st (- n st) s) acc))
+              (%py-reverse (pair (Str8 sub st (- n st) s) acc))
               (let ((e (word st)))
                 (self e (+ k 1) (pair (Str8 sub st (- e st) s) acc))))))))
     (go 0 0 ())))
@@ -1846,7 +1847,7 @@
       (fn (self i k acc)
         (let ((j (if (if (>= maxsplit 0) (>= k maxsplit) #f) (- 0 1) (%py-s-find s sep i n))))
           (if (< j 0)
-            (List reverse (pair (Str8 sub i (- n i) s) acc))
+            (%py-reverse (pair (Str8 sub i (- n i) s) acc))
             (self (+ j m) (+ k 1) (pair (Str8 sub i (- j i) s) acc))))))
     (if (= m 0) (Err raise (lit value) "empty separator" ()) (go 0 0 ()))))
 
@@ -1884,7 +1885,7 @@
     (def go
       (fn (self i st acc)
         (if (>= i n)
-          (List reverse (if (> i st) (pair (Str8 sub st (- i st) s) acc) acc))
+          (%py-reverse (if (> i st) (pair (Str8 sub st (- i st) s) acc) acc))
           (let ((c (%py-s-code s i)))
             (if (if (= c 10) #t (= c 13))
               (let ((w (if (if (= c 13) (if (< (+ i 1) n) (= (%py-s-code s (+ i 1)) 10) #f) #f) 2 1)))
@@ -1921,7 +1922,7 @@
           (Str8 append (%py-s-rep fill left) (Str8 append s (%py-s-rep fill (- marg left)))))))))
 (def %py-s-rep (fn (self f k) (if (<= k 0) "" (Str8 append f (self f (- k 1))))))
 
-(def %py-s-arg (fn (_ a i) (if (> (List length a) i) (List ref i a) ())))
+(def %py-s-arg (fn (_ a i) (if (> (%py-length a) i) (List ref i a) ())))
 
 (def %py-s-subs
   (fn (_ v) (if (%py-tuple-is v) (%py-tuple-elems v) (list v))))
@@ -2433,7 +2434,7 @@
     (def auto (pair 0 ()))
     ; () until the first field, then auto or manual: mixing is a ValueError
     (def mode (pair () ()))
-    (def argn (List length args))
+    (def argn (%py-length args))
     (def arg-at
       (fn (_ i)
         (if (>= i argn)
@@ -2530,7 +2531,7 @@
 (def %py-strformat-sub
   (fn (_ tpl args auto kws)
     (def n (Str8 length tpl))
-    (def argn (List length args))
+    (def argn (%py-length args))
     (def go
       (fn (self i acc)
         (if (>= i n)
@@ -3832,7 +3833,7 @@
 (def %py-import-star-names
   (fn (self rows acc)
     (if (null? rows)
-      (List reverse acc)
+      (%py-reverse acc)
       (let ((k (first (first rows))))
         (self (rest rows)
           (if (Str8 =? (Str8 sub 0 1 k) "_") acc (pair k acc)))))))
@@ -4133,7 +4134,7 @@
 (def %py-gen-drain
   (fn (self g acc)
     (let ((v (%py-gen-pull g)))
-      (if (same? v %py-gen-done) (List reverse acc) (self g (pair v acc))))))
+      (if (same? v %py-gen-done) (%py-reverse acc) (self g (pair v acc))))))
 
 ; close(): throw GeneratorExit in; a body that swallows it and yields again
 ; is the RuntimeError, one that ends (either way) is fine
@@ -4256,7 +4257,7 @@
 ; map(f, a, b, ...) walks the sources in step and stops with the shortest
 (def %py-pull-all
   (fn (self srcs acc)
-    (if (null? srcs) (List reverse acc)
+    (if (null? srcs) (%py-reverse acc)
       (let ((v (%py-iter-pull! (first srcs))))
         (if (same? v %py-gen-done) %py-gen-done (self (rest srcs) (pair v acc)))))))
 (def %py-map
@@ -4273,14 +4274,14 @@
       "map")))
 (def %py-open-all
   (fn (self its acc)
-    (if (null? its) (List reverse acc) (self (rest its) (pair (%py-iter-open (first its)) acc)))))
+    (if (null? its) (%py-reverse acc) (self (rest its) (pair (%py-iter-open (first its)) acc)))))
 (def %py-zip
   (fn (_ . its)
     (def lists (fn (self l) (if (null? l) () (pair (%py-iter-elems (first l)) (self (rest l))))))
     (def go
       (fn (self ls acc)
         (if (if (null? ls) #t (%py-any-null? ls))
-          (%py-list-new (List reverse acc))
+          (%py-list-new (%py-reverse acc))
           (self (%py-rests ls) (pair (%py-tuple-new (%py-firsts ls)) acc)))))
     (go (lists its) ())))
 (def %py-any-null? (fn (self ls) (if (null? ls) #f (if (null? (first ls)) #t (self (rest ls))))))
@@ -4298,11 +4299,11 @@
 (def %py-msort
   (fn (self l)
     (if (if (null? l) #t (null? (rest l))) l
-      (let ((h (%py-split-half l (List length l))))
+      (let ((h (%py-split-half l (%py-length l))))
         (%py-merge (self (first h)) (self (rest h)))))))
 (def %py-split-half
   (fn (_ l n)
-    (def go (fn (self k xs acc) (if (= k 0) (pair (List reverse acc) xs) (self (- k 1) (rest xs) (pair (first xs) acc)))))
+    (def go (fn (self k xs acc) (if (= k 0) (pair (%py-reverse acc) xs) (self (- k 1) (rest xs) (pair (first xs) acc)))))
     (go (Num quotient n 2) l ())))
 (def %py-merge
   (fn (self a b)
@@ -4315,7 +4316,7 @@
 (def %py-msort-by
   (fn (self l key)
     (if (if (null? l) #t (null? (rest l))) l
-      (let ((h (%py-split-half l (List length l))))
+      (let ((h (%py-split-half l (%py-length l))))
         (%py-merge-by (self (first h) key) (self (rest h) key) key)))))
 (def %py-merge-by
   (fn (self a b key)
@@ -4329,11 +4330,11 @@
 (def %py-sorted
   (%py-sig!
     (fn (_ it . a)
-      (if (= (List length a) 1)
+      (if (= (%py-length a) 1)
         (Err raise (lit type) "sorted expected 1 argument, got 2" ())
         (let ((key (%py-opt a 0 ())) (rev (%py-opt a 1 #f)))
           (let ((l (%py-msort-by (%py-iter-elems it) (if (null? key) %py-ident key))))
-            (%py-list-new (if (%py-truthy rev) (List reverse l) l))))))
+            (%py-list-new (if (%py-truthy rev) (%py-reverse l) l))))))
     "sorted" (list "iterable" "key" "reverse") 1 #f))
 
 ; next(it[, default]) and iter(x)
@@ -4419,7 +4420,7 @@
   (fn (_ sig)
     (list (first sig) (rest (List ref 1 sig)) (- (List ref 2 sig) 1)
       (List ref 3 sig)
-      (if (> (List length sig) 4) (List ref 4 sig) ()))))
+      (if (> (%py-length sig) 4) (List ref 4 sig) ()))))
 (def %py-drop
   (fn (self l k) (if (= k 0) l (if (null? l) () (self (rest l) (- k 1))))))
 (def %py-list-cat
@@ -4427,14 +4428,14 @@
 ; f() takes from NREQ to N positional arguments but M were given
 (def %py-arity!
   (fn (_ fname more nreq ndflts)
-    (if (> (List length more) ndflts)
+    (if (> (%py-length more) ndflts)
       (Err raise (lit type)
         (Str8 append
           (Str8 append
             (Str8 append (Str8 append fname "() takes from ") (%py-str nreq))
             (Str8 append " to " (%py-str (+ nreq ndflts))))
           (Str8 append
-            (Str8 append " positional arguments but " (%py-str (+ nreq (List length more))))
+            (Str8 append " positional arguments but " (%py-str (+ nreq (%py-length more))))
             " were given"))
         ())
       ())))
@@ -4448,9 +4449,9 @@
     (def nreq (List ref 2 sig))
     (def has-rest (List ref 3 sig))
     ; the **name this function declares, if it declares one
-    (def kwname (if (> (List length sig) 4) (List ref 4 sig) ()))
-    (def n (List length names))
-    (def npos (List length pos))
+    (def kwname (if (> (%py-length sig) 4) (List ref 4 sig) ()))
+    (def n (%py-length names))
+    (def npos (%py-length pos))
     (def known?
       (fn (self k ns)
         (if (null? ns) #f (if (Str8 =? k (first ns)) #t (self k (rest ns))))))
@@ -4469,7 +4470,7 @@
     (def spare
       (fn (self ks acc)
         (if (null? ks)
-          (List reverse acc)
+          (%py-reverse acc)
           (if (known? (first (first ks)) names)
             (self (rest ks) acc)
             (self (rest ks) (pair (pair (first (first ks)) (rest (first ks))) acc))))))
@@ -4490,7 +4491,7 @@
                 (rest kw)))))))
     (def build
       (fn (self i acc)
-        (if (>= i n) (List reverse acc) (self (+ i 1) (pair (slot i) acc)))))
+        (if (>= i n) (%py-reverse acc) (self (+ i 1) (pair (slot i) acc)))))
     (check kws)
     (if (if (> npos n) (not has-rest) #f)
       (%py-kw-error fname
@@ -4619,9 +4620,9 @@
 (def %py-unpack-count
   (fn (self v)
     (if (%py-tuple-is v)
-      (List length (%py-tuple-elems v))
+      (%py-length (%py-tuple-elems v))
       (if (%py-list? v)
-        (List length (%py-list-elems v))
+        (%py-length (%py-list-elems v))
         (Err raise (lit type) "cannot unpack non-sequence" ())))))
 
 (def %py-unpack
@@ -4840,7 +4841,7 @@
     (let ((found (go (first %py-ids))))
       (if (not (null? found))
         found
-        (let ((n (+ 4300000000 (* 16 (List length (first %py-ids))))))
+        (let ((n (+ 4300000000 (* 16 (%py-length (first %py-ids))))))
           (%seq (%set-first! %py-ids (pair (pair v n) (first %py-ids))) n))))))
 
 ; getattr's default catches ONLY AttributeError, as in Python
@@ -4945,7 +4946,7 @@
 ; anything materialisable
 (def %py-rev-index
   (fn (self g i acc)
-    (if (< i 0) (List reverse acc) (self g (- i 1) (pair (g i) acc)))))
+    (if (< i 0) (%py-reverse acc) (self g (- i 1) (pair (g i) acc)))))
 (def %py-reversed
   (fn (_ v)
     (if (%py-obj-is v)
@@ -4958,7 +4959,7 @@
                 (Err raise (lit type) "object is not reversible" ())
                 ; %py-rev-index already walks from the end
                 (%py-list-new (%py-rev-index g (- (l) 1) ())))))))
-      (%py-list-new (List reverse (%py-iter-elems v))))))
+      (%py-list-new (%py-reverse (%py-iter-elems v))))))
 
 ; --- Sets --------------------------------------------------------------------
 ;
@@ -5031,11 +5032,11 @@
           (let ((e (%py-dfind (first (first l)) eb)))
             (if (null? e) #f
               (if (%py-truthy (%py-eq (rest (first l)) (rest e))) (self (rest l)) #f))))))
-    (if (= (List length ea) (List length eb)) (same ea) #f)))
+    (if (= (%py-length ea) (%py-length eb)) (same ea) #f)))
 
 (def %py-set-eq?
   (fn (_ a b)
-    (if (= (List length a) (List length b)) (%py-set-subset? a b) #f)))
+    (if (= (%py-length a) (%py-length b)) (%py-set-subset? a b) #f)))
 ; a mutating method on a frozenset is simply absent, as in Python
 (def %py-set-mutate!
   (fn (_ s name new)
@@ -5068,9 +5069,9 @@
         (match
           ((Str8 =? op "<=") (%py-set-subset? x y))
           ((Str8 =? op "<")
-            (if (%py-set-subset? x y) (< (List length x) (List length y)) #f))
+            (if (%py-set-subset? x y) (< (%py-length x) (%py-length y)) #f))
           ((Str8 =? op ">=") (%py-set-subset? y x))
-          ((%py-set-subset? y x) (> (List length x) (List length y)))
+          ((%py-set-subset? y x) (> (%py-length x) (%py-length y)))
           (#t #f)))
       (%py-ord-refuse op))))
 
@@ -5498,7 +5499,7 @@
 ; dict(a=1) and d.update(a=1): the keywords ARE the entries
 (def %py-dict-kwargs
   (fn (_ kws)
-    (def go (fn (self l acc) (if (null? l) (List reverse acc) (self (rest l) (pair (pair (first (first l)) (rest (first l))) acc)))))
+    (def go (fn (self l acc) (if (null? l) (%py-reverse acc) (self (rest l) (pair (pair (first (first l)) (rest (first l))) acc)))))
     (go kws ())))
 
 (def %py-tuple-ctor
@@ -5810,7 +5811,7 @@
 (def %py-sl-idxs
   (fn (self i stop step acc)
     (if (if (> step 0) (>= i stop) (<= i stop))
-      (List reverse acc)
+      (%py-reverse acc)
       (self (+ i step) stop step (pair i acc)))))
 
 (def %py-slice-idxs
@@ -5821,13 +5822,13 @@
 (def %py-sl-pick
   (fn (self elems idxs acc)
     (if (null? idxs)
-      (List reverse acc)
+      (%py-reverse acc)
       (self elems (rest idxs) (pair (List ref (first idxs) elems) acc)))))
 
 (def %py-sl-chars
   (fn (self str idxs acc)
     (if (null? idxs)
-      (List reverse acc)
+      (%py-reverse acc)
       (self str (rest idxs) (pair (Str sub (first idxs) 1 str) acc)))))
 
 (def %py-slice
@@ -5846,11 +5847,11 @@
         ((%py-list-is obj)
           (%py-list-new
             (%py-sl-pick (%py-list-elems obj)
-              (%py-slice-idxs (List length (%py-list-elems obj)) start stop st) ())))
+              (%py-slice-idxs (%py-length (%py-list-elems obj)) start stop st) ())))
         ((%py-tuple-is obj)
           (%py-tuple-new
             (%py-sl-pick (%py-tuple-elems obj)
-              (%py-slice-idxs (List length (%py-tuple-elems obj)) start stop st) ())))
+              (%py-slice-idxs (%py-length (%py-tuple-elems obj)) start stop st) ())))
         ; a dict gets Python's own complaint: a slice is not a key
         (#t (Err raise (lit type) "unhashable type: 'slice'" ()))))))
 
