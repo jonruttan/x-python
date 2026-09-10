@@ -44,7 +44,8 @@
 ; holds the same cell, so every reference sees the store.
 
 (provide python/types
-  %py-bytes %py-bytes-new %py-bytes-is %py-bytes-str
+  %py-bytes %py-bytes-new %py-bytes-is %py-bytes-str %py-bytes-only?
+  %py-barr %py-barr-new %py-barr-is %py-barr-set!
   %py-gen %py-gen-new %py-gen-is %py-gen-state
   %py-set %py-set-new %py-set-is %py-set-elems %py-set-set! %py-set-frozen?
   %py-view %py-view-new %py-view-is %py-view-kind %py-view-elems
@@ -542,8 +543,41 @@
 ; the bytes methods wait until a conformance case asks for them.
 (def %py-bytes ())
 (def %py-bytes-new (fn (_ s) (%make-instance %py-bytes s)))
-(def %py-bytes-is (fn (_ v) (%type? v %py-bytes)))
-(def %py-bytes-str (fn (_ v) (first v)))
+
+; --- PY-BYTEARRAY ------------------------------------------------------------
+; bytes' MUTABLE twin, over the SAME payload -- a byte string -- so every
+; bytes method is the str method underneath and nothing forks.  (The note
+; above %py-bytes-wrap in python/runtime.x is that argument in full: forking
+; the payload forks 32 string algorithms permanently.)
+;
+; What differs is the CELL.  A bytearray is the one value here whose identity
+; outlives its contents, so `ba.append(b)` has to be visible through every
+; name bound to it; bytes has no such need and pays nothing for this.
+(def %py-barr ())
+(def %py-barr-new (fn (_ s) (%make-instance %py-barr (list s))))
+(def %py-barr-is (fn (_ v) (%type? v %py-barr)))
+(def %py-barr-set! (fn (_ v s) (%set-first! (first v) s)))
+(set! %py-barr
+  (%make-type
+    "PY-BYTEARRAY"
+    (list
+      (pair (lit write)
+        (fn (_ self) (display (%py-barr-repr (first (first self))))))
+      (pair (lit length) (fn (_ self) (Str8 length (first (first self))))))))
+
+; %py-bytes-is IS THE BYTES-LIKE TEST, and answers for a bytearray too.  That
+; is not a shortcut: at every seam it guards -- concatenation, comparison,
+; `in`, len, indexing, slicing, iteration, and the argument of a bytes method
+; -- Python's rule is about the BUFFER and not about which of the two types
+; is holding it.  `b"123" == bytearray(b"123")` is True for exactly this
+; reason.  The few places that must tell them apart ask %py-bytes-only?: the
+; bytes() constructor, which has to answer bytes whatever it was given, and
+; the arms that decide a RESULT's type.
+(def %py-bytes-is
+  (fn (_ v) (if (%type? v %py-bytes) #t (%type? v %py-barr))))
+(def %py-bytes-only? (fn (_ v) (%type? v %py-bytes)))
+(def %py-bytes-str
+  (fn (_ v) (if (%type? v %py-barr) (first (first v)) (first v))))
 (set! %py-bytes
   (%make-type
     "PY-BYTES"

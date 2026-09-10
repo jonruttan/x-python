@@ -36,7 +36,7 @@
   %py-mklist %py-index %py-len %py-list? %py-write %py-getattr %py-setindex
   %py-range %py-iter-elems %py-callcc
   %py-escape %py-wind-push! %py-wind-drop!
-  %py-Ellipsis %py-dir
+  %py-Ellipsis %py-dir %py-cls-bytearray
   %py-raise %py-exc-match %py-exc-match-any
   %py-mkclass %py-setattr %py-super
   %py-str %py-repr-of %py-mklist-of %py-hasattr
@@ -158,9 +158,13 @@
           (Err raise (lit type) "can only concatenate list to list" ())))
       ((%py-list? b)
         (Err raise (lit type) "unsupported operand type(s) for +" ()))
+      ; THE LEFT OPERAND DECIDES: bytearray + bytes is a bytearray and bytes +
+      ; bytearray is a bytes, as in Python -- the buffers concatenate either
+      ; way, and only the answer's type is in question.
       ((%py-bytes-is a)
         (if (%py-bytes-is b)
-          (%py-bytes-new (Str8 append (%py-bytes-str a) (%py-bytes-str b)))
+          ((if (%py-barr-is a) %py-barr-new %py-bytes-new)
+            (Str8 append (%py-bytes-str a) (%py-bytes-str b)))
           (Err raise (lit type) "can't concat to bytes" ())))
       ((%py-bytes-is b)
         (Err raise (lit type) "can't concat bytes to non-bytes" ()))
@@ -279,8 +283,10 @@
             (if (not (eq? (%py-num-kind (%py-boolnorm k)) (lit int)))
               (Err raise (lit type) "can't multiply sequence by non-int" ())
               (%py-list-new (%py-els-repeat (%py-list-elems l) (%py-boolnorm k) ()))))))
-      ((%py-bytes-is a) (%py-bytes-new (%py-str-repeat (%py-bytes-str a) b)))
-      ((%py-bytes-is b) (%py-bytes-new (%py-str-repeat (%py-bytes-str b) a)))
+      ((%py-bytes-is a)
+        ((if (%py-barr-is a) %py-barr-new %py-bytes-new) (%py-str-repeat (%py-bytes-str a) b)))
+      ((%py-bytes-is b)
+        ((if (%py-barr-is b) %py-barr-new %py-bytes-new) (%py-str-repeat (%py-bytes-str b) a)))
       ((str? a)
         (if (str? b)
           (Err raise (lit type) "can't multiply sequence by non-int" ())
@@ -783,6 +789,53 @@
               (%py-tuple-new (%py-bytes-unwrap-seq (%py-tuple-elems a))))
             (#t a))
           (self (rest args)))))))
+; bytearray's repr is bytes' repr, said out loud: bytearray(b'foo').
+(def %py-barr-repr
+  (fn (_ s) (Str8 append "bytearray(" (Str8 append (%py-bytes-repr s) ")"))))
+
+; A bytearray METHOD answers bytearrays where the bytes method answers bytes
+; -- center, strip, partition and the rest -- so the wrap differs and nothing
+; else does.
+(def %py-barr-wrap
+  (fn (self v)
+    (match
+      ((str? v) (%py-barr-new v))
+      ((%py-list? v) (%py-list-new (%py-barr-wrap-all (%py-list-elems v))))
+      ((%py-tuple-is v) (%py-tuple-new (%py-barr-wrap-all (%py-tuple-elems v))))
+      (#t v))))
+(def %py-barr-wrap-all
+  (fn (self l) (if (null? l) () (pair (%py-barr-wrap (first l)) (self (rest l))))))
+
+; The bytes an argument stands for, whichever way it was written.
+(def %py-barr-bytes-of
+  (fn (_ v)
+    (match
+      ((%py-bytes-is v) (%py-bytes-str v))
+      ((%py-list? v) (%py-bytes-of-codes (%py-list-elems v) ""))
+      ((%py-tuple-is v) (%py-bytes-of-codes (%py-tuple-elems v) ""))
+      (#t (%py-bytes-of-codes (%py-iter-elems v) "")))))
+
+(def %py-barr-attr
+  (fn (_ b name)
+    (match
+      ((Str8 =? name "decode") (fn (_ . a) (%py-bytes-str b)))
+      ; THE TWO THAT MUTATE.  A copy replaces the payload in the cell rather
+      ; than being grown in place -- the platform's strings are immutable, so
+      ; the mutation is in the CELL and the cost is a copy per append.  Correct
+      ; and slow beats fast and wrong; a caller appending in a loop is the one
+      ; who would notice, and none of the corpus does.
+      ((Str8 =? name "append")
+        (fn (_ v)
+          (%py-barr-set! b
+            (Str8 append (%py-bytes-str b) (%py-bytes-of-codes (list v) "")))))
+      ((Str8 =? name "extend")
+        (fn (_ v)
+          (%py-barr-set! b
+            (Str8 append (%py-bytes-str b) (%py-barr-bytes-of v)))))
+      (#t
+        (let ((m (%py-str-attr (%py-bytes-str b) name)))
+          (fn (_ . args) (%py-barr-wrap (apply m (%py-bytes-args args)))))))))
+
 (def %py-bytes-attr
   (fn (_ b name)
     (if (Str8 =? name "decode")
@@ -806,11 +859,25 @@
   (fn (self s idxs acc)
     (if (null? idxs) (List reverse acc)
       (self s (rest idxs) (pair (Str8 sub (first idxs) 1 s) acc)))))
-(def %py-bytearray
-  (fn (_ v)
-    (if (%py-bytes-is v)
-      v
-      (Err raise (lit type) "bytearray() argument unsupported here" ()))))
+; bytearray(), bytearray(b'..'), bytearray('..', 'utf-8'), bytearray([..]),
+; bytearray(n).  A str WITHOUT an encoding is Python's TypeError; with one it
+; is the string's own bytes, which on this platform it already is.  A count
+; asks for that many NUL bytes and meets the refusal every other spelling of
+; a NUL meets (docs/nul-and-the-string-layer.md).
+(def %py-bytearray-ctor
+  (fn (_ . args)
+    (if (null? args)
+      (%py-barr-new "")
+      (let ((v (first args)))
+        (match
+          ((%py-bytes-is v) (%py-barr-new (%py-bytes-str v)))
+          ((str? v)
+            (if (null? (rest args))
+              (Err raise (lit type) "string argument without an encoding" ())
+              (%py-barr-new v)))
+          ((%py-list? v) (%py-barr-new (%py-bytes-of-codes (%py-list-elems v) "")))
+          ((%py-tuple-is v) (%py-barr-new (%py-bytes-of-codes (%py-tuple-elems v) "")))
+          (#t (%py-barr-new (%py-bytes-zeros v ""))))))))
 
 ; --- Comparison --------------------------------------------------------------
 ; Class equality is IDENTITY: the builtin type objects are singletons, so
@@ -934,6 +1001,13 @@
       ((if (%py-seq? a) (%py-seq? b) #f)
         (< (%py-seq-cmp (%py-seq-of a) (%py-seq-of b)) 0))
       ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b "<"))
+      ; BYTES-LIKE ORDER IS BYTE ORDER, whichever of the two types is
+      ; holding the buffer.  Without this arm the pair fell past every test
+      ; here to the numeric one and was answered by whatever comparing two
+      ; instances does -- which agreed with Python while both sides were
+      ; PY-BYTES, and stopped agreeing the moment one was a bytearray.
+      ((if (%py-bytes-is a) (%py-bytes-is b) #f)
+        (< (%py-strcmp (%py-bytes-str a) (%py-bytes-str b) 0) 0))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__lt__" "__gt__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse "<") r)))
@@ -951,6 +1025,13 @@
       ((if (%py-seq? a) (%py-seq? b) #f)
         (> (%py-seq-cmp (%py-seq-of a) (%py-seq-of b)) 0))
       ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b ">"))
+      ; BYTES-LIKE ORDER IS BYTE ORDER, whichever of the two types is
+      ; holding the buffer.  Without this arm the pair fell past every test
+      ; here to the numeric one and was answered by whatever comparing two
+      ; instances does -- which agreed with Python while both sides were
+      ; PY-BYTES, and stopped agreeing the moment one was a bytearray.
+      ((if (%py-bytes-is a) (%py-bytes-is b) #f)
+        (> (%py-strcmp (%py-bytes-str a) (%py-bytes-str b) 0) 0))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__gt__" "__lt__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse ">") r)))
@@ -966,6 +1047,13 @@
   (fn (_ a b)
     (match
       ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b "<="))
+      ; BYTES-LIKE ORDER IS BYTE ORDER, whichever of the two types is
+      ; holding the buffer.  Without this arm the pair fell past every test
+      ; here to the numeric one and was answered by whatever comparing two
+      ; instances does -- which agreed with Python while both sides were
+      ; PY-BYTES, and stopped agreeing the moment one was a bytearray.
+      ((if (%py-bytes-is a) (%py-bytes-is b) #f)
+        (<= (%py-strcmp (%py-bytes-str a) (%py-bytes-str b) 0) 0))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__le__" "__ge__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse "<=") r)))
@@ -976,6 +1064,13 @@
   (fn (_ a b)
     (match
       ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b ">="))
+      ; BYTES-LIKE ORDER IS BYTE ORDER, whichever of the two types is
+      ; holding the buffer.  Without this arm the pair fell past every test
+      ; here to the numeric one and was answered by whatever comparing two
+      ; instances does -- which agreed with Python while both sides were
+      ; PY-BYTES, and stopped agreeing the moment one was a bytearray.
+      ((if (%py-bytes-is a) (%py-bytes-is b) #f)
+        (>= (%py-strcmp (%py-bytes-str a) (%py-bytes-str b) 0) 0))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__ge__" "__le__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse ">=") r)))
@@ -1524,6 +1619,7 @@
       ((%py-list? obj) (%py-list-attr obj name))
       ((%py-dict? obj) (%py-dict-attr obj name))
       ((str? obj) (%py-str-method obj name))
+      ((%py-barr-is obj) (%py-barr-attr obj name))
       ((%py-bytes-is obj) (%py-bytes-attr obj name))
       ((%py-set-is obj) (%py-set-attr obj name))
       ((%py-gen-is obj) (%py-gen-attr obj name))
@@ -1560,6 +1656,21 @@
            (pair (pair (first (first rows)) (rest (first rows))) (go (rest rows))))))
      (%py-class-methods cls))))
 
+; AN UNBOUND METHOD IS THE ATTRIBUTE ASKED OF A RECEIVER, with the receiver
+; given as the first argument instead of standing to the left of the dot --
+; `bytes.count(b"aa", b"a")` is `b"aa".count(b"a")`.
+;
+; The EMPTY receiver is what makes `bytes.nosuch` an AttributeError here
+; rather than at the eventual call: every %py-*-attr raises while looking the
+; name up, so looking it up once against a value of the right kind asks the
+; question without needing one of the caller's.  It is also what a `try:
+; bytes.count / except AttributeError` guard is asking, and five conformance
+; programs open with exactly that.
+(def %py-unbound
+  (fn (_ attr empty name)
+    (do (attr empty name)
+        (fn (_ recv . args) (apply (attr recv name) args)))))
+
 (def %py-class-attr
   (fn (_ cls name)
     ; THE THREE A CLASS ANSWERS ABOUT ITSELF COME FIRST, and they have to:
@@ -1576,17 +1687,23 @@
       ((eq? cls %py-cls-dict)
         (if (Str8 =? name "fromkeys")
           %py-dict-fromkeys
-          (Err raise (lit attribute)
-            (Str8 append (Str8 append "type object 'dict' has no attribute '" name) "'") ())))
-      ((eq? cls %py-cls-str)
-        (do (%py-str-attr "" name)
-            (fn (_ recv . args) (apply (%py-str-attr recv name) args))))
-      (#t
-        (let ((m (%py-method-find cls name)))
-          (if (null? m)
-            (Err raise (lit attribute)
-              (Str8 append (Str8 append "type object '" (%py-class-name cls))
-                (Str8 append "' has no attribute '" (Str8 append name "'"))) ())
+          (%py-class-walk cls name)))
+      (#t (%py-class-walk cls name)))))
+
+; THE CLASS'S OWN METHODS ARE ASKED FIRST, and the builtin instance surface
+; only afterwards.  Both halves matter.  A builtin type object really does
+; carry methods -- `%py-bytes-methods` and friends give list, bytes and the
+; rest their __len__, __getitem__ and __init__ -- and those are what a
+; subclass inherits, so an arm that answered from the instance surface first
+; SHADOWED them: `list.__init__` stopped being the class's and started being
+; the AttributeError `%py-list-attr` raises for a name no list instance has.
+; Measured as a regression in 71-native-subclass, which is the file that
+; exists to notice exactly this.
+(def %py-class-walk
+  (fn (_ cls name)
+    (let ((m (%py-method-find cls name)))
+      (if (null? m)
+          (%py-class-unbound cls name)
             ; FROM THE CLASS there is no instance to bind: a staticmethod
             ; is its function, a classmethod binds THIS class -- which is
             ; what makes `cls` the child in `Sub.method()` -- and a
@@ -1599,7 +1716,24 @@
                   (if (eq? k (lit classmethod))
                     (%py-bind-method f cls)
                     m)))
-              m)))))))
+              m)))))
+
+; What a builtin type offers beyond the methods on its class object: the
+; whole instance surface, unbound.  A class this does not know, or a name
+; none of them has, is the AttributeError it always was.
+(def %py-class-unbound
+  (fn (_ cls name)
+    (match
+      ((eq? cls %py-cls-str)       (%py-unbound %py-str-attr "" name))
+      ((eq? cls %py-cls-bytes)     (%py-unbound %py-bytes-attr (%py-bytes-new "") name))
+      ((eq? cls %py-cls-bytearray) (%py-unbound %py-barr-attr (%py-barr-new "") name))
+      ((eq? cls %py-cls-list)      (%py-unbound %py-list-attr (%py-list-new ()) name))
+      ((eq? cls %py-cls-dict)      (%py-unbound %py-dict-attr (%py-dict-new ()) name))
+      ((eq? cls %py-cls-set)       (%py-unbound %py-set-attr (%py-set-new #f ()) name))
+      (#t
+        (Err raise (lit attribute)
+          (Str8 append (Str8 append "type object '" (%py-class-name cls))
+            (Str8 append "' has no attribute '" (Str8 append name "'"))) ())))))
 
 ; STRING METHODS MAP ONTO Str8, WHICH ALREADY HAS THEM -- upcase, downcase,
 ; trim, split, join, replace, starts?, ends?, index-of. The work here is the
@@ -5508,7 +5642,10 @@
       (%py-bytes-new "")
       (let ((v (first args)))
         (match
-          ((%py-bytes-is v) v)
+          ; bytes(bytearray(b'x')) is a bytes, and a bytes of its own -- this
+          ; is one of the two places the strict test earns its keep.
+          ((%py-bytes-only? v) v)
+          ((%py-bytes-is v) (%py-bytes-new (%py-bytes-str v)))
           ((%py-list? v)
             (%py-bytes-new (%py-bytes-of-codes (%py-list-elems v) "")))
           ((%py-tuple-is v)
@@ -5575,6 +5712,25 @@
 (def %py-cls-bytes
   (%py-class-new "bytes" %py-cls-object %py-bytes-methods "bytes"))
 
+(def %py-bytearray-methods
+  (list
+    (pair "%ctor" %py-bytearray-ctor)
+    (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
+    (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
+    (pair "__iter__"     (fn (_ self) (%py-native-of self)))
+    (pair "__contains__" (fn (_ self x) (%py-in x (%py-native-of self))))
+    (pair "__eq__"       (fn (_ self o) (%py-eq (%py-native-of self) (%py-native-of o))))
+    (pair "__lt__"       (fn (_ self o) (%py-lt (%py-native-of self) (%py-native-of o))))
+    (pair "__gt__"       (fn (_ self o) (%py-gt (%py-native-of self) (%py-native-of o))))
+    (pair "__le__"       (fn (_ self o) (%py-le (%py-native-of self) (%py-native-of o))))
+    (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
+    (pair "__str__"      (fn (_ self) (%py-str (%py-native-of self))))
+    (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
+    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))))
+
+(def %py-cls-bytearray
+  (%py-class-new "bytearray" %py-cls-object %py-bytearray-methods "bytearray"))
+
 (def %py-type-of
   ; ELEVEN ARMS, so a match: the class a value answers to, asked once per
   ; kind.  bool is checked before int because True is an int in this runtime
@@ -5585,6 +5741,7 @@
       ((eq? v #t) %py-cls-bool)
       ((eq? v #f) %py-cls-bool)
       ((null? v) %py-cls-NoneType)
+      ((%py-barr-is v) %py-cls-bytearray)
       ((%py-bytes-is v) %py-cls-bytes)
       ((str? v) %py-cls-str)
       ((%py-list-is v) %py-cls-list)
@@ -5684,7 +5841,7 @@
               (%py-slice-idxs (Str length obj) start stop st) ())))
         ((%py-bytes-is obj)
           (let ((s (%py-bytes-str obj)))
-            (%py-bytes-new
+            ((if (%py-barr-is obj) %py-barr-new %py-bytes-new)
               (Str8 join "" (%py-sl-bytes s (%py-slice-idxs (Str8 length s) start stop st) ())))))
         ((%py-list-is obj)
           (%py-list-new

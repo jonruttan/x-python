@@ -1170,7 +1170,7 @@
         (list "round"     (lit %py-round))
         (list "min"       (lit %py-min))
         (list "max"       (lit %py-max))
-        (list "bytearray" (lit %py-bytearray))
+        (list "bytearray" (lit %py-cls-bytearray))
         (list "complex"   (lit %py-cls-complex))
         (list "hash"      (lit %py-hash))
         (list "NotImplemented" (lit %py-NotImplemented))
