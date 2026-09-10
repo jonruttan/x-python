@@ -256,7 +256,7 @@ second is, so `//` before a name is still floor division.
 (%seq (write (python-tokenize "print('hi')")) (newline))
 ```
 ---
-    (('tok-name "print") ('tok-group "(" (('tok-string "hi"))))
+    (('tok-name "print") ('tok-group "(" (('tok-string "hi")) ")"))
 
 ### two lines
 
@@ -272,4 +272,39 @@ second is, so `//` before a name is still floor division.
 (%seq (write (python-tokenize "def f(x):")) (newline))
 ```
 ---
-    (('tok-name "def") ('tok-name "f") ('tok-group "(" (('tok-name "x"))) ('tok-op ":"))
+    (('tok-name "def") ('tok-name "f") ('tok-group "(" (('tok-name "x")) ")") ('tok-op ":"))
+
+### a group records the closer it met
+
+The fourth field of a group is the bracket that ENDED it.  The lexer only
+nests -- it takes whatever closer turns up, matching or not -- and recording
+which one it was is what lets the parser judge it afterwards.
+
+```python
+(%seq (write (python-tokenize "[1]")) (newline))
+```
+---
+    (('tok-group "[" (('tok-number "1")) "]"))
+
+### the closer it met is not always the matching one
+
+`(1]` nests exactly as `(1)` does.  Whether `]` had any business ending a `(`
+is a question for the parser.
+
+```python
+(%seq (write (python-tokenize "(1]")) (newline))
+```
+---
+    (('tok-group "(" (('tok-number "1")) "]"))
+
+### a group that ran out at EOF has no closer
+
+Nil in that field is how an unclosed bracket reaches the parser.  Nothing is
+raised here: the lexer got to the end of the input, which is a fact about the
+input, not yet a complaint about it.
+
+```python
+(%seq (write (python-tokenize "(1")) (newline))
+```
+---
+    (('tok-group "(" (('tok-number "1")) ()))

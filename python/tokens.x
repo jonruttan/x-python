@@ -95,8 +95,11 @@
 (def mk-tok-bytes   (fn (_ s) (list (lit tok-bytes) s)))
 ; An f-string keeps its RAW (unescaped) text; the parser splits the fields.
 (def mk-tok-fstring (fn (_ s) (list (lit tok-fstring) s)))
-; A bracketed run, already nested by the reader: (tok-group "[" (tok ...)).
-(def mk-tok-group   (fn (_ open elems) (list (lit tok-group) open elems)))
+; A bracketed run, already nested by the reader: (tok-group "[" (tok ...) "]").
+; THE FOURTH FIELD IS HOW THE GROUP ENDED -- the closing bracket it actually
+; met, or nil for a group that ran out at EOF.  The lexer only records it; the
+; parser is what judges a missing or mismatched closer (python/parse.x).
+(def mk-tok-group   (fn (_ open elems closer) (list (lit tok-group) open elems closer)))
 ; An indented run, already nested by the reader: (tok-block (tok ...)).
 (def mk-tok-block   (fn (_ elems) (list (lit tok-block) elems)))
 ; A newline carries the column of the line it opens.
@@ -1278,6 +1281,9 @@
 (%py-tok-type! "PY-CLOSE" %py-t-close)
 
 (def %py-group-close? (fn (_ t) (if (pair? t) (eq? (first t) (lit tok-close)) #f)))
+; The bracket a close token is: ")" / "]" / "}".  Kept so a group can record
+; the closer it met and the parser can check that it was the right one.
+(def %py-close-text (fn (_ t) (first (rest t))))
 (def %py-group-nl? (fn (_ t) (if (pair? t) (eq? (first t) (lit tok-newline)) #f)))
 
 (def %py-t-open
@@ -1290,21 +1296,25 @@
         (def buffer (first args))
         (def open (%buffer-token buffer))
         (%set-first! %py-in-group (+ (first %py-in-group) 1))
+        ; Answers (elems . closer): the tokens, and the bracket that ended
+        ; them -- nil when the run ended at EOF instead.
         (def go
           (fn (self acc)
             (let ((v (%py-token-read buffer)))
-              ; EOF inside a bracket: give back what there is and let the parser
-              ; say so.  A lexer that raised here would report the wrong place.
+              ; EOF inside a bracket: give back what there is, with a nil
+              ; closer, and let the parser say so.  A lexer that raised here
+              ; would report the wrong place -- and it is the parser, not the
+              ; reader, that knows a closer has to MATCH.
               (match
-                ((null? v) (List reverse acc))
-                ((%py-group-close? v) (List reverse acc))
+                ((null? v) (pair (List reverse acc) ()))
+                ((%py-group-close? v) (pair (List reverse acc) (%py-close-text v)))
                 ; A newline inside brackets is not line structure, it is
                 ; whitespace -- which used to need a depth counter to know.
                 ((%py-group-nl? v) (self acc))
                 (#t (self (pair v acc)))))))
-        (let ((elems (go ())))
+        (let ((r (go ())))
           (%set-first! %py-in-group (- (first %py-in-group) 1))
-          (mk-tok-group open elems))))))
+          (mk-tok-group open (first r) (rest r)))))))
 (%py-tok-type! "PY-OPEN" %py-t-open)
 
 ; --- the base itself: made here, and remade after an image load -------------
