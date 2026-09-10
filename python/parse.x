@@ -497,20 +497,30 @@
 (def %py-closer-for
   (fn (_ open) (if (str=? open "(") ")" (if (str=? open "[") "]" "}"))))
 
+; ONE WORDING FOR ONE FACT.  A closer that does not answer its opener reads the
+; same whether the group came from the token stream or from inside an f-string
+; field, so the sentence is written once.
+(def %py-mismatch
+  (fn (_ open shut)
+    (Err raise (lit syntax)
+      (Str8 append
+        (Str8 append (Str8 append "closing parenthesis '" shut)
+          "' does not match opening parenthesis '")
+        (Str8 append open "'"))
+      ())))
+
+; Nil unless the pair is wrong, so a scanner can drop it into a sequence.
+(def %py-pair-ok
+  (fn (_ open shut)
+    (if (str=? shut (%py-closer-for open)) () (%py-mismatch open shut))))
+
 (def %py-group-ends-ok
   (fn (_ t)
     (let ((open (first (rest t))) (closer (%py-group-closer t)))
       (if (null? closer)
         (Err raise (lit syntax)
           (Str8 append (Str8 append "'" open) "' was never closed") ())
-        (if (str=? closer (%py-closer-for open))
-          ()
-          (Err raise (lit syntax)
-            (Str8 append
-              (Str8 append (Str8 append "closing parenthesis '" closer)
-                "' does not match opening parenthesis '")
-              (Str8 append open "'"))
-            ()))))))
+        (%py-pair-ok open closer)))))
 
 ; The other direction: a CLOSER WITH NOTHING OPEN.  The group reader eats the
 ; bracket that ends a group, so a close token that survives into a token list
@@ -1084,8 +1094,25 @@
 ; nested-replacement case -- another expansion.  {{ and }} are literal braces.
 (def %py-fs-code (fn (_ s i) (%py-char->int (Str8 ref i s))))
 
+(def %py-fs-open?  (fn (_ c) (if (= c 40) #t (if (= c 91) #t (= c 123)))))
+(def %py-fs-shut?  (fn (_ c) (if (= c 41) #t (if (= c 93) #t (= c 125)))))
+(def %py-fs-quote? (fn (_ c) (if (= c 39) #t (= c 34))))
+
+; Past the string literal whose opening quote is at i - 1.  A backslash takes
+; the next character with it; an unterminated literal runs to the end, where
+; the scanner below turns it into "expecting '}'" like any other short field.
+(def %py-fs-string-end
+  (fn (self s i q)
+    (if (>= i (Str8 length s))
+      i
+      (let ((c (%py-fs-code s i)))
+        (if (= c 92) (self s (+ i 2) q)
+          (if (= c q) (+ i 1) (self s (+ i 1) q)))))))
+
 ; The index of the } that closes the field opened at i (which is just past
-; the {), counting nested braces.
+; the {), counting nested braces.  THE str.format TEMPLATE SCANNER: a field
+; there is a name and a format spec, not an expression, so braces are all it
+; has to count.  python/runtime.x is the other caller.
 (def %py-fs-close
   (fn (self s i depth)
     (if (>= i (Str8 length s))
@@ -1096,17 +1123,56 @@
             (if (= depth 0) i (self s (+ i 1) (- depth 1)))
             (self s (+ i 1) depth)))))))
 
+; The same question for an F-STRING field, whose contents are an EXPRESSION --
+; and that is the whole difference.  Answers the index of the closing }, given
+; the brackets still open (innermost first, as their own text).
+;
+; A COUNTER WOULD NOT DO.  `}` is both a bracket and the thing that ends a
+; field, and which one it is depends on what is open: in `f"{ {1:2} }"` it
+; closes the dict, in `f"{(1}"` it is a closer that answers the wrong opener --
+; the error CPython reports there, and one a depth count cannot tell from the
+; end of a field.  Holding the openers themselves is what separates the two.
+;
+; AND IT HAS TO KNOW STRINGS, or the brackets inside one would be counted:
+; `f"{'('}"` is a perfectly good field whose text is a parenthesis.  That is
+; exactly what str.format must NOT do -- a quote there is a fill character or
+; part of a key -- which is why these are two scanners and not one with a flag.
+(def %py-fs-expr-close
+  (fn (self s i open)
+    (if (>= i (Str8 length s))
+      (Err raise (lit syntax) "f-string: expecting '}'" ())
+      (let ((c (%py-fs-code s i)))
+        (match
+          ((%py-fs-quote? c) (self s (%py-fs-string-end s (+ i 1) c) open))
+          ((%py-fs-open? c) (self s (+ i 1) (pair (Str8 sub i 1 s) open)))
+          ((%py-fs-shut? c)
+            (let ((shut (Str8 sub i 1 s)))
+              (if (null? open)
+                ; Nothing open: a `}` is the end of the field, and any other
+                ; closer got here with nothing to close.
+                (if (= c 125)
+                  i
+                  (Err raise (lit syntax)
+                    (Str8 append (Str8 append "f-string: unmatched '" shut) "'")
+                    ()))
+                (%seq (%py-pair-ok (first open) shut)
+                      (self s (+ i 1) (rest open))))))
+          (#t (self s (+ i 1) open)))))))
+
 ; The first ! or : at nesting depth zero inside a field, or nil.
+;
+; SHARED WITH str.format, so it counts characters and nothing more.  A quote is
+; an ordinary character in a format template -- the fill in `{0:'>5}`, part of
+; the key in `{a[it's]}` -- so this must NOT read string literals the way the
+; f-string expression scanner does.
 (def %py-fs-split
   (fn (self s i depth)
     (if (>= i (Str8 length s))
       ()
       (let ((c (%py-fs-code s i)))
         (match
-          ((if (= c 40) #t (if (= c 91) #t (= c 123)))
-            (self s (+ i 1) (+ depth 1)))
-          ((if (= c 41) #t (if (= c 93) #t (= c 125)))
-            (self s (+ i 1) (- depth 1)))
+          ((%py-fs-open? c) (self s (+ i 1) (+ depth 1)))
+          ((%py-fs-shut? c) (self s (+ i 1) (- depth 1)))
           ((if (= depth 0)
                   (if (= c 58) #t
                     ; `!` opens a conversion only when `=` does not follow:
@@ -1200,7 +1266,7 @@
             (if (= c 123)
               (if (if (< (+ i 1) n) (= (%py-fs-code s (+ i 1)) 123) #f)
                 (self (+ i 2) (Str8 append lit "{") acc)
-                (let ((close (%py-fs-close s (+ i 1) 0)))
+                (let ((close (%py-fs-expr-close s (+ i 1) ())))
                   (self (+ close 1) ""
                     (pair (%py-fstring-field (Str8 sub (+ i 1) (- close (+ i 1)) s))
                       (flush)))))

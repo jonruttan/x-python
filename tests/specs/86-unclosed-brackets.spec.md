@@ -120,17 +120,82 @@ body is found too -- and a closed one there is left alone.
 
 A field is lexed on its own and goes straight to the expression parser, so it
 reaches neither `python-parse` nor `python-parse-expr`; `f"{(1}"` used to come
-out as `1`.  The field's text stops at the `}`, so the bracket runs out at the
-end of the FIELD -- which is why this says the `(` was never closed where
-CPython, still reading, calls the `}` a closer that does not match.
+out as `1`.
+
+`}` IS BOTH A BRACKET AND THE END OF A FIELD.  Which one it is depends on what
+is open: in `f"{ {1:2} }"` it closes the dict, and in `f"{(1}"` it is a closer
+answering the wrong opener.  A depth count cannot tell those apart -- holding
+the openers themselves can, which is what `%py-fs-close` does, and it is why
+the wording here is CPython's own rather than "was never closed".
 
 ```python
-(python-run "for s in ['f\"{(1}\"', 'f\"{[1}\"']:\n    try:\n        print(repr(s), '->', repr(eval(s)))\n    except SyntaxError as e:\n        print(repr(s), '->', e)")
+(python-run "for s in ['f\"{(1}\"', 'f\"{[1}\"', 'f\"{(}\"']:\n    try:\n        print(repr(s), '->', repr(eval(s)))\n    except SyntaxError as e:\n        print(repr(s), '->', e)")
 ```
 ---
 ```output
-'f"{(1}"' -> '(' was never closed
-'f"{[1}"' -> '[' was never closed
+'f"{(1}"' -> closing parenthesis '}' does not match opening parenthesis '('
+'f"{[1}"' -> closing parenthesis '}' does not match opening parenthesis '['
+'f"{(}"' -> closing parenthesis '}' does not match opening parenthesis '('
+```
+
+### a mismatch inside a field, and a closer with nothing open
+
+The mismatch reads exactly as it does outside an f-string -- one wording, one
+place it is written.  `unmatched` is the one CPython prefixes with `f-string:`,
+and this follows it.
+
+```python
+(python-run "for s in ['f\"{(1]}\"', 'f\"{[1)}\"', 'f\"{([1)}\"', 'f\"{1)}\"']:\n    try:\n        print(repr(s), '->', repr(eval(s)))\n    except SyntaxError as e:\n        print(repr(s), '->', e)")
+```
+---
+```output
+'f"{(1]}"' -> closing parenthesis ']' does not match opening parenthesis '('
+'f"{[1)}"' -> closing parenthesis ')' does not match opening parenthesis '['
+'f"{([1)}"' -> closing parenthesis ')' does not match opening parenthesis '['
+'f"{1)}"' -> f-string: unmatched ')'
+```
+
+### a field that simply runs out still wants its brace
+
+```python
+(python-run "for s in ['f\"{(1\"', 'f\"{\"']:\n    try:\n        print(repr(s), '->', repr(eval(s)))\n    except SyntaxError as e:\n        print(repr(s), '->', e)")
+```
+---
+```output
+'f"{(1"' -> f-string: expecting '}'
+'f"{"' -> f-string: expecting '}'
+```
+
+### a bracket inside a string is not a bracket
+
+THE REASON THE SCANNER HAS TO KNOW STRINGS.  Counting brackets without reading
+string literals would make `f"{'('}"` -- a field whose value is a parenthesis
+-- into an unclosed group, and a `}` inside a literal end the field early.
+
+```python
+(python-run "d = {']': 'bracket', '}': 'brace'}
+print(f\"{'('}\", f\"{')'}\", f\"{'}'}\", f\"{'[' + ']'}\", f\"{d[']']}\", f\"{d['}']}\")")
+```
+---
+```output
+( ) } [] bracket brace
+```
+
+### a format spec still finds its colon, and str.format is untouched
+
+The scanner that splits `!conv` and `:spec` off a field is SHARED with
+str.format, where a quote is an ordinary character -- the fill in `{0:'>5}`,
+part of the key in `{a[it's]}`.  So it counts and does not read strings, which
+is why `f"{'a:b'}"` is still refused here where CPython answers `a:b`.  Giving
+f-strings that too means a second scanner for the other template as well, and
+this change already carries one.
+
+```python
+(python-run "print(f\"{1:>{3}}\", f\"{'x'!r}\", \"{0:'>5}\".format(1), \"{a[it's]:>5}\".format(a={\"it's\": 7}))")
+```
+---
+```output
+  1 'x' ''''1     7
 ```
 
 ### a closed bracket in a field is left alone
