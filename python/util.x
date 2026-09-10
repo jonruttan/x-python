@@ -42,7 +42,7 @@
 ; `List from-seq`; these take a list or nil, which is what all 131 call sites
 ; passed.  A call that wants an iterable should still say `List`.
 
-(provide python/util %py-reverse %py-rev-onto %py-length)
+(provide python/util %py-reverse %py-rev-onto %py-length %py-byte-len)
 
 ; Reverse-prepend: the tail-shape list builder.  Every walk in the bundle
 ; accumulates front-to-back and reverses once, so this is the shape underneath
@@ -60,3 +60,8 @@
     (if (null? xs) n (self (rest xs) (+ n 1)))))
 
 (def %py-length (fn (_ xs) (%py-count-from xs 0)))
+
+; A string's length through the raw byte door, not the Str8 class: the class
+; call is ~15,000 objects, the primitive is at the floor, and the number
+; converters ask it once per literal.
+(def %py-byte-len (prim-ref (lit str) (lit byte-len)))

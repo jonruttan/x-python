@@ -5251,7 +5251,7 @@
 
 (def %py-int-of-str
   (fn (_ s)
-    (def n (Str8 length s))
+    (def n (%py-byte-len s))
     (def bad
       (fn (_)
         (Err raise (lit value)

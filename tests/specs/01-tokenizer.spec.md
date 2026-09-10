@@ -130,7 +130,7 @@ carries the column of the line it opens, which is what python/indent.x reads.
 (%seq (write (python-tokenize "42")) (newline))
 ```
 ---
-    (('tok-number "42"))
+    (('tok-number "42" 1))
 
 ### a float
 
@@ -138,7 +138,7 @@ carries the column of the line it opens, which is what python/indent.x reads.
 (%seq (write (python-tokenize "3.5")) (newline))
 ```
 ---
-    (('tok-number "3.5"))
+    (('tok-number "3.5" 2))
 
 ### the value is source text, not a number
 
@@ -149,7 +149,7 @@ denotes belongs to the evaluator, not here.
 (%seq (write (python-tokenize "007")) (newline))
 ```
 ---
-    (('tok-number "007"))
+    (('tok-number "007" 1))
 
 ## tokenizer strings
 
@@ -301,7 +301,7 @@ second is, so `//` before a name is still floor division.
 (%seq (write (python-tokenize "x = 1 + 2")) (newline))
 ```
 ---
-    (('tok-name "x") ('tok-op "=") ('tok-number "1") ('tok-op "+") ('tok-number "2"))
+    (('tok-name "x") ('tok-op "=") ('tok-number "1" 1) ('tok-op "+") ('tok-number "2" 1))
 
 ### a call with a string argument
 
@@ -337,7 +337,7 @@ which one it was is what lets the parser judge it afterwards.
 (%seq (write (python-tokenize "[1]")) (newline))
 ```
 ---
-    (('tok-group "[" (('tok-number "1")) "]"))
+    (('tok-group "[" (('tok-number "1" 1)) "]"))
 
 ### the closer it met is not always the matching one
 
@@ -348,7 +348,7 @@ is a question for the parser.
 (%seq (write (python-tokenize "(1]")) (newline))
 ```
 ---
-    (('tok-group "(" (('tok-number "1")) "]"))
+    (('tok-group "(" (('tok-number "1" 1)) "]"))
 
 ### a group that ran out at EOF has no closer
 
@@ -360,4 +360,4 @@ input, not yet a complaint about it.
 (%seq (write (python-tokenize "(1")) (newline))
 ```
 ---
-    (('tok-group "(" (('tok-number "1")) ()))
+    (('tok-group "(" (('tok-number "1" 1)) ()))
