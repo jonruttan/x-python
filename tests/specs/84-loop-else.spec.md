@@ -218,3 +218,55 @@ is refused as the statement it then has to be.
 ```output
 Error: #<err:syntax unexpected token in expression>
 ```
+
+## the escape the else reads is still an escape
+
+The clause is decided by asking a bound `break` continuation which way the loop
+left, and that continuation OWES THE SAME UNWINDING every other loop's does: a
+`break` out of a `try/finally` or a `with` runs the cleanup on the way past
+(python/runtime.x, "Unwinding on the way out"). Reading the answer and paying
+the debt are two jobs, and the escape has to do both.
+
+### break out of a try/finally in a for-else
+
+```python
+(python-run "for i in range(4):\n    try:\n        if i == 1:\n            break\n        print('body', i)\n    finally:\n        print('fin', i)\nelse:\n    print('else ran')\nprint('after')")
+```
+---
+```output
+body 0
+fin 0
+fin 1
+after
+```
+
+### break out of a with in a while-else
+
+```python
+(python-run "class C:\n    def __enter__(self):\n        print('enter')\n        return self\n    def __exit__(self, a, b, c):\n        print('exit')\ni = 0\nwhile i < 3:\n    with C():\n        print('body', i)\n        if i == 1:\n            break\n    i = i + 1\nelse:\n    print('else ran')\nprint('after')")
+```
+---
+```output
+enter
+body 0
+exit
+enter
+body 1
+exit
+after
+```
+
+### a loop that runs out pays its cleanup and still runs its else
+
+```python
+(python-run "for i in range(2):\n    try:\n        print('body', i)\n    finally:\n        print('fin', i)\nelse:\n    print('else ran')\nprint('after')")
+```
+---
+```output
+body 0
+fin 0
+body 1
+fin 1
+else ran
+after
+```

@@ -1756,9 +1756,15 @@
 ;   else must not be inside this loop's binding, which also leaves a break
 ;   with no loop around it free for %py-check-escapes to refuse;
 ;
-;   guarded, because %py-callcc answers what the escape was passed when
-;   `break` jumped -- () -- and the body's own value when the loop ran out.
-;   That value is 1 here, chosen for nothing but being something () is not.
+;   guarded, because the escape answers what it was passed when `break` jumped
+;   -- () -- and the body's own value when the loop ran out.  That value is 1
+;   here, chosen for nothing but being something () is not.
+;
+; %py-escape, not the raw call/cc: this binds a `break` like any other loop
+; does, so it owes the same unwinding (python/runtime.x, "Unwinding on the way
+; out").  The raw one skips the `finally` of the iteration that breaks, which
+; is the whole of what %py-escape exists to stop.  It answers exactly what
+; call/cc answers, so the guard above reads the same either way.
 ;
 ; A loop with no `break` in it always runs its else, and pays no continuation
 ; to find that out.
@@ -1770,7 +1776,7 @@
       (#t
         (list (lit if)
           (list (lit null?)
-            (list (lit %py-callcc)
+            (list (lit %py-escape)
               (list (lit fn) (list (lit _) (lit %py-break))
                 (list (lit %seq) loop 1))))
           ()
