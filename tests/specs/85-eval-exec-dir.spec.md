@@ -90,6 +90,27 @@ None
 2
 ```
 
+### exec defines a class, and the class outlives the call
+
+A class reaches the evaluator differently from a def: `%py-class-of` emits a
+`set!` of a `%py-mkclass` call, where a def emits a `def`.  Through `exec` that
+`set!` is reached from inside a builtin rather than from the top of a program,
+and the case is here because that path had no spec — the def, the assignment
+and the loop above did, and a class is the one shape none of them covers.
+Two execs, so that the SECOND one can name the class the FIRST one bound: a
+class that did not really land in the one namespace would fail as a base.
+
+```python
+(python-run "exec(\"class D:\\n    def hi(self):\\n        return 'hi'\")\nd = D()\nprint(d.hi())\nexec(\"class E(D):\\n    pass\")\nprint(E().hi())\nprint(isinstance(E(), D))\nexec(\"class F: pass\")\nprint(F().__class__ is F)")
+```
+---
+```output
+hi
+hi
+True
+True
+```
+
 ### compile, and the three modes
 
 ```python
