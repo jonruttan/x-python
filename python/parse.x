@@ -587,7 +587,7 @@
         (let ((cls (%py-comp-clauses (rest r) ())))
           (list (lit %py-gen-new)
             (list (lit fn) (list (lit _) (lit %py-gen))
-              (list (lit %py-callcc)
+              (list (lit %py-escape)
                 (list (lit fn) (list (lit _) (lit %py-return))
                   (list (lit %seq)
                     (%py-comp-fold cls (list (lit %py-yield) (lit %py-gen) (first r)))
@@ -1472,16 +1472,30 @@
               ; the end: a handler that swallowed an exception has already
               ; called __exit__ and must not call it twice
               (list (lit let) (list (list (lit %py-wok) (list (lit pair) #f ())))
-                (list (lit %seq)
-                  (list (lit guard)
-                    (list (lit %py-we)
-                      (list (lit %py-with-exc) (lit %py-mgr) (lit %py-we)))
-                    (list (lit %seq)
-                      (self (rest items) body)
-                      (list (lit %set-first!) (lit %py-wok) #t)))
-                  (list (lit if) (list (lit first) (lit %py-wok))
-                    (list (lit %py-with-normal) (lit %py-mgr))
-                    ()))))))))))
+                ; AN ESCAPE OUT OF THE BODY IS A NORMAL EXIT, and Python calls
+                ; __exit__(None, None, None) on the way past.  The wind entry
+                ; is what a `return`, `break` or `continue` finds and runs
+                ; (python/runtime.x, "Unwinding on the way out"); the two paths
+                ; that leave here on their own feet drop it first.  Nested
+                ; items push outermost first, so the unwind calls the inner
+                ; __exit__ before the outer one -- the order `with A(), B():`
+                ; already has.
+                (list (lit let) (list (list (lit %py-ww)
+                                            (list (lit %py-wind-push!)
+                                              (list (lit fn) (list (lit _))
+                                                (list (lit %py-with-normal) (lit %py-mgr))))))
+                  (list (lit %seq)
+                    (list (lit guard)
+                      (list (lit %py-we)
+                        (list (lit %seq) (list (lit %py-wind-drop!) (lit %py-ww))
+                          (list (lit %py-with-exc) (lit %py-mgr) (lit %py-we))))
+                      (list (lit %seq)
+                        (self (rest items) body)
+                        (list (lit %set-first!) (lit %py-wok) #t)))
+                    (list (lit %seq) (list (lit %py-wind-drop!) (lit %py-ww))
+                      (list (lit if) (list (lit first) (lit %py-wok))
+                        (list (lit %py-with-normal) (lit %py-mgr))
+                        ()))))))))))))
 
 ; ITEM, ITEM, ... : each is an expression with an optional `as NAME`
 (def %py-with-items
@@ -1702,10 +1716,12 @@
       ((%py-shadows? form sym) #f)
       (#t (if (self (first form) sym) #t (self (rest form) sym))))))
 
+; %py-escape, not the raw call/cc: an escape must run the cleanup it is about
+; to jump over (python/runtime.x, "Unwinding on the way out").
 (def %py-wrap-escape
   (fn (_ form sym)
     (if (%py-free-ref? form sym)
-      (list (lit %py-callcc) (list (lit fn) (list (lit _) sym) form))
+      (list (lit %py-escape) (list (lit fn) (list (lit _) sym) form))
       form)))
 
 ; A scope boundary: every loop inside has had its turn, so anything left is
@@ -1973,14 +1989,28 @@
               (pair
                 (if (null? (first f))
                   guarded
-                  ; FINALLY RUNS ON BOTH PATHS: once in the body after the
-                  ; guarded form, once in a handler that re-raises.  A `return`
-                  ; inside try escapes through call/cc and skips it -- Python
-                  ; runs it there too, and that is not modelled.
-                  (list (lit guard)
-                    (list (lit %py-fin)
-                      (list (lit %seq) (first f) (list (lit error) (lit %py-fin))))
-                    (list (lit %seq) guarded (first f))))
+                  ; FINALLY RUNS ON ALL THREE PATHS.  The body is emitted ONCE,
+                  ; as a thunk, and reached three ways: after the guarded form
+                  ; when it finished, from a handler that then re-raises, and
+                  ; -- for a `return`, `break` or `continue` out of the try --
+                  ; from the wind stack, which %py-escape walks before it jumps
+                  ; (python/runtime.x, "Unwinding on the way out").
+                  ;
+                  ; The first two DROP the entry before running the thunk, so
+                  ; it runs exactly once whichever way the block is left, and a
+                  ; handler that re-raises does not leave the entry stranded.
+                  (list (lit let) (list (list (lit %py-fin-th)
+                                              (list (lit fn) (list (lit _)) (first f))))
+                    (list (lit let) (list (list (lit %py-fin-w)
+                                                (list (lit %py-wind-push!) (lit %py-fin-th))))
+                      (list (lit guard)
+                        (list (lit %py-fin)
+                          (list (lit %seq) (list (lit %py-wind-drop!) (lit %py-fin-w))
+                            (list (lit %seq) (list (lit %py-fin-th))
+                              (list (lit error) (lit %py-fin)))))
+                        (list (lit %seq) guarded
+                          (list (lit %seq) (list (lit %py-wind-drop!) (lit %py-fin-w))
+                            (list (lit %py-fin-th))))))))
                 (rest f))))))))))
 
 (def %py-raise-stmt
@@ -2340,12 +2370,12 @@
                       (list (lit fn) (pair (lit _) params)
                         (list (lit %py-gen-new)
                           (list (lit fn) (list (lit _) (lit %py-gen))
-                            (list (lit %py-callcc)
+                            (list (lit %py-escape)
                               (list (lit fn) (list (lit _) (lit %py-return))
                                 (list (lit %seq) (%py-check-escapes body) ()))))
                           (%py-val name)))
                       (list (lit fn) (pair (lit _) params)
-                        (list (lit %py-callcc)
+                        (list (lit %py-escape)
                           (list (lit fn) (list (lit _) (lit %py-return))
                             (list (lit %seq) (%py-check-escapes body) ()))))))
                   ; %py-sig! records the parameter names for keyword calls and

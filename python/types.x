@@ -557,10 +557,13 @@
 ; --- PY-GEN ------------------------------------------------------------------
 ; A generator is its body (a closure taking the generator itself, whose
 ; `yield`s call %py-yield on it), its name, the two continuations that pass
-; control back and forth (runtime.x owns the protocol), and a status.
-; The state is a mutable list: (body name k-gen k-caller status).
+; control back and forth (runtime.x owns the protocol), a status, and the
+; cleanup a suspended body still owes -- its own wind stack, which rides here
+; across a suspension rather than on the stack of whoever is driving it.
+; The state is a mutable list: (body name k-gen k-caller status winds).
 (def %py-gen ())
-(def %py-gen-new (fn (_ body name) (%make-instance %py-gen (list body name () () (lit created)))))
+(def %py-gen-new
+  (fn (_ body name) (%make-instance %py-gen (list body name () () (lit created) ()))))
 (def %py-gen-is (fn (_ v) (%type? v %py-gen)))
 (def %py-gen-state (fn (_ g) (first g)))
 (set! %py-gen
