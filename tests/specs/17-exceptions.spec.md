@@ -198,14 +198,48 @@ cleanup
 Error: ValueError: v
 ```
 
-### a return inside try skips it
+### a return inside try runs it on the way out
 
-PENDING, and a real divergence rather than an oversight. `return` invokes an
-escape continuation (see 13-return), and that continuation jumps straight past
-the `finally` — Python runs it on the way out and prints `cleanup` before `1`.
-Fixing it means the escape has to unwind through the guard, which is a change to
-how `return` works, not to how `finally` works.
+`return` invokes an escape continuation (see 13-return), and that continuation
+used to jump straight past the `finally`. It no longer does: the block registers
+its cleanup on a wind stack and the escape runs what the jump is about to skip
+before it jumps, so `cleanup` prints before `1` — which is where Python puts it.
 
 ```python
 (python-run "def f():\n    try:\n        return 1\n    finally:\n        print('cleanup')\nprint(f())")
+```
+---
+```output
+cleanup
+1
+```
+
+### one return pays every finally it passes
+
+The escape runs them innermost first, which is the order the blocks are left in.
+
+```python
+(python-run "def f():\n    try:\n        try:\n            return 'r'\n        finally:\n            print('inner')\n    finally:\n        print('outer')\nprint(f())")
+```
+---
+```output
+inner
+outer
+r
+```
+
+### a return out of a with inside a try pays both
+
+The two owe different cleanups — `__exit__` and a `finally` — and a single
+escape settles them in order.
+
+```python
+(python-run "class C:\n    def __enter__(self):\n        print('enter')\n        return self\n    def __exit__(self, a, b, c):\n        print('exit')\ndef f():\n    try:\n        with C():\n            return 'v'\n    finally:\n        print('fin')\nprint(f())")
+```
+---
+```output
+enter
+exit
+fin
+v
 ```

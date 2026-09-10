@@ -89,3 +89,29 @@ caught
 201
 ```
 
+
+## a suspended body's cleanup is its own
+
+A generator yields through a `try/finally` all the time, and a `yield` is a
+SUSPENSION rather than an exit: Python does not run the `finally` when control
+leaves at the yield, it runs it when the body is resumed and leaves the block
+for good. So the cleanup a half-run body owes rides in the generator across the
+suspension (python/types.x, the state's `winds`) instead of being left on the
+stack of whoever is driving it — where the driver's next `break` or `return`
+would have run it, early and in the wrong frame.
+
+### a finally around a yield waits for the resume
+
+```python
+(python-run "def g():\n    for i in range(3):\n        try:\n            yield i\n        finally:\n            print('fin', i)\nfor v in g():\n    print('got', v)\nprint('after')")
+```
+---
+```output
+got 0
+fin 0
+got 1
+fin 1
+got 2
+fin 2
+after
+```

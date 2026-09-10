@@ -138,26 +138,60 @@ after
 
 ### break inside try/finally
 
-PENDING, and the same divergence `return` already has (17-exceptions, "a return
-inside try skips it").  `break` invokes an escape continuation and that
-continuation jumps straight past the `guard` a `finally` compiles to, so the
-cleanup for the iteration that breaks never runs -- Python prints `finally 1`
-before `after`.  Closing it means escapes have to UNWIND, which is a change to
-how continuations work here, not to how `finally` does; x-r5rs already builds
-`dynamic-wind` on top of this same call/cc, so the pattern exists.
+`break` invokes an escape continuation, and that continuation used to jump
+straight past the `guard` a `finally` compiles to, so the cleanup for the
+iteration that breaks never ran.  It runs now: the block registers its cleanup
+on a wind stack and the escape settles what it is about to skip before it jumps
+(python/runtime.x, "Unwinding on the way out"), so `finally 1` prints before
+`after`.
 
 ```python
 (python-run "for i in range(4):\n    try:\n        if i == 1:\n            break\n        print(\"body\", i)\n    finally:\n        print(\"finally\", i)\nprint(\"after\")")
 ```
+---
+```output
+body 0
+finally 0
+finally 1
+after
+```
+
+### continue inside try/finally
+
+`continue` leaves the block too, and pays the same debt -- once per iteration,
+including the iterations it skips the rest of.
+
+```python
+(python-run "for i in range(3):\n    try:\n        if i == 1:\n            continue\n        print(\"body\", i)\n    finally:\n        print(\"fin\", i)\nprint(\"after\")")
+```
+---
+```output
+body 0
+fin 0
+fin 1
+body 2
+fin 2
+after
+```
 
 ### break inside with
 
-PENDING, for the reason above: `__exit__` runs off the normal and the
-exceptional paths, and a continuation escape is neither.  Python calls
-`__exit__(None, None, None)` on the way out and prints a third `exit`.
+`__exit__` runs off the normal and the exceptional paths, and a continuation
+escape is neither -- so the escape carries it, as the normal exit it is:
+`__exit__(None, None, None)`, and a third `exit` on the way out.
 
 ```python
 (python-run "class C:\n    def __enter__(self):\n        print(\"enter\")\n        return self\n    def __exit__(self, a, b, c):\n        print(\"exit\")\nfor i in range(3):\n    with C():\n        print(\"body\", i)\n        if i == 1:\n            break\nprint(\"after\")")
+```
+---
+```output
+enter
+body 0
+exit
+enter
+body 1
+exit
+after
 ```
 
 ### break in a generator

@@ -35,6 +35,7 @@
   %py-print %py-display
   %py-mklist %py-index %py-len %py-list? %py-write %py-getattr %py-setindex
   %py-range %py-iter-elems %py-callcc
+  %py-escape %py-wind-push! %py-wind-drop!
   %py-raise %py-exc-match %py-exc-match-any
   %py-mkclass %py-setattr %py-super
   %py-str %py-repr-of %py-mklist-of %py-hasattr
@@ -1105,6 +1106,70 @@
 ; The escape continuation a `return` invokes.  Fetched rather than assumed
 ; global, the way every other prim in this bundle is reached.
 (def %py-callcc (prim-ref (lit ctrl) (lit call/cc)))
+
+; --- Unwinding on the way out ------------------------------------------------
+;
+; `return`, `break` and `continue` escape through that continuation, and the
+; engine's call/cc restores the C stack straight past any `guard` standing
+; between the jump and its binder.  So a `finally` -- and a `with`'s __exit__ --
+; between the two never ran: the cleanup was owed and the escape walked out
+; without paying it.
+;
+; A WIND STACK settles the debt.  A block that owes cleanup pushes a thunk for
+; the duration of its body and drops it again on the way out; an escape runs
+; everything the jump is about to skip, innermost first, before it jumps.
+;
+; The shape is x-r5rs's dynamic-wind (r5rs/scm/control.scm) over this same
+; stack-copying call/cc, with the two differences Python asks for:
+;
+;   * ESCAPES ONLY TRAVEL OUTWARD.  `return`, `break` and `continue` are
+;     one-shot and never re-entered, so the stack an escape was captured with
+;     is always a tail of the one it is invoked with -- there is an exit walk
+;     and no matching enter walk.
+;
+;   * A `yield` IS A SUSPENSION, NOT AN EXIT.  Python does not run a finally
+;     when a generator yields through one; it runs it when the body is resumed
+;     and leaves the block for good.  So generators keep the RAW call/cc and
+;     swap the whole stack at the boundary (%py-gen-resume), which leaves a
+;     suspended body's cleanup owed rather than paying it early.
+;
+; The stack is a cell holding a list of thunks, innermost first.  It is O(the
+; nesting depth of blocks owing cleanup), never O(iterations): a loop pushes
+; and drops the same one entry each time round.
+(def %py-winds (pair () ()))
+
+; The pushed node IS the token to drop it by -- dropping restores exactly what
+; was underneath, so an unbalanced push in between cannot strand the stack.
+(def %py-wind-push!
+  (fn (_ after)
+    (%seq (%set-first! %py-winds (pair after (first %py-winds)))
+      (first %py-winds))))
+
+(def %py-wind-drop! (fn (_ node) (%seq (%set-first! %py-winds (rest node)) ())))
+
+; Run what the jump would skip, back down to the stack the escape was captured
+; with.  Each entry is dropped BEFORE its thunk runs, so a cleanup that escapes
+; again -- a `return` inside a `finally` -- cannot meet itself coming back.
+(def %py-wind-unwind!
+  (fn (self target)
+    (let ((cur (first %py-winds)))
+      (match
+        ((same? cur target) ())
+        ; the target is not below us: nothing sane left to run, so restore the
+        ; stack rather than paying debts that are not ours
+        ((null? cur) (%seq (%set-first! %py-winds target) ()))
+        (#t
+          (%seq (%set-first! %py-winds (rest cur))
+            (%seq ((first cur)) (self target))))))))
+
+; call/cc for an escape: the continuation it hands the body settles the wind
+; stack back to what it was here before it jumps.
+(def %py-escape
+  (fn (_ body)
+    (let ((saved (first %py-winds)))
+      (%py-callcc
+        (fn (_ k)
+          (body (fn (_ v) (%seq (%py-wind-unwind! saved) (k v)))))))))
 
 ; --- Iteration ---------------------------------------------------------------
 ;
@@ -3794,9 +3859,15 @@
 (def %py-gen-gk     (fn (_ g) (List ref 2 (%py-gen-state g))))
 (def %py-gen-ck     (fn (_ g) (List ref 3 (%py-gen-state g))))
 (def %py-gen-status (fn (_ g) (List ref 4 (%py-gen-state g))))
+; A SUSPENDED BODY KEEPS ITS OWN WIND STACK.  The cleanup a half-run body owes
+; belongs to the body, not to whoever is driving it, so it rides in the state
+; across the suspension instead of sitting on the caller's stack.
+(def %py-gen-winds  (fn (_ g) (List ref 5 (%py-gen-state g))))
 (def %py-gen-set-gk!     (fn (_ g k) (%set-first! (rest (rest (%py-gen-state g))) k)))
 (def %py-gen-set-ck!     (fn (_ g k) (%set-first! (rest (rest (rest (%py-gen-state g)))) k)))
 (def %py-gen-set-status! (fn (_ g s) (%set-first! (rest (rest (rest (rest (%py-gen-state g))))) s)))
+(def %py-gen-set-winds!
+  (fn (_ g w) (%set-first! (rest (rest (rest (rest (rest (%py-gen-state g)))))) w)))
 (def %py-gen-done (list (lit %py-gen-done)))
 
 ; a class raises as a fresh instance, an instance as itself
@@ -3881,18 +3952,30 @@
           ())
         (if (if (eq? st (lit created)) (eq? mode (lit throw)) #f)
           (do (%py-gen-set-status! g (lit done)) (%py-raise-any v))
-          (let ((r (%py-callcc
-                     (fn (_ k)
-                       (%py-gen-set-ck! g k)
-                       (%py-gen-set-status! g (lit running))
-                       (if (eq? st (lit created))
-                         (%py-gen-run g)
-                         ((%py-gen-gk g) (list mode v)))))))
-            (if (eq? (first r) (lit yield))
-              (first (rest r))
-              (if (eq? (first r) (lit return))
-                (%py-raise-stop (first (rest r)))
-                (error (first (rest r))))))))))))
+          ; ACROSS THE BOUNDARY THE WIND STACK IS SWAPPED, not shared: the body
+          ; runs owing what the body owes, and hands it back unpaid when it
+          ; suspends.  Without this a `yield` out of a try/finally would leave
+          ; the body's cleanup sitting on the CALLER's stack, where the
+          ; caller's next escape would run it -- early, and in the wrong frame.
+          (let ((winds (first %py-winds)))
+            (let ((r (%py-callcc
+                       (fn (_ k)
+                         (%py-gen-set-ck! g k)
+                         (%py-gen-set-status! g (lit running))
+                         (%set-first! %py-winds (%py-gen-winds g))
+                         (if (eq? st (lit created))
+                           (%py-gen-run g)
+                           ((%py-gen-gk g) (list mode v)))))))
+              (do
+                ; control is back on this side, so what the global holds now is
+                ; whatever the body left owing
+                (%py-gen-set-winds! g (first %py-winds))
+                (%set-first! %py-winds winds)
+                (if (eq? (first r) (lit yield))
+                  (first (rest r))
+                  (if (eq? (first r) (lit return))
+                    (%py-raise-stop (first (rest r)))
+                    (error (first (rest r))))))))))))))
 
 ; next(g) with the StopIteration turned into the done sentinel
 (def %py-gen-pull
