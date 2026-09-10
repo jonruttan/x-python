@@ -84,6 +84,63 @@
 ; wants it fetches it the same way (num/bigint.x, num/complex.x).
 (def %buffer-token (prim-ref (lit buf) (lit tok)))
 (def %py-char->int (prim-ref (lit char) (lit ->int)))
+
+; --- The variant channel --------------------------------------------------------
+; A NUMBER TOKEN CARRIES ITS VARIANT, decided where it is known.  The analyser's
+; states already tell an integer from a fraction from an exponent from an
+; imaginary from a based literal, by which state accepts -- and used to throw
+; that away, leaving %py-num to rescan the text through the Str8 class at
+; ~200,000 objects a literal.  Now the accepting state declares it:
+;
+;   1 integer    2 float (a fraction or an exponent)    3 imaginary    4 based
+;
+; and the token is (tok-number "text" VARIANT).
+;
+; TWO DOORS, ONE FALLBACK.  On a platform with the channel (x-lang
+; reader/intrinsics.x: %score-variant! at the analyser's end, %read-variant at the
+; reader's; the engine hangs a variant cell off the score), the state's
+; declaration reaches the read handler.  On one without, both names are
+; unbound, the two doors below answer nothing, and the read handler derives
+; the same variant from the text through the raw byte primitives -- so the token
+; stream is identical either way, and %py-num never rescans.
+(def %py-variant! (guard (e (fn (_ score variant) ())) %score-variant!))
+(def %py-read-variant (guard (e (fn (_ args) ())) %read-variant))
+
+(def %py-code-at (fn (_ s i) (%py-char->int (%str-ref s i))))
+
+; 0x 0o 0b at i, in either case
+(def %py-based-at?
+  (fn (_ s i n)
+    (if (< (- n i) 3) #f
+      (if (not (= (%py-code-at s i) 48)) #f
+        (let ((c (%py-code-at s (+ i 1))))
+          (match
+            ((if (= c 120) #t (= c 88)) #t)
+            ((if (= c 111) #t (= c 79)) #t)
+            ((if (= c 98) #t (= c 66)) #t)
+            (#t #f)))))))
+
+; a dot or an exponent marker anywhere from i
+(def %py-floaty?
+  (fn (self s i n)
+    (if (>= i n) #f
+      (let ((c (%py-code-at s i)))
+        (if (match ((= c 46) #t) ((= c 101) #t) ((= c 69) #t) (#t #f))
+          #t
+          (self s (+ i 1) n))))))
+
+; The fallback: the variant read off the text, in the order the analyser would
+; have decided it -- based before float, so 0xe1's e is a digit; imaginary
+; before float, so 2.5j is imaginary.
+(def %py-variant-of-text
+  (fn (_ s)
+    (let ((n (%py-byte-len s)))
+      (let ((i (let ((c0 (%py-code-at s 0))) (if (if (= c0 45) #t (= c0 43)) 1 0))))
+        (match
+          ((%py-based-at? s i n) 4)
+          ((let ((cl (%py-code-at s (- n 1)))) (if (= cl 106) #t (= cl 74))) 3)
+          ((%py-floaty? s i n) 2)
+          (#t 1))))))
 ; The list->string spelling ash arrived at: %cvt to the string type, with the
 ; empty list special-cased because a conversion of nothing has no type to go on.
 (def %py-list->string (fn (_ l) (if (null? l) "" (%cvt l %string))))
@@ -92,7 +149,7 @@
 ; Plain lists, the shape ash settled on: readable in a spec without a printer.
 (def mk-tok-name    (fn (_ s) (list (lit tok-name) s)))
 (def mk-tok-kw      (fn (_ s) (list (lit tok-kw) s)))
-(def mk-tok-number  (fn (_ s) (list (lit tok-number) s)))
+(def mk-tok-number  (fn (_ s k) (list (lit tok-number) s k)))
 (def mk-tok-string  (fn (_ s) (list (lit tok-string) s)))
 (def mk-tok-op      (fn (_ s) (list (lit tok-op) s)))
 (def mk-tok-bytes   (fn (_ s) (list (lit tok-bytes) s)))
@@ -528,8 +585,8 @@
     (match
       ((%py-digit? chr) %py-number-exp-digits)
       ((= chr 95) %py-number-exp-digits)
-      ((if (= chr 106) #t (= chr 74)) (%score-set score 1 buffer))
-      (#t (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+      ((if (= chr 106) #t (= chr 74)) (%seq (%py-variant! score 3) (%score-set score 1 buffer)))
+      (#t (%seq (%buffer-unread buffer) (%seq (%py-variant! score 2) (%score-set score 1 buffer)))))))
 
 ; After the `e`: an optional sign, then at least one digit.
 (def %py-number-exp-first
@@ -548,8 +605,8 @@
       ((%py-digit? chr) %py-number-frac)
       ((= chr 95) %py-number-frac)
       ((if (= chr 101) #t (= chr 69)) %py-number-exp-sign)
-      ((if (= chr 106) #t (= chr 74)) (%score-set score 1 buffer))
-      (#t (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+      ((if (= chr 106) #t (= chr 74)) (%seq (%py-variant! score 3) (%score-set score 1 buffer)))
+      (#t (%seq (%buffer-unread buffer) (%seq (%py-variant! score 2) (%score-set score 1 buffer)))))))
 
 (set! %py-number-body
   (fn (_ buffer score chr)
@@ -558,8 +615,8 @@
       ((= chr 95) %py-number-body)
       ((= chr 46) %py-number-frac)
       ((if (= chr 101) #t (= chr 69)) %py-number-exp-sign)
-      ((if (= chr 106) #t (= chr 74)) (%score-set score 1 buffer))
-      (#t (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+      ((if (= chr 106) #t (= chr 74)) (%seq (%py-variant! score 3) (%score-set score 1 buffer)))
+      (#t (%seq (%buffer-unread buffer) (%seq (%py-variant! score 1) (%score-set score 1 buffer)))))))
 
 ; 0x 0o 0b: a zero, the base letter, then that base's digits (underscores
 ; allowed).  The parse reads the base back off the text.
@@ -572,7 +629,7 @@
           ((if (>= chr 65) (<= chr 70) #f) #t)
           (#t (= chr 95)))
       %py-number-based
-      (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
+      (%seq (%buffer-unread buffer) (%seq (%py-variant! score 4) (%score-set score 1 buffer))))))
 (def %py-number-base-first
   (fn (_ buffer score chr)
     (if (match
@@ -635,7 +692,10 @@
           ((if (= chr 43) #t (= chr 45)) %py-number-signed)
           (#t ()))))
     (pair (lit read)
-      (fn (_ . args) (mk-tok-number (%buffer-token (first args)))))))
+      (fn (_ . args)
+        (let ((text (%buffer-token (first args))))
+          (let ((k (%py-read-variant args)))
+            (mk-tok-number text (if (null? k) (%py-variant-of-text text) k))))))))
 (%py-tok-type! "PY-NUMBER" %py-t-number)
 
 ; --- PY-STRING: 'single' and "double" ----------------------------------------
@@ -1191,6 +1251,19 @@
 ; e-name -> nb handoff.  Native code is this process's alone, so the list
 ; is a transient and %py-tok-reset! empties it with the base.
 (def %py-jit-states (pair () ()))
+; THE COMPILED STATES DECLARE VARIANTS ONLY WHERE THE LANE CAN SPELL IT.  A
+; platform whose emitter has no %score-variant! refuses the form, and the attempt
+; runs under a guard that would pin `failed` for all of it -- so the attempt
+; probes once and builds the number states with or without the declaration.
+; The interpreted twins go through %py-variant!, a no-op on such a platform.
+(def %py-jit-variants (pair #f ()))
+(def %py-jit-accept
+  (fn (_ k)
+    (if (first %py-jit-variants)
+      (list (lit %seq) (list (lit %score-variant!) (lit score) k) (lit (%score-set score 1 buffer)))
+      (lit (%score-set score 1 buffer)))))
+(def %py-jit-unread-accept
+  (fn (_ k) (list (lit %seq) (lit (%buffer-unread buffer)) (%py-jit-accept k))))
 (def %py-jit-keep!
   (fn (_ p) (%seq (%set-first! %py-jit-states (pair p (first %py-jit-states))) p)))
 
@@ -1210,6 +1283,10 @@
     (compile-asm (lit (fn (_ x) (+ x k))) (list (pair (lit k) 1)))
     ; each state rooted as it is made -- see %py-jit-states
     (def jc (fn (_ form fvars) (%py-jit-keep! (compile-asm form fvars))))
+    ; can this lane spell a variant?  (probed, never called -- see %py-jit-variants)
+    (%set-first! %py-jit-variants
+      (guard (e #f)
+        (%seq (jc (lit (fn (_ buffer score chr) (%score-variant! score 1))) (list (pair (lit u) 1))) #t)))
     ; -- body states --
     (def wsc
       (jc
@@ -1246,12 +1323,12 @@
         (list (pair (lit u) 1))))
     (def nexpd
       (jc
-        (lit (fn (me buffer score chr)
-          (if (or (and (>= chr 48) (<= chr 57)) (= chr 95))
-            me
-            (if (or (= chr 106) (= chr 74))
-              (%score-set score 1 buffer)
-              (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))))
+        (list (lit fn) (lit (me buffer score chr))
+          (list (lit if) (lit (or (and (>= chr 48) (<= chr 57)) (= chr 95)))
+            (lit me)
+            (list (lit if) (lit (or (= chr 106) (= chr 74)))
+              (%py-jit-accept 3)
+              (%py-jit-unread-accept 2))))
         (list (pair (lit u) 1))))
     (def nexpf
       (jc
@@ -1273,26 +1350,26 @@
     ; "compiled equals interpreted" spec held because nothing was compiled.
     (def nfrac
       (jc
-        (lit (fn (me buffer score chr)
-          (if (or (and (>= chr 48) (<= chr 57)) (= chr 95))
-            me
-            (if (or (= chr 101) (= chr 69))
-              es
-              (if (or (= chr 106) (= chr 74))
-                (%score-set score 1 buffer)
-                (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))
+        (list (lit fn) (lit (me buffer score chr))
+          (list (lit if) (lit (or (and (>= chr 48) (<= chr 57)) (= chr 95)))
+            (lit me)
+            (list (lit if) (lit (or (= chr 101) (= chr 69)))
+              (lit es)
+              (list (lit if) (lit (or (= chr 106) (= chr 74)))
+                (%py-jit-accept 3)
+                (%py-jit-unread-accept 2)))))
         (list (pair (lit es) nexps))))
     (def nbody
       (jc
-        (lit (fn (me buffer score chr)
-          (if (or (and (>= chr 48) (<= chr 57)) (= chr 95))
-            me
+        (list (lit fn) (lit (me buffer score chr))
+          (list (lit if) (lit (or (and (>= chr 48) (<= chr 57)) (= chr 95)))
+            (lit me)
             ; a fraction or exponent marker continues the literal: which
-            (if (or (= chr 46) (or (= chr 101) (= chr 69)))
-              (if (= chr 46) frac es)
-              (if (or (= chr 106) (= chr 74))
-                (%score-set score 1 buffer)
-                (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))))
+            (list (lit if) (lit (or (= chr 46) (or (= chr 101) (= chr 69))))
+              (lit (if (= chr 46) frac es))
+              (list (lit if) (lit (or (= chr 106) (= chr 74)))
+                (%py-jit-accept 3)
+                (%py-jit-unread-accept 1)))))
         (list (pair (lit frac) nfrac) (pair (lit es) nexps))))
     (def ndotf
       (jc

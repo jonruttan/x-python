@@ -14,7 +14,7 @@ is bit-for-bit CPython.
 (%seq (write (python-tokenize "x = 1e10")) (newline))
 ```
 ---
-    (('tok-name "x") ('tok-op "=") ('tok-number "1e10"))
+    (('tok-name "x") ('tok-op "=") ('tok-number "1e10" 2))
 
 ### signed exponents, either case
 
@@ -22,7 +22,7 @@ is bit-for-bit CPython.
 (%seq (write (python-tokenize "y = 1.5E-3 + 2e+4")) (newline))
 ```
 ---
-    (('tok-name "y") ('tok-op "=") ('tok-number "1.5E-3") ('tok-op "+") ('tok-number "2e+4"))
+    (('tok-name "y") ('tok-op "=") ('tok-number "1.5E-3" 2) ('tok-op "+") ('tok-number "2e+4" 2))
 
 ### a leading dot starts a float
 
@@ -30,7 +30,7 @@ is bit-for-bit CPython.
 (%seq (write (python-tokenize "print(.1)")) (newline))
 ```
 ---
-    (('tok-name "print") ('tok-group "(" (('tok-number ".1")) ")"))
+    (('tok-name "print") ('tok-group "(" (('tok-number ".1" 2)) ")"))
 
 ### a bare dot is still the attribute operator
 
@@ -46,7 +46,7 @@ is bit-for-bit CPython.
 (%seq (write (python-tokenize "z = 1_000.1_8")) (newline))
 ```
 ---
-    (('tok-name "z") ('tok-op "=") ('tok-number "1_000.1_8"))
+    (('tok-name "z") ('tok-op "=") ('tok-number "1_000.1_8" 2))
 
 ## the values behind the spellings
 

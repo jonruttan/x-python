@@ -74,68 +74,60 @@
 ; UNDERSCORES ARE SPELLING, NOT VALUE.  The tokenizer accepts `1_000.1_8`
 ; loosely and this is the strip that makes the pair honest: everything the
 ; lexer let through is removed before either number path parses.
+(def %py-num-tail (fn (_ t) (Str8 sub 1 (- (%py-byte-len t) 1) t)))
+(def %py-num-init (fn (_ t) (Str8 sub 0 (- (%py-byte-len t) 1) t)))
+
+; UNDERSCORES ARE SPELLING, NOT VALUE.  The tokenizer accepts `1_000.1_8`
+; loosely and this is the strip that makes the pair honest.  A byte scan first,
+; through the raw door: the common literal has no underscore and pays one
+; walk; only one that does is rebuilt.
+(def %py-has-underscore?
+  (fn (self s i n)
+    (if (>= i n) #f (if (= (%py-code-at s i) 95) #t (self s (+ i 1) n)))))
 (def %py-num-strip
   (fn (_ s)
-    (if (null? (Str8 index-of "_" s))
-      s
-      (do
-        (def n (Str8 length s))
-        (def go
-          (fn (self i acc)
-            (if (>= i n)
-              acc
-              (let ((c (Str8 sub i 1 s)))
-                (self (+ i 1)
-                  (if (Str8 =? c "_") acc (Str8 append acc c)))))))
-        (go 0 "")))))
-
-; A dot OR an exponent makes it a float: `1e10` has no dot and is not an int,
-; and the sexp reader would silently answer 1 for it (the reader drops
-; exponents, x-lang#577) -- so the routing must look for both spellings.
-(def %py-num-float-text?
-  (fn (_ t)
-    (if (not (null? (Str8 index-of "." t))) #t
-      (if (not (null? (Str8 index-of "e" t))) #t
-        (not (null? (Str8 index-of "E" t)))))))
-
-; An imaginary literal is its magnitude as a float on the imaginary axis;
-; complex parts are always floats in Python, so `2j` is 0.0+2.0j.
-(def %py-num-imag?
-  (fn (_ t)
-    (let ((c (%py-char->int (Str8 ref (- (Str8 length t) 1) t))))
-      (if (= c 106) #t (= c 74)))))
+    (let ((n (%py-byte-len s)))
+      (if (not (%py-has-underscore? s 0 n))
+        s
+        ((fn (go i acc)
+           (if (>= i n) acc
+             (go (+ i 1)
+               (if (= (%py-code-at s i) 95) acc (%py-str-append acc (Str8 sub i 1 s))))))
+         0 "")))))
 
 ; 0x 0o 0b literals: the base from the second character, digits after it.
 (def %py-num-base-of
   (fn (_ t)
-    (if (< (Str8 length t) 3) ()
-      (if (not (= (%py-char->int (Str8 ref 0 t)) 48)) ()
-        (let ((c (%py-char->int (Str8 ref 1 t))))
+    (if (< (%py-byte-len t) 3) ()
+      (if (not (= (%py-code-at t 0) 48)) ()
+        (let ((c (%py-code-at t 1)))
           (match
             ((if (= c 120) #t (= c 88)) 16)
             ((if (= c 111) #t (= c 79)) 8)
             ((if (= c 98) #t (= c 66)) 2)
             (#t ())))))))
 
+; THE VARIANT IS THE TOKEN'S, decided by the analyser (python/tokens.x, the variant
+; channel): 1 integer, 2 float, 3 imaginary, 4 based.  Nothing here rescans
+; the text to find out what it is; each arm converts what it was told.
+; ONLY A BASED LITERAL HAS ITS SIGN TAKEN OFF (-0x10 is the sign applied to
+; 0x10): the integer loop and Float from read a signed text themselves, and
+; a float must, or -0.0 -- negated after the fact -- comes back as 0.0.
 (def %py-num
-  (fn (self text)
+  (fn (self text variant)
     (let ((t (%py-num-strip text)))
-      ; a signed based literal (-0x10 alone) is the sign applied to the rest
-      (match
-        ((if (if (= (%py-char->int (Str8 ref 0 t)) 45) #t (= (%py-char->int (Str8 ref 0 t)) 43))
-            (not (null? (%py-num-base-of (Str8 sub 1 (- (Str8 length t) 1) t))))
-            #f)
-          (let ((v (self (Str8 sub 1 (- (Str8 length t) 1) t))))
-            (if (= (%py-char->int (Str8 ref 0 t)) 45) (%py-neg v) v)))
-        ((not (null? (%py-num-base-of t)))
-          (%py-int-of-based (Str8 sub 2 (- (Str8 length t) 2) t) (%py-num-base-of t)))
-        ((%py-num-imag? t)
-          (Complex make 0.0 (Float from (Str8 sub 0 (- (Str8 length t) 1) t))))
-        ((%py-num-float-text? t) (Float from t))
-        ; THE HAND PARSER: bigint is a library type, so a literal past 2^63
-        ; read in a base without the tower WRAPPED silently once.
-        ; %py-int-of-str promotes through the tower.
-        (#t (%py-int-of-str t))))))
+      (let ((c0 (%py-code-at t 0)))
+        (match
+          ((if (= variant 4) (if (= c0 45) #t (= c0 43)) #f)
+            (let ((v (self (%py-num-tail t) variant)))
+              (if (= c0 45) (%py-neg v) v)))
+          ((= variant 4) (%py-int-of-based (%py-num-tail (%py-num-tail t)) (%py-num-base-of t)))
+          ; complex parts are always floats in Python, so `2j` is 0.0+2.0j
+          ((= variant 3) (Complex make 0.0 (Float from (%py-num-init t))))
+          ((= variant 2) (Float from t))
+          ; THE HAND PARSER for the integer: bigint is a library type, and
+          ; %py-int-of-str promotes through the tower digit by digit.
+          (#t (%py-int-of-str t)))))))
 
 ; --- Token helpers -----------------------------------------------------------
 ; Guarded for the same reason as python/indent.x's %py-tok-type: (first 2)
@@ -143,6 +135,8 @@
 ; reach here from the tokenizer.
 (def %py-tag (fn (_ t) (if (pair? t) (first t) ())))
 (def %py-val (fn (_ t) (first (rest t))))
+; a number token's variant -- (tok-number "text" VARIANT), python/tokens.x
+(def %py-tok-variant (fn (_ t) (first (rest (rest t)))))
 
 ; str=? THROUGHOUT THESE, not Str8 =?: the class call was 19,347 objects on a
 ; hit and the parser asked it 700 times a parse; the boot layer's block
@@ -152,7 +146,7 @@
     (if (null? t) #f
       (if (eq? (%py-tag t) (lit tok-op)) (str=? (%py-val t) s) #f))))
 
-; A KEYWORD IS ITS OWN TOKEN KIND, decided by the analyser (python/tokens.x,
+; A KEYWORD IS ITS OWN TOKEN TAG, decided by the analyser (python/tokens.x,
 ; PY-KEYWORD), so the question this parser asks most is a tag and a byte
 ; compare.  It used to be a name test against every keyword string, at every
 ; grammar decision.
@@ -206,7 +200,7 @@
 (def %py-signed-num
   (fn (_ t)
     (let ((v (%py-val t)))
-      (mk-tok-number (Str8 sub 1 (- (Str8 length v) 1) v)))))
+      (mk-tok-number (Str8 sub 1 (- (Str8 length v) 1) v) (%py-tok-variant t)))))
 
 ; Augmented assignment: the operator that folds the old value with the new.
 ; EVERY op= GETS ITS OWN DUNDER, not just +=.  Each of these tries __iop__
@@ -1027,7 +1021,7 @@
       (let ((t (first toks)))
         (match
           ((eq? (%py-tag t) (lit tok-number))
-            (pair (%py-num (%py-val t)) (rest toks)))
+            (pair (%py-num (%py-val t) (%py-tok-variant t)) (rest toks)))
           ((eq? (%py-tag t) (lit tok-string))
             (%py-adjacent (lit tok-string) (%py-val t) (rest toks)))
           ; THE VALUE IS A BYTE LIST, so it is emitted as one: a (list ...)
