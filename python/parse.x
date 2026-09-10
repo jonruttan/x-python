@@ -1447,6 +1447,61 @@
               (pair (list (lit def) (%py-name->sym attr)
                       (list (lit %py-import-from) name attr)) acc))))))))
 
+; --- with --------------------------------------------------------------------
+;
+; `with EXPR as NAME:` binds what __enter__ answers and runs the body inside a
+; guard, so an exception reaches __exit__ and a normal finish reaches it too.
+; The body is emitted INLINE rather than as a closure: `break`, `continue` and
+; `return` are lexical here, and wrapping the body in a lambda would put them
+; out of reach of the loop or function they belong to.
+;
+; Several items NEST, left to right, which is what `with A() as a, B() as b:`
+; means -- and it is why B's __exit__ runs before A's.
+(def %py-with-body ())
+(set! %py-with-body
+  (fn (self items body)
+    (if (null? items)
+      body
+      (let ((it (first items)))
+        (let ((mgr (first it)) (name (rest it)))
+          (list (lit let) (list (list (lit %py-mgr) mgr))
+            (list (lit let)
+              (list (list (if (null? name) (lit %py-unused) name)
+                      (list (lit %py-enter) (lit %py-mgr))))
+              ; a cell, so the normal exit is taken only when the body ran to
+              ; the end: a handler that swallowed an exception has already
+              ; called __exit__ and must not call it twice
+              (list (lit let) (list (list (lit %py-wok) (list (lit pair) #f ())))
+                (list (lit %seq)
+                  (list (lit guard)
+                    (list (lit %py-we)
+                      (list (lit %py-with-exc) (lit %py-mgr) (lit %py-we)))
+                    (list (lit %seq)
+                      (self (rest items) body)
+                      (list (lit %set-first!) (lit %py-wok) #t)))
+                  (list (lit if) (list (lit first) (lit %py-wok))
+                    (list (lit %py-with-normal) (lit %py-mgr))
+                    ()))))))))))
+
+; ITEM, ITEM, ... : each is an expression with an optional `as NAME`
+(def %py-with-items
+  (fn (self toks acc)
+    (let ((e (%py-test toks)))
+      (let ((after (rest e)))
+        (if (%py-name-is? (if (null? after) () (first after)) "as")
+          (let ((n (if (null? (rest after)) () (first (rest after)))))
+            (if (not (eq? (%py-tag n) (lit tok-name)))
+              (Err raise (lit syntax) "expected a name after as" ())
+              (let ((acc2 (pair (pair (first e) (%py-name->sym (%py-val n))) acc))
+                    (more (rest (rest after))))
+                (if (%py-op-is? (if (null? more) () (first more)) ",")
+                  (self (rest more) acc2)
+                  (pair (List reverse acc2) more)))))
+          (let ((acc2 (pair (pair (first e) ()) acc)))
+            (if (%py-op-is? (if (null? after) () (first after)) ",")
+              (self (rest after) acc2)
+              (pair (List reverse acc2) after))))))))
+
 (set! %py-stmt
   (fn (_ toks)
     (let ((t (first toks)))
@@ -1457,6 +1512,10 @@
         ((%py-name-is? t "class") (%py-class-stmt (rest toks)))
         ((if (%py-name-is? t "global") #t (%py-name-is? t "nonlocal"))
           (let ((sp (%py-line-of (rest toks) ()))) (pair () (rest sp))))
+        ((%py-name-is? t "with")
+          (let ((items (%py-with-items (rest toks) ())))
+            (let ((blk (%py-block (rest items))))
+              (pair (%py-with-body (first items) (first blk)) (rest blk)))))
         ((%py-name-is? t "import") (%py-import-list (rest toks) ()))
         ((%py-name-is? t "from")
           (let ((r (%py-import-name (rest toks))))
