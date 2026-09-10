@@ -40,6 +40,18 @@ command -v "$X" >/dev/null 2>&1 || {
 	exit 1
 }
 
+# THE WRITER RUNS ON A WRAPPER, AND ONLY THE CALLER KNOWS WHICH.  X_SH is
+# how image-build.sh is told; its own default is ./x.sh, a file that exists
+# in a CHECKOUT and not in an install.  So against an installed x this runner
+# asked for an image, the writer died on `sh: x.sh: No such file or
+# directory` in the log beside it, and the suite went on booting from source
+# -- measured here, 22s a spec file against 1.5s from the image.  Nothing
+# said so: the runner saw a non-zero exit and reported "boots from source",
+# which is true and is not the reason.  Resolved to a PATH, since $X may be
+# a bare name and the writer runs from a directory of the builder's choosing.
+X_SH="$(command -v "$X")"
+export X_SH
+
 X_ROOT="$("$X" --share-dir)"
 # X_BIN is env-overridable, the way tests/x/spec-runner.sh makes it -- so the
 # same runner can drive a variant or patched engine without moving anything.
