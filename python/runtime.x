@@ -3334,6 +3334,62 @@
 ; not -- which is worse than an AttributeError saying plainly that they are
 ; missing.
 
+; --- with ------------------------------------------------------------------
+;
+; A CONTEXT MANAGER IS TWO METHODS.  `with X() as a:` calls __enter__ and
+; binds what it answers, runs the body, and calls __exit__ afterwards -- with
+; (None, None, None) when the body finished, and with the exception's class
+; and instance when it did not.  An __exit__ that answers something truthy
+; SWALLOWS the exception; anything else re-raises it.
+;
+; WHAT IS NOT MODELLED, and the same hole `finally` has (see %py-try): a
+; `return`, `break` or `continue` inside the body escapes through call/cc, and
+; nothing runs on the way out, so __exit__ is skipped.  The platform has no
+; dynamic-wind to hang cleanup on, and inventing one here would be a second
+; mechanism for something the whole runtime needs once.
+
+; THE RECEIVER IS CHECKED BEFORE IT IS ASKED.  %py-dunder reads the class out
+; of an instance, so handing it an int walks a number as though it were one --
+; `with 42:` SEGFAULTED before this guard, the same shape as a shim arriving
+; as a class base.
+(def %py-ctx-method
+  (fn (_ m name)
+    (if (not (%py-obj-is m))
+      (%py-ctx-error m)
+      (let ((f (%py-dunder m name)))
+        (if (null? f) (%py-ctx-error m) f)))))
+
+(def %py-ctx-error
+  (fn (_ m)
+    (Err raise (lit type)
+      (Str8 append (Str8 append "'" (%py-type-name m))
+        "' object does not support the context manager protocol") ())))
+
+(def %py-enter (fn (_ m) ((%py-ctx-method m "__enter__"))))
+
+(def %py-exit-fn (fn (_ m) (%py-ctx-method m "__exit__")))
+
+; the body finished: __exit__(None, None, None), and its answer is discarded
+(def %py-with-normal
+  (fn (_ m) (%seq ((%py-exit-fn m) () () ()) ())))
+
+; the body raised: __exit__(type, value, None), and a truthy answer swallows it
+(def %py-with-exc
+  (fn (_ m e)
+    (let ((r ((%py-exit-fn m)
+               (%py-exc-class-of e) (%py-exc-instance-of e) ())))
+      (if (%py-truthy r) () (error e)))))
+
+; the exception as Python hands it to __exit__: an instance, whether it was
+; raised from Python source (already one) or by this runtime (an Err, whose
+; kind names the class it would have been -- the same bridge the except
+; matcher walks, and Err carries its text as the SUBJECT).
+(def %py-exc-instance-of
+  (fn (_ e)
+    (if (%py-obj-is e)
+      e
+      (%py-instantiate (%py-exc-class-of e) (list (Err subject-of e))))))
+
 (def %py-mfloat (fn (_ x) (Float from (%py-boolnorm x))))
 
 ; a domain error is Python's, not a NaN
