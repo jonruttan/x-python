@@ -30,7 +30,7 @@ is bit-for-bit CPython.
 (%seq (write (python-tokenize "print(.1)")) (newline))
 ```
 ---
-    (('tok-name "print") ('tok-group "(" (('tok-number ".1"))))
+    (('tok-name "print") ('tok-group "(" (('tok-number ".1")) ")"))
 
 ### a bare dot is still the attribute operator
 

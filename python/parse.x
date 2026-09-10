@@ -464,6 +464,61 @@
       #f)))
 
 (def %py-group-of (fn (_ t) (first (rest (rest t)))))
+; How the group ENDED: the closing bracket it actually met, or nil for one
+; that ran out at EOF.  python/tokens.x records the fact; judging it is here.
+(def %py-group-closer (fn (_ t) (first (rest (rest (rest t))))))
+
+; --- A group has to have MET ITS CLOSER --------------------------------------
+;
+; The reader takes a bracket's contents by recursing, so a group that is never
+; closed simply ends at EOF, and one closed by the WRONG bracket ends at the
+; first closer of any kind.  Neither is an error to the lexer, which only
+; nests -- both are errors here.  This is the half the comment in
+; python/tokens.x has always promised: "which the parser reports".
+;
+; DEPTH FIRST, CONTENTS BEFORE THE GROUP ITSELF.  A group's ending is the last
+; thing read of it, so checking its contents first names whichever bracket went
+; wrong EARLIEST in the source.  `([1)` is the inner `[` meeting `)` -- not the
+; outer `(` running out afterwards -- and that is what CPython says as well.
+
+(def %py-closer-for
+  (fn (_ open) (if (Str8 =? open "(") ")" (if (Str8 =? open "[") "]" "}"))))
+
+(def %py-group-ends-ok
+  (fn (_ t)
+    (let ((open (first (rest t))) (closer (%py-group-closer t)))
+      (if (null? closer)
+        (Err raise (lit syntax)
+          (Str8 append (Str8 append "'" open) "' was never closed") ())
+        (if (Str8 =? closer (%py-closer-for open))
+          ()
+          (Err raise (lit syntax)
+            (Str8 append
+              (Str8 append (Str8 append "closing parenthesis '" closer)
+                "' does not match opening parenthesis '")
+              (Str8 append open "'"))
+            ()))))))
+
+; The other direction: a CLOSER WITH NOTHING OPEN.  The group reader eats the
+; bracket that ends a group, so a close token that survives into a token list
+; got there by having no group to end -- `1)`.  Its text reads like a block's.
+(def %py-close-of (fn (_ t) (first (rest t))))
+
+(def %py-groups-ok
+  (fn (self toks)
+    (if (null? toks)
+      ()
+      (let ((t (first toks)))
+        (%seq
+          (match
+            ((eq? (%py-tag t) (lit tok-group))
+              (%seq (self (%py-group-of t)) (%py-group-ends-ok t)))
+            ((eq? (%py-tag t) (lit tok-close))
+              (Err raise (lit syntax)
+                (Str8 append (Str8 append "unmatched '" (%py-close-of t)) "'") ()))
+            ((%py-block? t) (self (%py-block-toks t)))
+            (#t ()))
+          (self (rest toks)))))))
 
 ; A LAMBDA'S PARAMETER COMMAS ARE NOT SEPARATORS: `(lambda a, b: a)` is one
 ; lambda, not a tuple.  Both scanners copy a lambda's tokens through its
@@ -1075,8 +1130,15 @@
                   (#t (= p 62))) () i)))))))
 
 ; A field holds an expression LIST: {x, y} is a tuple.
+; A FIELD IS A THIRD DOOR.  An f-string's field is lexed on its own and goes
+; straight to %py-exprlist, so it reaches neither python-parse nor
+; python-parse-expr -- and `f"{(1}"` used to come out as "1".  The field's text
+; stops at the `}`, so an unclosed bracket inside one runs out at the end of
+; the FIELD: this says "'(' was never closed" where CPython, which keeps
+; reading, calls the `}` a mismatched closer.  Both are SyntaxError.
 (def %py-fs-expr-of
   (fn (_ toks)
+    (%py-groups-ok toks)
     (let ((r (%py-exprlist toks)))
       (if (null? (rest r))
         (first r)
@@ -1274,7 +1336,10 @@
     (let ((r (%look %py-builtins)))
       (if (pair? r) (first r) r))))
 
-(def python-parse-expr (fn (_ toks) (%py-test toks)))
+; BOTH parser doors check the brackets, because `eval` comes in through this
+; one and never touches python-parse below.
+(def python-parse-expr
+  (fn (_ toks) (%seq (%py-groups-ok toks) (%py-test toks))))
 
 ; --- Statements --------------------------------------------------------------
 ;
@@ -2750,6 +2815,9 @@
     (%set-first! %py-current-class ())
     (%set-first! %py-current-self ())
     (def %toks (python-lex src))
+    ; Brackets first: an unclosed group makes every walk below read a shape the
+    ; source never had, so the structural error goes ahead of them.
+    (%py-groups-ok %toks)
     (def %targets (%py-dedupe () (%py-assign-targets %toks ()) ()))
     (def %body (%py-check-escapes (first (%py-stmts (%py-semi->nl %toks) ()))))
     (def %undef

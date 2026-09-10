@@ -133,7 +133,7 @@ rediscovered by counting.
 (%seq (write (python-lex "f(\n  1\n)")) (newline))
 ```
 ---
-    (('tok-name "f") ('tok-group "(" (('tok-number "1"))))
+    (('tok-name "f") ('tok-group "(" (('tok-number "1")) ")"))
 
 ### a continuation line opens no block
 
@@ -144,7 +144,7 @@ reaches the indenter.
 (%seq (write (python-lex "a = [\n      1,\n  2]\nb")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-op "=") ('tok-group "[" (('tok-number "1") ('tok-op ",") ('tok-number "2"))) ('tok-newline) ('tok-name "b"))
+    (('tok-name "a") ('tok-op "=") ('tok-group "[" (('tok-number "1") ('tok-op ",") ('tok-number "2")) "]") ('tok-newline) ('tok-name "b"))
 
 ### line structure resumes after the brackets close
 
@@ -152,7 +152,7 @@ reaches the indenter.
 (%seq (write (python-lex "f(\n1)\n  x")) (newline))
 ```
 ---
-    (('tok-name "f") ('tok-group "(" (('tok-number "1"))) ('tok-block (('tok-name "x"))))
+    (('tok-name "f") ('tok-group "(" (('tok-number "1")) ")") ('tok-block (('tok-name "x"))))
 
 ## lines errors
 
@@ -176,7 +176,7 @@ and `(Indent make)`'s default is Python's answer.
 (%seq (write (python-lex "def f():\n    return 1\nf()")) (newline))
 ```
 ---
-    (('tok-name "def") ('tok-name "f") ('tok-group "(" ()) ('tok-op ":") ('tok-block (('tok-name "return") ('tok-number "1"))) ('tok-name "f") ('tok-group "(" ()))
+    (('tok-name "def") ('tok-name "f") ('tok-group "(" () ")") ('tok-op ":") ('tok-block (('tok-name "return") ('tok-number "1"))) ('tok-name "f") ('tok-group "(" () ")"))
 
 ## implicit line joining
 
