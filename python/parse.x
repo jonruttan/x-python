@@ -1563,11 +1563,14 @@
           (let ((c (%py-test (rest toks))))
             (let ((b (%py-block (rest c))))
               (pair
-                (list
-                  (list (lit fn) (list (lit self))
-                    (list (lit if) (list (lit %py-truthy) (first c))
-                      (list (lit %seq) (first b) (list (lit self)))
-                      ())))
+                (%py-wrap-escape
+                  (list
+                    (list (lit fn) (list (lit self))
+                      (list (lit if) (list (lit %py-truthy) (first c))
+                        (list (lit %seq) (%py-wrap-escape (first b) (lit %py-continue))
+                          (list (lit self)))
+                        ())))
+                  (lit %py-break))
                 (rest b)))))
         ((%py-op-is? t "@")
           (let ((ds (%py-decos-of toks ())))
@@ -1589,6 +1592,8 @@
               (let ((r (%py-exprlist (rest toks))))
                 (pair (list (lit %py-return) (first r)) (rest r))))))
         ((%py-name-is? t "pass") (pair () (rest toks)))
+        ((%py-name-is? t "break") (pair (list (lit %py-break) ()) (rest toks)))
+        ((%py-name-is? t "continue") (pair (list (lit %py-continue) ()) (rest toks)))
         ((%py-unpack-stmt? toks) (%py-unpack-stmt toks))
         ; A statement can BEGIN with a unary operator (`~x`, `-x` as an
         ; expression statement); the postfix-target probe below would
@@ -1662,6 +1667,57 @@
                 (list (lit %py-unpack) (lit %py-item) (%py-count syms))))
         (pair (lit do) (%py-unpack-sets syms 0 ()))))))
 
+; --- break and continue ------------------------------------------------------
+;
+; Both are ESCAPES -- the shape `return` already uses: the loop binds a
+; continuation, the statement invokes it.  `break` needs one per LOOP,
+; `continue` one per ITERATION, and a stack copy per iteration is not a price
+; an ordinary loop should pay, so a loop binds only what its body reaches for.
+;
+; The question is asked of the COMPILED body rather than of the tokens, and
+; that is what makes nesting come out right: by the time an outer loop asks,
+; an inner loop has already bound its own %py-break, so an occurrence still
+; FREE here is one that belongs to THIS loop.  The same reading decides the
+; error case -- a `break` still free in a whole function body is outside every
+; loop, which is a SyntaxError before anything runs.
+
+(def %py-sym-in?
+  (fn (self syms sym)
+    (if (not (pair? syms)) #f
+      (if (eq? (first syms) sym) #t (self (rest syms) sym)))))
+
+; A form that BINDS the name -- the only `fn` this ever meets with the name in
+; its parameters is a nested loop's own wrapper, and that is precisely the
+; occurrence this loop must not claim.
+(def %py-shadows?
+  (fn (_ form sym)
+    (if (eq? (first form) (lit fn))
+      (if (pair? (rest form)) (%py-sym-in? (first (rest form)) sym) #f)
+      #f)))
+
+(def %py-free-ref?
+  (fn (self form sym)
+    (match
+      ((not (pair? form)) (eq? form sym))
+      ((%py-shadows? form sym) #f)
+      (#t (if (self (first form) sym) #t (self (rest form) sym))))))
+
+(def %py-wrap-escape
+  (fn (_ form sym)
+    (if (%py-free-ref? form sym)
+      (list (lit %py-callcc) (list (lit fn) (list (lit _) sym) form))
+      form)))
+
+; A scope boundary: every loop inside has had its turn, so anything left is
+; outside one.  CPython words the two cases differently; so does this.
+(def %py-check-escapes
+  (fn (_ body)
+    (if (%py-free-ref? body (lit %py-break))
+      (Err raise (lit syntax) "'break' outside loop" ())
+      (if (%py-free-ref? body (lit %py-continue))
+        (Err raise (lit syntax) "'continue' not properly in loop" ())
+        body))))
+
 (def %py-for
   (fn (_ toks)
     (if (not (eq? (%py-tag (if (null? toks) () (first toks))) (lit tok-name)))
@@ -1674,16 +1730,18 @@
               ; a generator yields lazily (its prints interleave with the
               ; body's), anything else is its materialized element list.
               (pair
-                (list
-                  (list (lit fn) (list (lit self) (lit %py-src))
-                    (list (lit let) (list (list (lit %py-item) (list (lit %py-iter-pull!) (lit %py-src))))
-                      (list (lit if) (list (lit same?) (lit %py-item) (lit %py-gen-done))
-                        ()
-                        (list (lit %seq)
-                          (%py-for-bind syms)
-                          (list (lit %seq) (first b)
-                            (list (lit self) (lit %py-src)))))))
-                  (list (lit %py-iter-open) (first it)))
+                (%py-wrap-escape
+                  (list
+                    (list (lit fn) (list (lit self) (lit %py-src))
+                      (list (lit let) (list (list (lit %py-item) (list (lit %py-iter-pull!) (lit %py-src))))
+                        (list (lit if) (list (lit same?) (lit %py-item) (lit %py-gen-done))
+                          ()
+                          (list (lit %seq)
+                            (%py-for-bind syms)
+                            (list (lit %seq) (%py-wrap-escape (first b) (lit %py-continue))
+                              (list (lit self) (lit %py-src)))))))
+                    (list (lit %py-iter-open) (first it)))
+                  (lit %py-break))
                 (rest b)))))))))
 
 ; --- try / except / finally --------------------------------------------------
@@ -2284,12 +2342,12 @@
                           (list (lit fn) (list (lit _) (lit %py-gen))
                             (list (lit %py-callcc)
                               (list (lit fn) (list (lit _) (lit %py-return))
-                                (list (lit %seq) body ()))))
+                                (list (lit %seq) (%py-check-escapes body) ()))))
                           (%py-val name)))
                       (list (lit fn) (pair (lit _) params)
                         (list (lit %py-callcc)
                           (list (lit fn) (list (lit _) (lit %py-return))
-                            (list (lit %seq) body ()))))))
+                            (list (lit %seq) (%py-check-escapes body) ()))))))
                   ; %py-sig! records the parameter names for keyword calls and
                   ; answers the closure, so this is still the def's value form
                   ; -- a class body reads it as the method.
@@ -2588,7 +2646,7 @@
     (%set-first! %py-current-self ())
     (def %toks (python-lex src))
     (def %targets (%py-dedupe () (%py-assign-targets %toks ()) ()))
-    (def %body (first (%py-stmts (%py-semi->nl %toks) ())))
+    (def %body (%py-check-escapes (first (%py-stmts (%py-semi->nl %toks) ()))))
     (def %undef
       (%py-undefined (%py-mentioned %toks ())
                      (%py-append (%py-bound-names %toks ()) (%py-param-names %toks ()))
