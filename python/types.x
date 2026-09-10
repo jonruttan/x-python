@@ -46,8 +46,9 @@
 (import python/util)
 
 (provide python/types
-  %py-bytes %py-bytes-new %py-bytes-is %py-bytes-str %py-bytes-only?
-  %py-barr %py-barr-new %py-barr-is %py-barr-set!
+  %py-bytes %py-bytes-new %py-bytes-of-str %py-bytes-is %py-bytes-str
+  %py-bytes-list %py-bytes-only?
+  %py-barr %py-barr-new %py-barr-of-str %py-barr-is %py-barr-set!
   %py-gen %py-gen-new %py-gen-is %py-gen-state
   %py-set %py-set-new %py-set-is %py-set-elems %py-set-set! %py-set-frozen?
   %py-view %py-view-new %py-view-is %py-view-kind %py-view-elems
@@ -543,8 +544,13 @@
 ; MINIMAL, DELIBERATELY: enough that b'1.2' is a value float() can read and
 ; print() can show.  The payload is the decoded string; indexing, slicing and
 ; the bytes methods wait until a conformance case asks for them.
+; THE PAYLOAD IS A BYTE LIST, not a string, and python/bytes.x is the whole
+; argument for that: a string here ends at its first NUL and a bytes must not.
+; %py-bytes-new takes the list; %py-bytes-of-str is for the callers that
+; start from source text (a literal, a decoded name) and cannot contain one.
 (def %py-bytes ())
-(def %py-bytes-new (fn (_ s) (%make-instance %py-bytes s)))
+(def %py-bytes-new (fn (_ l) (%make-instance %py-bytes l)))
+(def %py-bytes-of-str (fn (_ s) (%make-instance %py-bytes (%pb-of-str s))))
 
 ; --- PY-BYTEARRAY ------------------------------------------------------------
 ; bytes' MUTABLE twin, over the SAME payload -- a byte string -- so every
@@ -556,7 +562,8 @@
 ; outlives its contents, so `ba.append(b)` has to be visible through every
 ; name bound to it; bytes has no such need and pays nothing for this.
 (def %py-barr ())
-(def %py-barr-new (fn (_ s) (%make-instance %py-barr (list s))))
+(def %py-barr-new (fn (_ l) (%make-instance %py-barr (list l))))
+(def %py-barr-of-str (fn (_ s) (%make-instance %py-barr (list (%pb-of-str s)))))
 (def %py-barr-is (fn (_ v) (%type? v %py-barr)))
 (def %py-barr-set! (fn (_ v s) (%set-first! (first v) s)))
 (set! %py-barr
@@ -565,7 +572,7 @@
     (list
       (pair (lit write)
         (fn (_ self) (display (%py-barr-repr (first (first self))))))
-      (pair (lit length) (fn (_ self) (Str8 length (first (first self))))))))
+      (pair (lit length) (fn (_ self) (List length (first (first self))))))))
 
 ; %py-bytes-is IS THE BYTES-LIKE TEST, and answers for a bytearray too.  That
 ; is not a shortcut: at every seam it guards -- concatenation, comparison,
@@ -578,8 +585,14 @@
 (def %py-bytes-is
   (fn (_ v) (if (%type? v %py-bytes) #t (%type? v %py-barr))))
 (def %py-bytes-only? (fn (_ v) (%type? v %py-bytes)))
-(def %py-bytes-str
+; THE PAYLOAD.  Every byte operation goes through this one.
+(def %py-bytes-list
   (fn (_ v) (if (%type? v %py-barr) (first (first v)) (first v))))
+; AND THE STRING, for the callers that genuinely need one -- decode, a float
+; to read.  It RAISES on a NUL rather than truncating, which is where the
+; limit now lives: in the str layer, said at the seam, instead of in every
+; constructor that could name a zero byte.
+(def %py-bytes-str (fn (_ v) (%pb->str (%py-bytes-list v))))
 (set! %py-bytes
   (%make-type
     "PY-BYTES"
@@ -588,7 +601,7 @@
       ; printable ASCII, the quote choice), the same way str's repr does
       (pair (lit write)
         (fn (_ self) (display (%py-bytes-repr (first self)))))
-      (pair (lit length) (fn (_ self) (Str8 length (first self)))))))
+      (pair (lit length) (fn (_ self) (List length (first self)))))))
 
 ; --- PY-GEN ------------------------------------------------------------------
 ; A generator is its body (a closure taking the generator itself, whose

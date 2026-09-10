@@ -418,11 +418,16 @@
 ; callable.  Subscripts and attributes belong here too and are not here yet.
 ; (joined-text . rest): the literal plus every literal of the same kind that
 ; follows it directly.
+; ADJACENT LITERALS JOIN, and a bytes literal's value is a byte LIST now
+; while a str literal's is still text -- so the join is whichever one of
+; those two the values are.
 (def %py-adjacent
   (fn (self tag acc toks)
     (if (if (null? toks) #f (eq? (%py-tag (first toks)) tag))
-      (self tag (Str8 append acc (%py-val (first toks))) (rest toks))
+      (self tag (%py-lit-join acc (%py-val (first toks))) (rest toks))
       (pair acc toks))))
+(def %py-lit-join
+  (fn (_ a b) (if (str? a) (Str8 append a b) (%py-append a b))))
 
 (set! %py-postfix
   (fn (_ toks)
@@ -1015,9 +1020,12 @@
             (pair (%py-num (%py-val t)) (rest toks)))
           ((eq? (%py-tag t) (lit tok-string))
             (%py-adjacent (lit tok-string) (%py-val t) (rest toks)))
+          ; THE VALUE IS A BYTE LIST, so it is emitted as one: a (list ...)
+          ; form the evaluator builds, not a datum standing where a form
+          ; belongs.
           ((eq? (%py-tag t) (lit tok-bytes))
             (let ((r (%py-adjacent (lit tok-bytes) (%py-val t) (rest toks))))
-              (pair (list (lit %py-mkbytes) (first r)) (rest r))))
+              (pair (list (lit %py-bytes-new) (pair (lit list) (first r))) (rest r))))
           ((eq? (%py-tag t) (lit tok-fstring))
             (pair (%py-fstring-form (%py-val t)) (rest toks)))
           ((%py-super-call? toks)

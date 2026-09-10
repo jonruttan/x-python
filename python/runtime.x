@@ -29,6 +29,7 @@
 (import python/util)
 (import python/types)
 (import python/format)
+(import python/bytes)
 
 (provide python/runtime
   %py-add %py-sub %py-mul %py-div %py-floordiv %py-mod %py-pow %py-neg
@@ -165,7 +166,7 @@
       ((%py-bytes-is a)
         (if (%py-bytes-is b)
           ((if (%py-barr-is a) %py-barr-new %py-bytes-new)
-            (Str8 append (%py-bytes-str a) (%py-bytes-str b)))
+            (%pb-cat (%py-bytes-list a) (%py-bytes-list b)))
           (Err raise (lit type) "can't concat to bytes" ())))
       ((%py-bytes-is b)
         (Err raise (lit type) "can't concat bytes to non-bytes" ()))
@@ -285,9 +286,9 @@
               (Err raise (lit type) "can't multiply sequence by non-int" ())
               (%py-list-new (%py-els-repeat (%py-list-elems l) (%py-boolnorm k) ()))))))
       ((%py-bytes-is a)
-        ((if (%py-barr-is a) %py-barr-new %py-bytes-new) (%py-str-repeat (%py-bytes-str a) b)))
+        ((if (%py-barr-is a) %py-barr-new %py-bytes-new) (%pb-repeat (%py-bytes-list a) b ())))
       ((%py-bytes-is b)
-        ((if (%py-barr-is b) %py-barr-new %py-bytes-new) (%py-str-repeat (%py-bytes-str b) a)))
+        ((if (%py-barr-is b) %py-barr-new %py-bytes-new) (%pb-repeat (%py-bytes-list b) a ())))
       ((str? a)
         (if (str? b)
           (Err raise (lit type) "can't multiply sequence by non-int" ())
@@ -576,13 +577,12 @@
             (%py-truthy (m a)))))
       ((%py-bytes-is b)
         (if (%py-bytes-is a)
-          (Str8 includes? (%py-bytes-str a) (%py-bytes-str b))
+          (%pb-in? (%py-bytes-list a) (%py-bytes-list b))
           ; AN INT IN A BYTES IS A BYTE VALUE, not a type error: bytes are a
           ; sequence OF ints in Python, so `0 in b"1234"` asks whether any byte
           ; is zero and answers False rather than refusing.
           (if (eq? (%py-num-kind (%py-boolnorm a)) (lit int))
-            (let ((bs (%py-bytes-str b)))
-              (%py-in-walk (%py-boolnorm a) (%py-byte-list bs (- (Str8 length bs) 1) ())))
+            (%py-in-walk (%py-boolnorm a) (%py-bytes-list b))
             (Err raise (lit type) "a bytes-like object is required" ()))))
       ((str? b)
         (if (str? a)
@@ -724,125 +724,252 @@
       (%py-minmax-by vs pick (if (null? key) %py-ident key)))))
 
 ; --- Bytes seams -------------------------------------------------------------
-(def %py-mkbytes (fn (_ s) (%py-bytes-new s)))
+(def %py-mkbytes (fn (_ s) (%py-bytes-of-str s)))
 
 ; b'...' with Python's escapes: the quote rule of str's repr, \n \r \t by
-; name, and every byte outside printable ASCII as \xhh.
+; name, and every byte outside printable ASCII as \xhh -- which is how a NUL
+; shows itself now that one can be here at all: b'\x00'.
 (def %py-bytes-repr
-  (fn (_ s)
-    (def n (Str8 length s))
-    (def q (if (if (not (null? (Str8 index-of "'" s))) (null? (Str8 index-of "\"" s)) #f) 34 39))
-    (def go
-      (fn (self i acc)
-        (if (>= i n)
-          acc
-          (let ((c (%py-char-code (%str-ref s i))))
-            (self (+ i 1)
-              (Str8 append acc
-                (match
-                  ((= c 92) "\\\\")
-                  ((= c q) (Str8 append "\\" (Str8 sub i 1 s)))
-                  ((= c 10) "\\n")
-                  ((= c 13) "\\r")
-                  ((= c 9) "\\t")
-                  ((if (< c 32) #t (>= c 127))
-                    (Str8 append "\\x" (%py-hex2 c)))
-                  (#t (Str8 sub i 1 s)))))))))
-    (let ((qs (Str8 sub (if (= q 34) 1 0) 1 "'\"")))
-      (Str8 append "b" (Str8 append qs (Str8 append (go 0 "") qs))))))
+  (fn (_ l)
+    (let ((q (if (if (%pb-in? (list 39) l) (not (%pb-in? (list 34) l)) #f) 34 39)))
+      (Str8 append "b"
+        (let ((qs (%py-list->string (list (%py-int->char q)))))
+          (Str8 append qs (Str8 append (%py-bytes-repr-go l q "") qs)))))))
+(def %py-bytes-repr-go
+  (fn (self l q acc)
+    (if (null? l) acc
+      (let ((c (first l)))
+        (self (rest l) q
+          (Str8 append acc
+            (match
+              ((= c 92) "\\\\")
+              ((= c q) (Str8 append "\\" (%py-list->string (list (%py-int->char c)))))
+              ((= c 10) "\\n")
+              ((= c 13) "\\r")
+              ((= c 9) "\\t")
+              ((if (< c 32) #t (>= c 127)) (Str8 append "\\x" (%py-hex2 c)))
+              (#t (%py-list->string (list (%py-int->char c)))))))))))
 
-; BYTES METHODS ARE THE str METHODS ON THE UNDERLYING BYTE STRING: the str
-; surface is byte-indexed by design, so a bytes method unwraps its bytes
-; arguments, runs the str method, and wraps every string in the answer back
-; into bytes.  A str argument to a bytes method, or a bytes argument to a
-; str method, is Python's TypeError.
-(def %py-bytes-wrap
-  (fn (self v)
+; BYTES METHODS ARE THE BYTE ALGORITHMS, in python/bytes.x.  They used to be
+; the str methods on the underlying string, which is what made a NUL fatal:
+; the payload had to be something Str8 would hold.  Now the payload is a byte
+; list and these are the doors onto it.
+;
+; An argument is taken as BYTES whichever way it was written -- bytes or
+; bytearray -- and a str argument is Python's TypeError, as it was.
+(def %py-b-arg
+  (fn (_ a)
     (match
-      ((str? v) (%py-bytes-new v))
-      ((%py-list? v) (%py-list-new (%py-bytes-wrap-all (%py-list-elems v))))
-      ((%py-tuple-is v)
-        (%py-tuple-new (%py-bytes-wrap-all (%py-tuple-elems v))))
-      (#t v))))
-(def %py-bytes-wrap-all
-  (fn (self l) (if (null? l) () (pair (%py-bytes-wrap (first l)) (self (rest l))))))
-(def %py-bytes-unwrap-seq
-  (fn (self l)
-    (if (null? l) ()
-      (pair
-        (if (%py-bytes-is (first l)) (%py-bytes-str (first l))
-          (if (str? (first l))
-            (Err raise (lit type) "sequence item: expected a bytes-like object, str found" ())
-            (first l)))
-        (self (rest l))))))
-(def %py-bytes-args
-  (fn (self args)
+      ((%py-bytes-is a) (%py-bytes-list a))
+      ((str? a) (Err raise (lit type) "a bytes-like object is required, not 'str'" ()))
+      (#t (Err raise (lit type) "a bytes-like object is required" ())))))
+
+; A NEEDLE MAY BE ONE BYTE WRITTEN AS AN INT.  `b"abc".find(ord("b"))` is
+; Python, and only the searching methods take it -- replace and partition
+; want a bytes-like and say so.  Reaching %pb-at? with a bare int used to
+; walk `first` into a non-pair, which on this engine is a SEGFAULT and took
+; the whole spec file with it rather than one case.
+(def %py-b-needle
+  (fn (_ v)
+    (if (%py-num? v)
+      (let ((n (%py-boolnorm v)))
+        (if (if (< n 0) #t (> n 255))
+          (Err raise (lit value) "byte must be in range(0, 256)" ())
+          (list n)))
+      (%py-b-arg v))))
+
+; start and end, counted from the end when negative and clamped to the value
+; -- the slice rules, which is what Python's find/index/count take.
+; True is 1 as an index, as it is everywhere else in Python -- and reaching
+; `<` with a bare bool is a type error on this engine rather than a coercion.
+(def %py-b-clamp
+  (fn (_ i0 n)
+    (let ((i (%py-boolnorm i0)))
+      (let ((k (if (< i 0) (+ n i) i)))
+        (if (< k 0) 0 (if (> k n) n k))))))
+(def %py-b-start
+  (fn (_ l a i)
+    (let ((v (%py-b-opt a i ()))) (if (null? v) 0 (%py-b-clamp v (%pb-len l))))))
+(def %py-b-end
+  (fn (_ l a i)
+    (let ((v (%py-b-opt a i ()))) (if (null? v) (%pb-len l) (%py-b-clamp v (%pb-len l))))))
+
+; A SEARCH IS A SEARCH OF THE WINDOW, and the answer is an index into the
+; whole -- so the window's start goes back on before it is returned.
+(def %py-b-search
+  (fn (_ l a rev)
+    (let ((s (%py-b-start l a 1)))
+      (let ((e (%py-b-end l a 2)))
+        (let ((w (%pb-sub l s (- e s))) (n (%py-b-needle (first a))))
+          (let ((r (if rev (%pb-rfind w n) (%pb-find w n))))
+            (if (< r 0) r (+ r s))))))))
+(def %py-b-args
+  (fn (self args) (if (null? args) () (pair (%py-b-arg (first args)) (self (rest args))))))
+(def %py-b-opt
+  (fn (_ args i d)
+    (let ((v (%py-nth-or args i ()))) (if (null? v) d v))))
+(def %py-nth-or
+  (fn (self l i d)
+    (if (null? l) d (if (= i 0) (first l) (self (rest l) (- i 1) d)))))
+
+; The parts of a split, wrapped back into the caller's own type.
+(def %py-b-parts
+  (fn (self mk ps acc)
+    (if (null? ps) (%py-list-new (List reverse acc))
+      (self mk (rest ps) (pair (mk (first ps)) acc)))))
+(def %py-b-triple
+  (fn (_ mk t) (%py-tuple-new (list (mk (first t)) (mk (first (rest t))) (mk (first (rest (rest t))))))))
+
+; ONE TABLE, and `mk` is the only thing bytes and bytearray disagree about:
+; which of the two a method's answer is made into.
+;
+; EACH ARM ANSWERS A CLOSURE, so the NAME is resolved when it is asked for
+; and not when it is called.  That is what makes `bytes.nosuch` an
+; AttributeError at the dot -- which is the shape %py-str-attr already had,
+; and which five conformance programs probe with a bare `bytes.count`.
+(def %py-b-attr
+  (fn (_ l mk name)
+    (match
+      ((Str8 =? name "decode")   (fn (_ . a) (%pb->str l)))
+      ((Str8 =? name "find")     (fn (_ . a) (%py-b-search l a #f)))
+      ((Str8 =? name "rfind")    (fn (_ . a) (%py-b-search l a #t)))
+      ((Str8 =? name "index")    (fn (_ . a) (%py-b-index (%py-b-search l a #f))))
+      ((Str8 =? name "rindex")   (fn (_ . a) (%py-b-index (%py-b-search l a #t))))
+      ((Str8 =? name "count")
+        (fn (_ . a)
+          (let ((s (%py-b-start l a 1)))
+            (%pb-count (%pb-sub l s (- (%py-b-end l a 2) s)) (%py-b-needle (first a)) 0))))
+      ((Str8 =? name "startswith")
+        (fn (_ . a) (%pb-starts? (%pb-drop (%py-b-start l a 1) l) (%py-b-arg (first a)))))
+      ((Str8 =? name "endswith")
+        (fn (_ . a)
+          (let ((s (%py-b-start l a 1)))
+            (%pb-ends? (%pb-sub l s (- (%py-b-end l a 2) s)) (%py-b-arg (first a))))))
+      ((Str8 =? name "upper")      (fn (_ . a) (mk (%pb-upper l))))
+      ((Str8 =? name "lower")      (fn (_ . a) (mk (%pb-lower l))))
+      ((Str8 =? name "swapcase")   (fn (_ . a) (mk (%pb-swapcase l))))
+      ((Str8 =? name "capitalize") (fn (_ . a) (mk (%pb-capitalize l))))
+      ((Str8 =? name "title")      (fn (_ . a) (mk (%pb-title l))))
+      ((Str8 =? name "strip")  (fn (_ . a) (mk (%pb-strip l (%py-b-set a) #t #t))))
+      ((Str8 =? name "lstrip") (fn (_ . a) (mk (%pb-strip l (%py-b-set a) #t #f))))
+      ((Str8 =? name "rstrip") (fn (_ . a) (mk (%pb-strip l (%py-b-set a) #f #t))))
+      ((Str8 =? name "split")
+        (fn (_ . a) (%py-b-parts mk (%pb-split l (%py-b-split-sep a) (%py-b-opt a 1 (- 0 1))) ())))
+      ((Str8 =? name "rsplit")
+        (fn (_ . a) (%py-b-parts mk (%pb-rsplit l (%py-b-split-sep a) (%py-b-opt a 1 (- 0 1))) ())))
+      ((Str8 =? name "splitlines")
+        (fn (_ . a) (%py-b-parts mk (%pb-splitlines l (%py-truthy (%py-b-opt a 0 #f))) ())))
+      ((Str8 =? name "join")    (fn (_ . a) (mk (%pb-join l (%py-b-seq (first a))))))
+      ((Str8 =? name "replace")
+        (fn (_ . a)
+          (mk (%pb-replace l (%py-b-arg (first a)) (%py-b-arg (first (rest a)))
+                (%py-b-opt a 2 (- 0 1))))))
+      ((Str8 =? name "partition")
+        (fn (_ . a) (%py-b-triple mk (%pb-partition l (%py-b-sep (first a))))))
+      ((Str8 =? name "rpartition")
+        (fn (_ . a) (%py-b-triple mk (%pb-rpartition l (%py-b-sep (first a))))))
+      ((Str8 =? name "center") (fn (_ . a) (mk (%pb-center l (first a) (%py-b-fill a)))))
+      ((Str8 =? name "ljust")  (fn (_ . a) (mk (%pb-ljust l (first a) (%py-b-fill a)))))
+      ((Str8 =? name "rjust")  (fn (_ . a) (mk (%pb-rjust l (first a) (%py-b-fill a)))))
+      ((Str8 =? name "isspace") (fn (_ . a) (%pb-isspace l)))
+      ((Str8 =? name "isalpha") (fn (_ . a) (%pb-isalpha l)))
+      ((Str8 =? name "isdigit") (fn (_ . a) (%pb-isdigit l)))
+      ((Str8 =? name "isalnum") (fn (_ . a) (%pb-isalnum l)))
+      ((Str8 =? name "isupper") (fn (_ . a) (%pb-isupper l)))
+      ((Str8 =? name "islower") (fn (_ . a) (%pb-islower l)))
+      (#t
+        (Err raise (lit attribute)
+          (Str8 append (Str8 append "'bytes' object has no attribute '" name) "'") ())))))
+
+; index is find that RAISES, which is the whole difference between them.
+(def %py-b-index
+  (fn (_ i) (if (< i 0) (Err raise (lit value) "subsection not found" ()) i)))
+; a strip set or a separator -- nil for "none given", and an explicit None
+; means the same thing: `b"a b".split(None)` splits on whitespace.
+(def %py-b-set
+  (fn (_ args)
     (if (null? args) ()
-      (let ((a (first args)))
-        (pair
-          (match
-            ((%py-bytes-is a) (%py-bytes-str a))
-            ((str? a)
-              (Err raise (lit type) "a bytes-like object is required, not 'str'" ()))
-            ((%py-list? a)
-              (%py-list-new (%py-bytes-unwrap-seq (%py-list-elems a))))
-            ((%py-tuple-is a)
-              (%py-tuple-new (%py-bytes-unwrap-seq (%py-tuple-elems a))))
-            (#t a))
-          (self (rest args)))))))
+      (if (null? (first args)) () (%py-b-arg (first args))))))
+
+; AN EMPTY SEPARATOR IS A ValueError, for split and for partition both --
+; there is no sensible place to cut.  An empty NEEDLE is a different question,
+; and count answers that one with len+1.
+(def %py-b-sep
+  (fn (_ v)
+    (let ((l (%py-b-arg v)))
+      (if (null? l) (Err raise (lit value) "empty separator" ()) l))))
+
+; a split separator: absent or None is whitespace, an empty bytes is the
+; ValueError above.
+(def %py-b-split-sep
+  (fn (_ a)
+    (if (null? a) ()
+      (if (null? (first a)) () (%py-b-sep (first a))))))
+; the pad byte, space unless one was given
+(def %py-b-fill
+  (fn (_ args)
+    (let ((c (%py-b-opt args 1 ()))) (if (null? c) 32 (first c)))))
+; the sequence a join walks
+(def %py-b-seq
+  (fn (self v)
+    (%py-b-seq-go (%py-iter-elems v) ())))
+(def %py-b-seq-go
+  (fn (self l acc)
+    (if (null? l) (List reverse acc) (self (rest l) (pair (%py-b-arg (first l)) acc)))))
+
 ; bytearray's repr is bytes' repr, said out loud: bytearray(b'foo').
 (def %py-barr-repr
-  (fn (_ s) (Str8 append "bytearray(" (Str8 append (%py-bytes-repr s) ")"))))
+  (fn (_ l) (Str8 append "bytearray(" (Str8 append (%py-bytes-repr l) ")"))))
 
-; A bytearray METHOD answers bytearrays where the bytes method answers bytes
-; -- center, strip, partition and the rest -- so the wrap differs and nothing
-; else does.
-(def %py-barr-wrap
-  (fn (self v)
-    (match
-      ((str? v) (%py-barr-new v))
-      ((%py-list? v) (%py-list-new (%py-barr-wrap-all (%py-list-elems v))))
-      ((%py-tuple-is v) (%py-tuple-new (%py-barr-wrap-all (%py-tuple-elems v))))
-      (#t v))))
-(def %py-barr-wrap-all
-  (fn (self l) (if (null? l) () (pair (%py-barr-wrap (first l)) (self (rest l))))))
+; THE TWO ATTRIBUTE SURFACES, and `mk` is the only thing they disagree about:
+; a bytes method answers bytes, a bytearray method answers bytearrays.  Both
+; read the same payload and run the same algorithms.
+(def %py-bytes-attr
+  (fn (_ b name) (%py-b-attr (%py-bytes-list b) %py-bytes-new name)))
 
-; The bytes an argument stands for, whichever way it was written.
-(def %py-barr-bytes-of
-  (fn (_ v)
-    (match
-      ((%py-bytes-is v) (%py-bytes-str v))
-      ((%py-list? v) (%py-bytes-of-codes (%py-list-elems v) ""))
-      ((%py-tuple-is v) (%py-bytes-of-codes (%py-tuple-elems v) ""))
-      (#t (%py-bytes-of-codes (%py-iter-elems v) "")))))
-
+; A bytearray also MUTATES, and those two are its own: the payload is
+; replaced in the cell, so every name bound to this bytearray sees it.
 (def %py-barr-attr
   (fn (_ b name)
     (match
-      ((Str8 =? name "decode") (fn (_ . a) (%py-bytes-str b)))
-      ; THE TWO THAT MUTATE.  A copy replaces the payload in the cell rather
-      ; than being grown in place -- the platform's strings are immutable, so
-      ; the mutation is in the CELL and the cost is a copy per append.  Correct
-      ; and slow beats fast and wrong; a caller appending in a loop is the one
-      ; who would notice, and none of the corpus does.
       ((Str8 =? name "append")
         (fn (_ v)
           (%py-barr-set! b
-            (Str8 append (%py-bytes-str b) (%py-bytes-of-codes (list v) "")))))
+            (%pb-cat (%py-bytes-list b) (%py-bytes-of-codes (list v) ())))))
       ((Str8 =? name "extend")
         (fn (_ v)
-          (%py-barr-set! b
-            (Str8 append (%py-bytes-str b) (%py-barr-bytes-of v)))))
-      (#t
-        (let ((m (%py-str-attr (%py-bytes-str b) name)))
-          (fn (_ . args) (%py-barr-wrap (apply m (%py-bytes-args args)))))))))
+          (%py-barr-set! b (%pb-cat (%py-bytes-list b) (%py-barr-bytes-of v)))))
+      (#t (%py-b-attr (%py-bytes-list b) %py-barr-new name)))))
 
-(def %py-bytes-attr
-  (fn (_ b name)
-    (if (Str8 =? name "decode")
-      (fn (_ . a) (%py-bytes-str b))
-      (let ((m (%py-str-attr (%py-bytes-str b) name)))
-        (fn (_ . args) (%py-bytes-wrap (apply m (%py-bytes-args args))))))))
+; The bytes an argument stands for, whichever way it was written.
+; bytearray(), bytearray(b'..'), bytearray('..', 'utf-8'), bytearray([..]),
+; bytearray(n).  A str WITHOUT an encoding is Python's TypeError; with one it
+; is the string's own bytes.  A count asks for that many zero bytes and now
+; gets them.
+(def %py-bytearray-ctor
+  (fn (_ . args)
+    (if (null? args)
+      (%py-barr-new ())
+      (let ((v (first args)))
+        (match
+          ((%py-bytes-is v) (%py-barr-new (%py-bytes-list v)))
+          ((str? v)
+            (if (null? (rest args))
+              (Err raise (lit type) "string argument without an encoding" ())
+              (%py-barr-of-str v)))
+          ((%py-list? v) (%py-barr-new (%py-bytes-of-codes (%py-list-elems v) ())))
+          ((%py-tuple-is v) (%py-barr-new (%py-bytes-of-codes (%py-tuple-elems v) ())))
+          ((%py-num? v) (%py-barr-new (%py-bytes-zeros v ())))
+          (#t (%py-barr-new (%py-bytes-of-codes (%py-iter-elems v) ()))))))))
+
+(def %py-barr-bytes-of
+  (fn (_ v)
+    (match
+      ((%py-bytes-is v) (%py-bytes-list v))
+      ((%py-list? v) (%py-bytes-of-codes (%py-list-elems v) ()))
+      ((%py-tuple-is v) (%py-bytes-of-codes (%py-tuple-elems v) ()))
+      (#t (%py-bytes-of-codes (%py-iter-elems v) ())))))
+
 (def %py-any-bytes?
   (fn (self l) (if (null? l) #f (if (%py-bytes-is (first l)) #t (self (rest l))))))
 (def %py-str-method
@@ -852,34 +979,6 @@
         (if (%py-any-bytes? args)
           (Err raise (lit type) "must be str, not bytes" ())
           (apply m args))))))
-; the byte values of a byte string, as a list of ints
-(def %py-byte-list
-  (fn (self s i acc)
-    (if (< i 0) acc (self s (- i 1) (pair (%py-char-code (%str-ref s i)) acc)))))
-(def %py-sl-bytes
-  (fn (self s idxs acc)
-    (if (null? idxs) (%py-reverse acc)
-      (self s (rest idxs) (pair (Str8 sub (first idxs) 1 s) acc)))))
-; bytearray(), bytearray(b'..'), bytearray('..', 'utf-8'), bytearray([..]),
-; bytearray(n).  A str WITHOUT an encoding is Python's TypeError; with one it
-; is the string's own bytes, which on this platform it already is.  A count
-; asks for that many NUL bytes and meets the refusal every other spelling of
-; a NUL meets (docs/nul-and-the-string-layer.md).
-(def %py-bytearray-ctor
-  (fn (_ . args)
-    (if (null? args)
-      (%py-barr-new "")
-      (let ((v (first args)))
-        (match
-          ((%py-bytes-is v) (%py-barr-new (%py-bytes-str v)))
-          ((str? v)
-            (if (null? (rest args))
-              (Err raise (lit type) "string argument without an encoding" ())
-              (%py-barr-new v)))
-          ((%py-list? v) (%py-barr-new (%py-bytes-of-codes (%py-list-elems v) "")))
-          ((%py-tuple-is v) (%py-barr-new (%py-bytes-of-codes (%py-tuple-elems v) "")))
-          (#t (%py-barr-new (%py-bytes-zeros v ""))))))))
-
 ; --- Comparison --------------------------------------------------------------
 ; Class equality is IDENTITY: the builtin type objects are singletons, so
 ; `type(1) == type(2)` is eq? on the same object, and two distinct classes are
@@ -923,7 +1022,7 @@
       ((str? a) (if (str? b) (Str8 =? a b) #f))
       ((str? b) #f)
       ((%py-bytes-is a)
-        (if (%py-bytes-is b) (Str8 =? (%py-bytes-str a) (%py-bytes-str b)) #f))
+        (if (%py-bytes-is b) (%pb-eq? (%py-bytes-list a) (%py-bytes-list b)) #f))
       ((%py-bytes-is b) #f)
       ((if (%py-fn-is a) #t (%py-fn-is b)) (same? a b))
       ((%py-dict? a)
@@ -1008,7 +1107,7 @@
       ; instances does -- which agreed with Python while both sides were
       ; PY-BYTES, and stopped agreeing the moment one was a bytearray.
       ((if (%py-bytes-is a) (%py-bytes-is b) #f)
-        (< (%py-strcmp (%py-bytes-str a) (%py-bytes-str b) 0) 0))
+        (< (%pb-cmp (%py-bytes-list a) (%py-bytes-list b)) 0))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__lt__" "__gt__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse "<") r)))
@@ -1032,7 +1131,7 @@
       ; instances does -- which agreed with Python while both sides were
       ; PY-BYTES, and stopped agreeing the moment one was a bytearray.
       ((if (%py-bytes-is a) (%py-bytes-is b) #f)
-        (> (%py-strcmp (%py-bytes-str a) (%py-bytes-str b) 0) 0))
+        (> (%pb-cmp (%py-bytes-list a) (%py-bytes-list b)) 0))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__gt__" "__lt__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse ">") r)))
@@ -1054,7 +1153,7 @@
       ; instances does -- which agreed with Python while both sides were
       ; PY-BYTES, and stopped agreeing the moment one was a bytearray.
       ((if (%py-bytes-is a) (%py-bytes-is b) #f)
-        (<= (%py-strcmp (%py-bytes-str a) (%py-bytes-str b) 0) 0))
+        (<= (%pb-cmp (%py-bytes-list a) (%py-bytes-list b)) 0))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__le__" "__ge__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse "<=") r)))
@@ -1071,7 +1170,7 @@
       ; instances does -- which agreed with Python while both sides were
       ; PY-BYTES, and stopped agreeing the moment one was a bytearray.
       ((if (%py-bytes-is a) (%py-bytes-is b) #f)
-        (>= (%py-strcmp (%py-bytes-str a) (%py-bytes-str b) 0) 0))
+        (>= (%pb-cmp (%py-bytes-list a) (%py-bytes-list b)) 0))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__ge__" "__le__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse ">=") r)))
@@ -1109,7 +1208,7 @@
       ((%py-set-is v) (%py-length (%py-set-elems v)))
       ((%py-view-is v) (%py-length (%py-view-elems v)))
       ((str? v) (Str length v))
-      ((%py-bytes-is v) (Str8 length (%py-bytes-str v)))
+      ((%py-bytes-is v) (%pb-len (%py-bytes-list v)))
       (#t (Err raise (lit type) "object of this type has no len()" ())))))
 
 ; NEGATIVE INDICES COUNT FROM THE END, which is Python and not x.  -1 is the
@@ -1130,12 +1229,12 @@
               (Str sub k 1 v)))))
       ; a bytes index is the byte's value, an int
       ((%py-bytes-is v)
-        (let ((s (%py-bytes-str v)))
-          (let ((n (Str8 length s)))
+        (let ((l (%py-bytes-list v)))
+          (let ((n (%pb-len l)))
             (let ((k (if (< i 0) (+ n i) i)))
               (if (if (< k 0) #t (>= k n))
                 (Err raise (lit index) "index out of range" ())
-                (%py-char-code (%str-ref s k)))))))
+                (%pb-ref l k))))))
       ; Subscripting a tuple and a dict are calls too -- see the list branch.
       ((%py-tuple-is v) (v i))
       ((%py-dict? v) (v i))
@@ -1339,7 +1438,7 @@
       ((str? v) (%py-str-chars v 0 (Str8 length v)))
       ; iterating bytes yields ints
       ((%py-bytes-is v)
-        (%py-byte-list (%py-bytes-str v) (- (Str8 length (%py-bytes-str v)) 1) ()))
+        (%py-bytes-list v))
       ; a generator runs to its end; every consumer here wants the whole list
       ((%py-gen-is v) (%py-gen-drain v ()))
       (#t (Err raise (lit type) "object is not iterable" ())))))
@@ -1726,8 +1825,8 @@
   (fn (_ cls name)
     (match
       ((eq? cls %py-cls-str)       (%py-unbound %py-str-attr "" name))
-      ((eq? cls %py-cls-bytes)     (%py-unbound %py-bytes-attr (%py-bytes-new "") name))
-      ((eq? cls %py-cls-bytearray) (%py-unbound %py-barr-attr (%py-barr-new "") name))
+      ((eq? cls %py-cls-bytes)     (%py-unbound %py-bytes-attr (%py-bytes-new ()) name))
+      ((eq? cls %py-cls-bytearray) (%py-unbound %py-barr-attr (%py-barr-new ()) name))
       ((eq? cls %py-cls-list)      (%py-unbound %py-list-attr (%py-list-new ()) name))
       ((eq? cls %py-cls-dict)      (%py-unbound %py-dict-attr (%py-dict-new ()) name))
       ((eq? cls %py-cls-set)       (%py-unbound %py-set-attr (%py-set-new #f ()) name))
@@ -2101,8 +2200,8 @@
     (if (if (str? s) (= (Str length s) 1) #f)
       (%py-char-code (Str ref 0 s))
       ; a one-byte bytes answers that BYTE's value, so ord(b'\xff') is 255
-      (if (if (%py-bytes-is s) (= (Str8 length (%py-bytes-str s)) 1) #f)
-        (%py-char-code (%str-ref (%py-bytes-str s) 0))
+      (if (if (%py-bytes-is s) (= (%pb-len (%py-bytes-list s)) 1) #f)
+        (%pb-ref (%py-bytes-list s) 0)
         (Err raise (lit type) "ord() expected a character" ())))))
 
 ; --- The format-spec mini-language -------------------------------------------
@@ -5640,20 +5739,20 @@
 (def %py-bytes-ctor
   (fn (_ . args)
     (if (null? args)
-      (%py-bytes-new "")
+      (%py-bytes-new ())
       (let ((v (first args)))
         (match
           ; bytes(bytearray(b'x')) is a bytes, and a bytes of its own -- this
           ; is one of the two places the strict test earns its keep.
           ((%py-bytes-only? v) v)
-          ((%py-bytes-is v) (%py-bytes-new (%py-bytes-str v)))
+          ((%py-bytes-is v) (%py-bytes-new (%py-bytes-list v)))
           ((%py-list? v)
-            (%py-bytes-new (%py-bytes-of-codes (%py-list-elems v) "")))
+            (%py-bytes-new (%py-bytes-of-codes (%py-list-elems v) ())))
           ((%py-tuple-is v)
-            (%py-bytes-new (%py-bytes-of-codes (%py-tuple-elems v) "")))
+            (%py-bytes-new (%py-bytes-of-codes (%py-tuple-elems v) ())))
           ((str? v)
             (Err raise (lit type) "string argument without an encoding" ()))
-          (#t (%py-bytes-new (%py-bytes-zeros v ""))))))))
+          (#t (%py-bytes-new (%py-bytes-zeros v ()))))))))
 
 ; A NUL BYTE CANNOT BE CARRIED HERE, and saying so is better than answering a
 ; short bytes.  A string on this platform is a C STRING BY AN ENGINE GUARANTEE
@@ -5667,32 +5766,28 @@
 ; arms here.  docs/nul-and-the-string-layer.md is the decision and its cost --
 ; including why carrying a NUL in bytes ALONE would move the silent loss to
 ; .decode() rather than remove it.
+; A ZERO IS A BYTE LIKE ANY OTHER NOW.  This used to refuse it -- and so did
+; bytes(n), chr(0) and every literal -- because the payload was a string that
+; would have ended there.  The payload is a byte list; the only rule left is
+; Python's own, that a byte is in range(0, 256).
 (def %py-bytes-of-codes
   (fn (self codes acc)
     (if (null? codes)
-      acc
+      (List reverse acc)
       (let ((c (%py-boolnorm (first codes))))
         (if (if (< c 0) #t (> c 255))
           (Err raise (lit value) "bytes must be in range(0, 256)" ())
-          (if (= c 0)
-            (Err raise (lit value) "a NUL byte is not representable here" ())
-            (self (rest codes)
-              (Str8 append acc (%py-list->string (list (%py-int->char c)))))))))))
+          (self (rest codes) (pair c acc)))))))
 
 ; THE COUNT IS VALIDATED BEFORE THE BYTES ARE BUILT, and negative is its own
-; answer rather than a share of zero's.  `(< n 1)` was true for 0 AND for every
-; negative n, so both took the empty-bytes arm: bytes(-1) agreed with CPython
-; about bytes(0) while disagreeing about itself, which is a WRONG value rather
-; than a missing one.  Measured, CPython 3.14.7: bytes(0) is b'', bytes(-1) is
-; ValueError("negative count").  Zero alone is empty; a positive count asks for
-; that many NUL bytes, which is the refusal above under a second name.
+; answer rather than a share of zero's.  Measured, CPython 3.14.7: bytes(0) is
+; b'', bytes(-1) is ValueError("negative count").  A positive count asks for
+; that many NUL bytes, and now gets them.
 (def %py-bytes-zeros
   (fn (self n acc)
     (if (< n 0)
       (Err raise (lit value) "negative count" ())
-      (if (= n 0)
-        acc
-        (Err raise (lit value) "a NUL byte is not representable here" ())))))
+      (if (= n 0) acc (self (- n 1) (pair 0 acc))))))
 
 (def %py-bytes-methods
   (list
@@ -5841,9 +5936,9 @@
             (%py-sl-chars obj
               (%py-slice-idxs (Str length obj) start stop st) ())))
         ((%py-bytes-is obj)
-          (let ((s (%py-bytes-str obj)))
+          (let ((l (%py-bytes-list obj)))
             ((if (%py-barr-is obj) %py-barr-new %py-bytes-new)
-              (Str8 join "" (%py-sl-bytes s (%py-slice-idxs (Str8 length s) start stop st) ())))))
+              (%py-sl-pick l (%py-slice-idxs (%pb-len l) start stop st) ()))))
         ((%py-list-is obj)
           (%py-list-new
             (%py-sl-pick (%py-list-elems obj)
