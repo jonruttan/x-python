@@ -1,5 +1,5 @@
 Compiled analysers (`python/tokens.x`). The per-character body states —
-whitespace, comment, blank, name, number — can be compiled to native code
+whitespace, comment, blank, name, keyword, number — can be compiled to native code
 through the platform's assembler lane, and the swap is lazy: nothing happens
 until `%py-jit-threshold` bytes of source have passed through
 `python-tokenize`, then one guarded attempt pins `active` or `failed`.
