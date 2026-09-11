@@ -962,7 +962,14 @@
         (Str8 sub 2 (- len 3) raw)))
     (match
       ((if (= p 98) #t (= p 66)) (mk-tok-bytes (%py-unescape-bytes body)))
-      ((if (= p 102) #t (= p 70)) (mk-tok-fstring (%py-unescape body #f)))
+      ; AN f-STRING BODY LEAVES AS BYTES, like every other string token, even
+      ; though its scanner wants a platform string and the parser hands it one.
+      ; %py-unescape would build that string directly and is the shorter road,
+      ; but it accumulates with Str8 -- so a zero byte in the body would vanish
+      ; there, along with the rest of the literal, which is the exact failure
+      ; this carrier exists to end.  Going out as bytes means the parser's
+      ; crossing REFUSES instead, and says which literal it was about.
+      ((if (= p 102) #t (= p 70)) (mk-tok-fstring (%py-unescape-cps body)))
       ((if (= p 114) #t (= p 82)) (mk-tok-string (%pb-of-str body)))
       (#t (mk-tok-string (%py-unescape-cps body))))))
 

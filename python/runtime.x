@@ -2041,12 +2041,14 @@
       ; point like any other, and the refusal that used to stand here went out
       ; with the platform string this used to build.
       (#t (%py-str-new (list n))))))
-; ord() counts CODE POINTS, not bytes: chr(955) is a two-byte string that
-; is one character, so the utf-8-aware Str class measures and indexes it.
+; ord() COUNTS CODE POINTS, and now it simply reads one: the carrier IS a list
+; of them, so there is nothing to measure and nothing to decode.  This used to
+; index with the utf-8-aware `Str` class, which a PY-TEXT is not -- it answered
+; 144 for '\xff' rather than 255, a wrong number rather than an error.
 (def %py-ord
   (fn (_ s)
     (if (if (%py-str-is s) (= (%pb-len (%py-str-cps s)) 1) #f)
-      (%py-char-code (Str ref 0 s))
+      (first (%py-str-cps s))
       ; a one-byte bytes answers that BYTE's value, so ord(b'\xff') is 255
       (if (if (%py-bytes-is s) (= (%pb-len (%py-bytes-list s)) 1) #f)
         (%pb-ref (%py-bytes-list s) 0)
@@ -4676,10 +4678,25 @@
 ; than pushed into the writer.
 (def %py-write-to-str (prim-ref (lit io) (lit write-to-str)))
 
+; THE INTERNAL str, AND IT ALWAYS ANSWERS A PLATFORM STRING.  Every caller is
+; measuring or appending with Str8 -- an error message, a format field's
+; padding and precision -- so answering the str UNCHANGED for a str argument
+; (which this did) handed `Str8 length` a PY-TEXT and died with "not a string"
+; in the middle of str.format.  str() the builtin is %py-str-ctor, and THAT is
+; where a str argument comes back untouched, NUL and all.
+;
+; So a NUL-bearing str raises here, like at every other crossing: a format
+; field is built as a platform string and cannot carry one.
 (def %py-str
   (fn (_ v)
     (match
-      ((%py-str-is v) v)
+      ((%py-str-is v) (%ps->x (%py-str-cps v)))
+      ; ALREADY TEXT, AND ALREADY THE PLATFORM'S.  A conversion has run ahead
+      ; of this in the format path -- %py-fmtfield's !r and !s hand their
+      ; answer on as a platform string -- and the last branch would `write` it,
+      ; which QUOTES it: `f'{x=}'` came out as `x="7"`.  On main this branch
+      ; did not need to exist, because a str WAS one of these.
+      ((str? v) v)
       ((null? v) "None")
       ((eq? v #t) "True")
       ((eq? v #f) "False")
@@ -5178,13 +5195,26 @@
       (self (rest names)
         (if (%py-dir-seen? (first names) acc) acc (pair (first names) acc))))))
 
+; THE NAMES CROSS BACK BEFORE THEY ARE SORTED.  They come off the attribute
+; tables as the platform's strings, and what dir() answers is a list of strs --
+; so they are wrapped here, ahead of the sort, because the sort is Python's `<`
+; and the numeric one underneath it has no answer for a platform string ("no <
+; for STRING").  Wrapping after the sort would leave the order to that error.
+(def %py-dir-strs
+  (fn (self l acc)
+    (if (null? l) acc
+      (self (rest l) (pair (%py-str-of-x (first l)) acc)))))
+
 (def %py-dir
   (%py-sig!
     (fn (_ . a)
       (if (null? a)
         (Err raise (lit type)
           "dir() with no arguments needs a namespace this runtime does not keep" ())
-        (%py-list-new (%py-msort-by (%py-dir-uniq (%py-dir-of (first a)) ()) %py-ident))))
+        (%py-list-new
+          (%py-msort-by
+            (%py-dir-strs (%py-dir-uniq (%py-dir-of (first a)) ()) ())
+            %py-ident))))
     "dir" (list "object") 0 #f))
 
 ; `hasattr` is defined in terms of getattr in Python too: it is "does this
