@@ -181,21 +181,59 @@ print(f\"{'('}\", f\"{')'}\", f\"{'}'}\", f\"{'[' + ']'}\", f\"{d[']']}\", f\"{d
 ( ) } [] bracket brace
 ```
 
-### a format spec still finds its colon, and str.format is untouched
+### a colon inside a string is not a format spec
 
-The scanner that splits `!conv` and `:spec` off a field is SHARED with
-str.format, where a quote is an ordinary character -- the fill in `{0:'>5}`,
-part of the key in `{a[it's]}`.  So it counts and does not read strings, which
-is why `f"{'a:b'}"` is still refused here where CPython answers `a:b`.  Giving
-f-strings that too means a second scanner for the other template as well, and
-this change already carries one.
+The scanner that splits `!conv` and `:spec` off a field reads string literals
+for the same reason the closer scanner does: `f"{'a:b'}"` is ONE STRING with a
+colon in it, not a value with a spec.
 
 ```python
-(python-run "print(f\"{1:>{3}}\", f\"{'x'!r}\", \"{0:'>5}\".format(1), \"{a[it's]:>5}\".format(a={\"it's\": 7}))")
+(python-run "print(f\"{'a:b'}\", f\"{'a!b'}\", f\"{'::'}\", f\"{'!'}\", f'{\"x!y\"}')")
 ```
 ---
 ```output
-  1 'x' ''''1     7
+a:b a!b :: ! x!y
+```
+
+### and a string before a spec does not swallow it
+
+`f"{'a:b':>8}"` has both: a colon inside the literal and the one that opens the
+format spec.  Stepping over the literal has to land BEFORE the second, or the
+field loses its width.
+
+```python
+(python-run "print(f\"{'a:b':>8}\", f\"{'a':>5}\", f\"{'a!b'!r}\", f\"{'a'!r:>8}\")")
+```
+---
+```output
+     a:b     a 'a!b'      'a'
+```
+
+### `!=` is still a comparison, not a conversion
+
+The one rule both scanners read: `!` opens a conversion only when `=` does not
+follow.
+
+```python
+(python-run "print(f\"{1 if 2!=3 else 4}\", f\"{ {'k:v': 1}['k:v'] }\")")
+```
+---
+```output
+1 1
+```
+
+### str.format keeps the scanner that counts
+
+A quote in a template is an ordinary character -- the fill in `{0:'>5}`, part
+of the key in `{a[it's]}` -- so `%py-fs-split` stays as it was, and only the
+f-string field reads strings.
+
+```python
+(python-run "print(f\"{1:>{3}}\", \"{0:'>5}\".format(1), \"{a[it's]:>5}\".format(a={\"it's\": 7}))")
+```
+---
+```output
+  1 ''''1     7
 ```
 
 ### a closed bracket in a field is left alone
