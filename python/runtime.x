@@ -1793,7 +1793,11 @@
        (if (null? rows) ()
          (if (Str8 =? (first (first rows)) "%ctor")
            (go (rest rows))
-           (pair (pair (first (first rows)) (rest (first rows))) (go (rest rows))))))
+           ; __dict__ IS A DICT, so the names cross over: they are the
+           ; platform's strings in the method table and strs once they are
+           ; keys a Python program can look up.
+           (pair (pair (%py-str-of-x (first (first rows))) (rest (first rows)))
+                 (go (rest rows))))))
      (%py-class-methods cls))))
 
 ; AN UNBOUND METHOD IS THE ATTRIBUTE ASKED OF A RECEIVER, with the receiver
@@ -3380,7 +3384,10 @@
         ; the read; this is the same rule on the write.
         (let ((m (%py-dunder obj "__setattr__")))
           (if (not (null? m))
-            (%seq (m name v) ())
+            ; the hook is PYTHON code and takes the name as a str, not as the
+            ; platform string the attribute tables below are keyed by -- the
+            ; same crossing __getattr__ needs
+            (%seq (m (%py-str-of-x name) v) ())
             ; and a DESCRIPTOR on the class takes the store before the
             ; instance does, which is what makes a data descriptor data
             (let ((d (%py-method-find (%py-obj-class obj) name)))
@@ -3490,8 +3497,12 @@
   (fn (_)
     (%py-module-new "implementation"
       (list
-        (pair "name" "x-python")
-        (pair "_machine" x-machine)))))
+        ; A MODULE'S TEXT ATTRIBUTES ARE strs.  These are written here as the
+        ; platform's strings and cross over on the way in; left bare,
+        ; type(sys.implementation.name).__name__ answered something that was
+        ; not "str" and every method on it was missing.
+        (pair "name" (%py-str-of-x "x-python"))
+        (pair "_machine" (%py-str-of-x x-machine))))))
 
 ; --- the math module ------------------------------------------------------
 ;
@@ -3656,8 +3667,11 @@
         (pair "pi" (Float pi))
         (pair "e" (Float e))
         (pair "tau" (Float tau))
-        (pair "inf" (%py-float-ctor "inf"))
-        (pair "nan" (%py-float-ctor "nan"))
+        ; STRAIGHT TO THE PARSER, not through float(): these two spellings are
+        ; the platform's strings, and the constructor takes a str -- it would
+        ; refuse its own spelling of infinity.
+        (pair "inf" (%py-float-of-str "inf"))
+        (pair "nan" (%py-float-of-str "nan"))
         (pair "sqrt" (fn (_ x) (%py-mcheck (Float sqrt (%py-mfloat x)))))
         (pair "exp" (fn (_ x) (Float exp (%py-mfloat x))))
         (pair "log"
@@ -3734,11 +3748,13 @@
       ((Str8 =? name "sys")
         (%py-module-new "sys"
                 (list
-                  (pair "version" "3.14.7")
-                  (pair "platform" (%py-platform-of x-machine %py-platform-names))
+                  ; strs, for the reason in %py-sys-implementation below
+                  (pair "version" (%py-str-of-x "3.14.7"))
+                  (pair "platform"
+                    (%py-str-of-x (%py-platform-of x-machine %py-platform-names)))
                   ; every architecture this platform builds for is little-endian;
                   ; a big-endian port would have to say so here
-                  (pair "byteorder" "little")
+                  (pair "byteorder" (%py-str-of-x "little"))
                   (pair "implementation" (%py-sys-implementation))
                   ; the largest int a CPython machine word holds; this runtime has
                   ; bigints and no such limit, and the number is what programs test
@@ -4439,7 +4455,10 @@
           (%py-reverse acc)
           (if (known? (first (first ks)) names)
             (self (rest ks) acc)
-            (self (rest ks) (pair (pair (first (first ks)) (rest (first ks))) acc))))))
+            ; the name crosses over: these rows become the **kwargs DICT, and
+            ; a dict's keys are strs (see %py-dict-kwargs)
+            (self (rest ks)
+              (pair (pair (%py-str-of-x (first (first ks))) (rest (first ks))) acc))))))
     (def slot
       (fn (_ i)
         (let ((nm (List ref i names)))
@@ -4852,8 +4871,16 @@
 ; lookup dies with "not a string" instead of answering.
 (def %py-attr-name!
   (fn (_ n)
-    (if (%py-str-is n) (%ps->x (%py-str-cps n))
-      (Err raise (lit type) "attribute name must be string" ()))))
+    (match
+      ((%py-str-is n) (%ps->x (%py-str-cps n)))
+      ; ALREADY THE PLATFORM'S, AND SO ALREADY DONE.  These doors have two kinds
+      ; of caller: getattr/setattr/delattr/hasattr, where the name is a str the
+      ; program computed, and the PARSER, where `del obj.x` read the name out of
+      ; the source and never had a str to begin with.  Refusing the second kind
+      ; made `del obj.x` raise "attribute name must be string" about a name that
+      ; is right there in the statement.
+      ((str? n) n)
+      (#t (Err raise (lit type) "attribute name must be string" ())))))
 (def %py-getattr3
   (fn (_ o n0 . d)
     (def n (%py-attr-name! n0))
@@ -4872,12 +4899,14 @@
     (def n (%py-attr-name! n0))
     (if (not (%py-obj-is o))
       (Err raise (lit attribute) "object has no deletable attributes" ())
-      ; __delattr__ is the same hook on `del obj.x`, and it is PYTHON code:
-      ; it takes the name as a str, not as the platform string the tables below
-      ; are keyed by.
+      ; __delattr__ is the same hook on `del obj.x`, and it is PYTHON code: it
+      ; takes the name as a str, not as the platform string the tables below are
+      ; keyed by.  Built from the CROSSED name rather than from the argument,
+      ; because the argument is a str from delattr() and a platform string from
+      ; the parser -- only one of those is a value to hand to a Python method.
       (let ((m (%py-dunder o "__delattr__")))
         (if (not (null? m))
-          (%seq (m n0) ())
+          (%seq (m (%py-str-of-x n)) ())
           (let ((d (%py-method-find (%py-obj-class o) n)))
             (if (%py-desc-delete? d)
               (%seq ((%py-dunder d "__delete__") o) ())
@@ -5529,9 +5558,18 @@
         ; any other iterable is a sequence of (key, value) pairs
         (%py-dict-new (%py-pairs-of (%py-iter-elems (first a)) ()))))))
 ; dict(a=1) and d.update(a=1): the keywords ARE the entries
+; dict(a=1) MAKES A str KEY.  A keyword name is the platform's string -- it
+; came off the call syntax -- and a dict's keys are Python values, so it
+; crosses over here.  Left bare the entry was still findable by another bare
+; one, which is why this showed up as a repr (`{colour: 'red'}`, the key with
+; no quotes) rather than as a lookup failure.
 (def %py-dict-kwargs
   (fn (_ kws)
-    (def go (fn (self l acc) (if (null? l) (%py-reverse acc) (self (rest l) (pair (pair (first (first l)) (rest (first l))) acc)))))
+    (def go
+      (fn (self l acc)
+        (if (null? l) (%py-reverse acc)
+          (self (rest l)
+            (pair (pair (%py-str-of-x (first (first l))) (rest (first l))) acc)))))
     (go kws ())))
 
 (def %py-tuple-ctor
