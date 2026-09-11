@@ -94,7 +94,11 @@
 (def %pb->str
   (fn (self l)
     (if (%pb-nul? l)
-      (Err raise (lit value) "a NUL byte is not representable in a str" ())
+      ; THE SAME SENTENCE AS EVERY OTHER CROSSING.  The limit is stated once
+      ; wherever it is reached (docs/nul-and-the-string-layer.md), and this was
+      ; the one door saying it differently -- so a spec asserting the refusal
+      ; matched three crossings and missed this one.
+      (Err raise (lit value) "a NUL byte is not representable here" ())
       (%pb->str-go l ""))))
 (def %pb->str-go
   (fn (self l acc)

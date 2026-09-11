@@ -2215,7 +2215,11 @@
               ((if (eq? kind (lit int)) (= tc 99) #f)
                 (if (if (null? sign) #f (not (Str8 =? sign "")))
                   (Err raise (lit value) "Sign not allowed with integer format specifier 'c'" ())
-                  (%py-spec-pad (%py-chr w) width fill align ">" "")))
+                  ; chr() answers a str and the padding below is Str8's, so the
+                  ; character crosses over -- which also means '{:c}'.format(0)
+                  ; refuses, like every other crossing into a platform string.
+                  (%py-spec-pad (%ps->x (%py-str-cps (%py-chr w)))
+                    width fill align ">" "")))
               ((if (eq? kind (lit int))
                   (match
                     ((= tc 0) #t)
