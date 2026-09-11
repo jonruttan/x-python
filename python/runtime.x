@@ -3285,12 +3285,21 @@
         (rest (first rows))
         (self k (rest rows))))))
 
+; The platform's door to an error's tag.  x-lang spells it (Err tag e) from
+; the release after v0.13.0; v0.13.0 -- the release lang.xon declares --
+; spelled it (Err kind-of e).  Probed once at load, so the bundle runs on
+; both; the old spelling goes when the pin moves past it.
+(def %py-err-tag
+  (guard (_ (fn (_ e) (Err kind-of e)))
+    (%seq (Err tag "probe")
+          (fn (_ e) (Err tag e)))))
+
 ; The class of whatever was raised, whichever of the two shapes it is.
 (def %py-exc-class-of
   (fn (_ e)
     (if (%py-obj-is e)
       (%py-obj-class e)
-      (%py-tag-class (Err tag e) %py-tag-classes))))
+      (%py-tag-class (%py-err-tag e) %py-tag-classes))))
 
 (def %py-subclass?
   (fn (self c target)
