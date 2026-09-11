@@ -1,14 +1,14 @@
-Python's exception types are x's error KINDS.
+Python's exception types are x's error TAGS.
 
-`Err` already carries a kind symbol, a message and a data alist, and every raise
-in this runtime already picked a kind — `(lit index)` for a bad subscript,
-`(lit key)` for a missing dict key, `(lit type)` for a bad operand. Those kinds
+`Err` already carries a tag symbol, a message and a data alist, and every raise
+in this runtime already picked a tag — `(lit index)` for a bad subscript,
+`(lit key)` for a missing dict key, `(lit type)` for a bad operand. Those tags
 were chosen long before there was any way to catch them, and they turn out to be
 exactly the discrimination `except` needs. So every error this runtime had ever
 raised became catchable the moment `try` could parse.
 
 The builtin exceptions are now real classes in Python's own shape, and matching
-walks the base chain — see 19-exception-classes. A kind names the class it would
+walks the base chain — see 19-exception-classes. A tag names the class it would
 have been, and from there a raise from Python source and a raise from this
 runtime are matched identically.
 

@@ -212,12 +212,12 @@
 
 ; THE COMPLEX BRANCH OF THE FOUR SEAMS.  A complex beside a non-number is a
 ; TypeError here, not the tower's promotion error -- that one is x's
-; teaching raise (#584) and its kind is not `type`, so `except TypeError`
+; teaching raise (#584) and its tag is not `type`, so `except TypeError`
 ; never saw it and 1j + [] killed the program.  And a bigint beside a
 ; complex is FLOATED first, as Python does, because the tower declares no
 ; COMPLEX x BIGINT promotion.  Only the complex case pays: the seams reach
 ; here after two handle compares, and every other pairing the tower already
-; refuses in a kind Python recognises.
+; refuses with a tag Python recognises.
 (def %py-cx-arith
   (fn (_ a0 b0 op code)
     (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
@@ -310,7 +310,7 @@
 ; differ between true and floor division.
 ;
 ; These raise an Err rather than building an instance, like every other raise
-; this runtime makes.  The kind is what `except ZeroDivisionError` matches on;
+; this runtime makes.  The tag is what `except ZeroDivisionError` matches on;
 ; see the exception section for why both shapes are caught the same way.
 (def %py-div
   (fn (_ a0 b0)
@@ -3162,12 +3162,12 @@
 ; matching walks the base chain.  `Exception` is no longer special -- it is just
 ; the root every other one reaches.
 ;
-; TWO KINDS OF RAISED VALUE ARRIVE HERE.  A `raise` in Python source produces a
+; TWO SHAPES OF RAISED VALUE ARRIVE HERE.  A `raise` in Python source produces a
 ; PY-OBJ instance.  Everything this runtime raises itself -- a bad subscript, a
-; missing key -- produces an Err carrying a kind symbol, because those raises
+; missing key -- produces an Err carrying a tag symbol, because those raises
 ; predate classes by a long way and rewriting them would gain nothing.  The
-; kind table below is the bridge: an Err's kind names the class it would have
-; been, and from there both kinds of value match identically.
+; tag table below is the bridge: an Err's tag names the class it would have
+; been, and from there both shapes of value match identically.
 
 ; EVERY CLASS DESCENDS FROM object, and until now nothing here said so:
 ; `class C(object)` named an unbound global, which this runtime binds to a
@@ -3260,11 +3260,11 @@
 (def %py-exc-IndentationError (%py-exc-new "IndentationError" %py-exc-SyntaxError))
 (def %py-exc-UnicodeError    (%py-exc-new "UnicodeError"    %py-exc-ValueError))
 
-; An Err's kind names the class it would have been.  A kind with no row -- one
+; An Err's tag names the class it would have been.  A tag with no row -- one
 ; raised by the platform rather than by this runtime -- answers Exception, so
 ; `except Exception` still catches it rather than letting it through a handler
 ; that looks like it should have caught it.
-(def %py-kind-classes
+(def %py-tag-classes
   (list
     (pair (lit type)          %py-exc-TypeError)
     (pair (lit value)         %py-exc-ValueError)
@@ -3277,7 +3277,7 @@
     (pair (lit state)         %py-exc-RuntimeError)
     (pair (lit import)        %py-exc-ImportError)))
 
-(def %py-kind-class
+(def %py-tag-class
   (fn (self k rows)
     (if (null? rows)
       %py-exc-Exception
@@ -3285,12 +3285,21 @@
         (rest (first rows))
         (self k (rest rows))))))
 
+; The platform's door to an error's tag.  x-lang spells it (Err tag e) from
+; the release after v0.13.0; v0.13.0 -- the release lang.xon declares --
+; spelled it (Err kind-of e).  Probed once at load, so the bundle runs on
+; both; the old spelling goes when the pin moves past it.
+(def %py-err-tag
+  (guard (_ (fn (_ e) (Err kind-of e)))
+    (%seq (Err tag "probe")
+          (fn (_ e) (Err tag e)))))
+
 ; The class of whatever was raised, whichever of the two shapes it is.
 (def %py-exc-class-of
   (fn (_ e)
     (if (%py-obj-is e)
       (%py-obj-class e)
-      (%py-kind-class (Err kind-of e) %py-kind-classes))))
+      (%py-tag-class (%py-err-tag e) %py-tag-classes))))
 
 (def %py-subclass?
   (fn (self c target)
@@ -3693,7 +3702,7 @@
 
 ; the exception as Python hands it to __exit__: an instance, whether it was
 ; raised from Python source (already one) or by this runtime (an Err, whose
-; kind names the class it would have been -- the same bridge the except
+; tag names the class it would have been -- the same bridge the except
 ; matcher walks, and Err carries its text as the SUBJECT).
 (def %py-exc-instance-of
   (fn (_ e)
