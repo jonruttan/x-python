@@ -46,7 +46,7 @@
 (import python/util)
 
 (provide python/types
-  %py-str %py-str-new %py-str-is %py-str-cps %py-str-of-x
+  %py-text %py-str-new %py-str-is %py-str-cps %py-str-of-x
   %py-bytes %py-bytes-new %py-bytes-of-str %py-bytes-is %py-bytes-str
   %py-bytes-list %py-bytes-only?
   %py-barr %py-barr-new %py-barr-of-str %py-barr-is %py-barr-set!
@@ -557,12 +557,17 @@
 ;
 ; The payload is the list.  There is no cell: a str is immutable, so unlike
 ; bytearray nothing here has to be visible through a second name.
-(def %py-str ())
-(def %py-str-new (fn (_ cps) (%make-instance %py-str cps)))
-(def %py-str-is (fn (_ v) (%type? v %py-str)))
+; THE TYPE IS %py-text, NOT %py-str, and the name is load-bearing: %py-str is
+; already the str() builtin in python/runtime.x, which loads after this file
+; and would quietly re-def the type out from under every instance -- which it
+; did, until the predicate started answering #f for a value made two lines
+; earlier.
+(def %py-text ())
+(def %py-str-new (fn (_ cps) (%make-instance %py-text cps)))
+(def %py-str-is (fn (_ v) (%type? v %py-text)))
 (def %py-str-cps (fn (_ v) (first v)))
-(def %py-str-of-x (fn (_ s) (%make-instance %py-str (%ps-of-x s))))
-(set! %py-str
+(def %py-str-of-x (fn (_ s) (%make-instance %py-text (%ps-of-x s))))
+(set! %py-text
   (%make-type
     "PY-STR"
     (list

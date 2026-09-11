@@ -48,6 +48,8 @@
 (import python/util)
 (import python/tokens)
 (import python/indent)
+(import python/bytes)
+(import python/str)
 (import python/runtime)
 
 (provide python/parse python-parse python-parse-expr)
@@ -420,8 +422,9 @@
     (if (if (null? toks) #f (eq? (%py-tag (first toks)) tag))
       (self tag (%py-lit-join acc (%py-val (first toks))) (rest toks))
       (pair acc toks))))
-(def %py-lit-join
-  (fn (_ a b) (if (str? a) (Str8 append a b) (%py-append a b))))
+; BOTH LITERAL KINDS ARE LISTS NOW -- a bytes literal's bytes, a str
+; literal's utf-8 -- so adjacency is one join.
+(def %py-lit-join (fn (_ a b) (%py-append a b)))
 
 (set! %py-postfix
   (fn (_ toks)
@@ -1022,8 +1025,16 @@
         (match
           ((eq? (%py-tag t) (lit tok-number))
             (pair (%py-num (%py-val t) (%py-tok-variant t)) (rest toks)))
+          ; A str LITERAL'S CODE POINTS ARE DECIDED HERE, once, at parse
+          ; time: the tokenizer hands over the utf-8 (it cannot reach
+          ; python/str.x, which imports it), and the emitted form is the
+          ; code point list itself rather than a decode the evaluator would
+          ; repeat on every evaluation.
           ((eq? (%py-tag t) (lit tok-string))
-            (%py-adjacent (lit tok-string) (%py-val t) (rest toks)))
+            (let ((r (%py-adjacent (lit tok-string) (%py-val t) (rest toks))))
+              (pair
+                (list (lit %py-str-new) (pair (lit list) (%ps-decode (first r) ())))
+                (rest r))))
           ; THE VALUE IS A BYTE LIST, so it is emitted as one: a (list ...)
           ; form the evaluator builds, not a datum standing where a form
           ; belongs.

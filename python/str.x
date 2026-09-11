@@ -45,7 +45,7 @@
 (import python/bytes)
 
 (provide python/str
-  %ps-of-x %ps->x %ps-nul? %ps-encode %ps-decode %ps-repr
+  %ps-of-x %ps->x %ps-nul? %ps-encode %ps-enc1 %ps-decode %ps-repr
   %ps-upper %ps-lower %ps-swapcase %ps-capitalize %ps-title
   %ps-isspace %ps-isalpha %ps-isdigit %ps-isalnum %ps-isupper %ps-islower)
 

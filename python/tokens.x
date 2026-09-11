@@ -49,7 +49,8 @@
 (provide python/tokens
   python-tokenize %py-base %py-keywords
   mk-tok-name mk-tok-kw mk-tok-number mk-tok-string mk-tok-op mk-tok-newline
-  mk-tok-bytes mk-tok-fstring mk-tok-group mk-tok-block %py-unescape-bytes)
+  mk-tok-bytes mk-tok-fstring mk-tok-group mk-tok-block
+  %py-unescape-bytes %py-unescape-cps)
 
 ; (Base make-tok) is the isolated, type-free base -- 2024's make-token-base.
 (import x/reader/indent)
@@ -789,26 +790,11 @@
 ; drops a NUL and everything after it in the same literal.  b'\x00\x01' was
 ; b'' and 'a\x00b' was 'ab', with nothing said.  docs/nul-and-the-string-layer.md
 ; is why that is the end of it and not the start of a fix.
-(def %py-nul-error (pair () ()))
-(def %py-nul-reset! (fn (_) (%set-first! %py-nul-error ())))
-; Answers the empty string, so the decoder's shape is unchanged; `let` rather
-; than %seq because %py-esc-at is reached from a read handler and every form
-; it already uses is one the reader has proved safe.
-(def %py-nul-esc (fn (_) (let ((noted (%set-first! %py-nul-error #t))) "")))
-; One escape's text: the byte a bytes literal names, the code point a str
-; literal names.
-;
-; A ZERO IS WHERE THE TWO PART COMPANY NOW.  A bytes literal carries a BYTE
-; LIST out of here (python/bytes.x says why), so `b'\x00'` hands back the
-; one-element list (0) -- there is no text that carries it, which is the
-; whole reason this used to refuse.  A str literal still parks the note,
-; because a str is still a C string; that is the seam the bytes arc moved
-; rather than removed, and str's own arc is where it goes next.
 (def %py-esc-cp
   (fn (_ v raw?)
-    (if raw?
-      (if (= v 0) (list 0) (%py-byte->str v))
-      (if (= v 0) (%py-nul-esc) (%py-cp->str v)))))
+    (if (= v 0)
+      (list 0)
+      (if raw? (%py-byte->str v) (%py-cp->str v)))))
 
 ; raw? decodes \xhh and octal escapes to raw bytes (bytes literals) rather
 ; than code points (str literals)
@@ -816,15 +802,22 @@
 ; same %py-esc-at underneath it; what differs is the accumulator, which is a
 ; list of ints and can therefore hold a zero.  A piece comes back as text
 ; unless it IS a zero, in which case it comes back as a byte list already.
-(def %py-unescape-bytes
-  (fn (_ s)
+(def %py-unescape-bytes (fn (_ s) (%py-unescape-u8 s #t)))
+; A str LITERAL LEAVES AS UTF-8 TOO, and the parser decodes it to code points
+; once, at parse time.  Doing it here would need python/str.x, which imports
+; this file; doing it at run time would decode the same literal on every
+; evaluation.  The bytes are the same bytes either way -- what differs is only
+; what the parser makes of them.
+(def %py-unescape-cps (fn (_ s) (%py-unescape-u8 s #f)))
+(def %py-unescape-u8
+  (fn (_ s raw?)
     (def len (Str8 length s))
     (def %go
       (fn (self i acc)
         (if (>= i len)
           (List reverse acc)
           (if (if (= (%py-char->int (Str8 ref i s)) 92) (< (+ i 1) len) #f)
-            (let ((r (%py-esc-at s i len #t)))
+            (let ((r (%py-esc-at s i len raw?)))
               (self (first r) (%py-piece-onto (rest r) acc)))
             (self (+ i 1) (pair (%py-char->int (Str8 ref i s)) acc))))))
     (%go 0 ())))
@@ -896,7 +889,7 @@
     (def len (Str8 length raw))
     ; Drop the opening and closing quote; an unterminated string never reaches
     ; here, because its state never accepted.
-    (mk-tok-string (%py-unescape (Str8 sub 1 (- len 2) raw) #f))))
+    (mk-tok-string (%py-unescape-cps (Str8 sub 1 (- len 2) raw)))))
 
 (def %py-t-sq
   (list
@@ -970,8 +963,8 @@
     (match
       ((if (= p 98) #t (= p 66)) (mk-tok-bytes (%py-unescape-bytes body)))
       ((if (= p 102) #t (= p 70)) (mk-tok-fstring (%py-unescape body #f)))
-      ((if (= p 114) #t (= p 82)) (mk-tok-string body))
-      (#t (mk-tok-string (%py-unescape body #f))))))
+      ((if (= p 114) #t (= p 82)) (mk-tok-string (%pb-of-str body)))
+      (#t (mk-tok-string (%py-unescape-cps body))))))
 
 (def %py-t-psq
   (list
@@ -1032,7 +1025,7 @@
   (fn (_ . args)
     (def raw (%buffer-token (first args)))
     (def len (Str8 length raw))
-    (mk-tok-string (%py-unescape (%py-crlf->lf (Str8 sub 3 (- len 6) raw)) #f))))
+    (mk-tok-string (%py-unescape-cps (%py-crlf->lf (Str8 sub 3 (- len 6) raw))))))
 
 (def %py-t-tsq
   (list
@@ -1538,20 +1531,16 @@
   (fn (_ input)
     (%py-jit-tick! (Str8 length input))
     (%py-ind-reset!)
-    (%py-nul-reset!)
     (let ((toks (%py-token-read-string (first %py-active-raw)
                   (Str8 append input " "))))
-      ; Reading is over and x is driving again, so this is where an indentation
-      ; error can finally be raised -- and, for the same reason and out of the
-      ; same kind of parked note, a NUL named by an escape.  Indentation goes
-      ; first: it is a fact about the program's shape, and a file with both
-      ; problems has the structural one to fix before the literal.
+      ; Reading is over and x is driving again, so this is where an
+      ; indentation error can finally be raised.  A NUL named by an escape
+      ; used to be parked and raised here too; both literal kinds carry one
+      ; now, so there is nothing left to park.
       (if (not (null? (first %py-ind-error)))
         (Err raise (lit indent)
           "unindent does not match any outer indentation level" ())
-        (if (null? (first %py-nul-error))
-          toks
-          (Err raise (lit value) "a NUL byte is not representable here" ()))))))
+        toks))))
 
 ; --- PY-OPEN / PY-CLOSE: brackets are READ AS GROUPS -------------------------
 ;
