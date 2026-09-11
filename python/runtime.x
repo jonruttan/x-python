@@ -42,7 +42,7 @@
   %py-Ellipsis %py-dir %py-cls-bytearray
   %py-raise %py-exc-match %py-exc-match-any
   %py-mkclass %py-setattr %py-super
-  %py-str %py-repr-of %py-mklist-of %py-hasattr
+  %py-str %py-repr-of %py-repr-builtin %py-mklist-of %py-hasattr
   %py-cls-type %py-cls-int %py-cls-float %py-cls-bool %py-cls-str
   %py-cls-list %py-cls-dict %py-cls-tuple %py-cls-NoneType %py-cls-set %py-cls-frozenset
   %py-type-of %py-isinstance %py-truthy %py-slice %py-defg
@@ -277,19 +277,19 @@
 
 ; --- the str seams that are not the method table -----------------------------
 ;
-; PRINTING REFUSES A NUL, and that is a decision rather than an oversight.
-; The value carries one -- len, indexing, slicing, comparison and repr all
-; answer for it -- but the spec harness truncates captured stdout at the first
-; zero byte, so a `print` that emitted it could not be pinned by any test.
-; Shipping behaviour no spec can hold is worse than a refusal that says so,
-; and repr() escapes the byte as \x00 either way, so this loses only a bare
-; print of a string that contains one.  Filed: the harness is the fix.
-(def %py-str-display
-  (fn (_ l)
-    (if (%pb-nul? l)
-      (Err raise (lit value)
-        "a NUL byte is not representable here" ())
-      (display (%pb->str (%ps-encode l ()))))))
+; PRINTING A NUL WORKS, and the refusal that used to stand here is worth
+; remembering rather than just deleting.  The value always carried the byte --
+; len, indexing, slicing, comparison and repr all answered for it -- but the
+; shared spec harness truncated captured stdout at the first zero byte, so a
+; `print` that emitted one could not be pinned by any test, and shipping
+; behaviour no spec can hold was the worse of the two trades.
+;
+; The harness was the fix, and it landed: a captured NUL now reaches the
+; comparison as the literal text `<<NUL>>`, so the behaviour is assertable and
+; 88-str-nul.spec.md asserts it.  %ps-write is the door -- see "the writer" in
+; python/str.x for why print cannot simply `display` a string like everything
+; else does.
+(def %py-str-display (fn (_ l) (%ps-write l)))
 
 ; ONE CHARACTER IS A str OF ONE CODE POINT, which is what iterating a str
 ; yields -- not an int, the way iterating a bytes does.
@@ -2010,8 +2010,12 @@
       ((Str8 =? name "islower") (fn (_ . a) (%pb-islower l)))
       ; ENCODE IS THE CODEC, and the one place str and bytes meet by design.
       ((Str8 =? name "encode")  (fn (_ . a) (%py-bytes-new (%ps-encode l ()))))
+      ; str.format is the BRACE engine (%py-strformat), not the percent one:
+      ; `"{}".format(x)` and `"%s" % x` are different grammars that happen to
+      ; share a spec scanner.  Its template is a platform string and its args
+      ; are a plain list, so only the template crosses over.
       ((Str8 =? name "format")
-        (fn (_ . a) (%py-str-of-x (%py-format (%ps->x l) (%py-tuple-new a)))))
+        (fn (_ . a) (%py-str-of-x (%py-strformat (%ps->x l) a))))
       (#t
         (Err raise (lit attribute)
           (Str8 append (Str8 append "'str' object has no attribute '" name) "'") ())))))
@@ -2031,9 +2035,12 @@
         (Err raise (lit type) "an integer is required" ()))
       ((if (< n 0) #t (> n 1114111))
         (Err raise (lit value) "chr() arg not in range(0x110000)" ()))
-      ((= n 0)
-        (Err raise (lit value) "a NUL byte is not representable here" ()))
-      (#t (%py-list->string (list (%py-int->char n)))))))
+      ; A CODE POINT IS THE INTEGER.  Nothing is encoded here and no character
+      ; is made: the carrier is a list of code points, so chr() is the list of
+      ; one.  That is also why zero needs no case of its own -- it is a code
+      ; point like any other, and the refusal that used to stand here went out
+      ; with the platform string this used to build.
+      (#t (%py-str-new (list n))))))
 ; ord() counts CODE POINTS, not bytes: chr(955) is a two-byte string that
 ; is one character, so the utf-8-aware Str class measures and indexes it.
 (def %py-ord
@@ -2424,8 +2431,17 @@
                       (Err raise (lit value) "Missing ']' in format string" ())
                       (let ((key (Str8 sub (+ j 1) (- close 1) name)))
                         (self (+ j close 1)
+                          ; {0[k]} INDEXES A PYTHON CONTAINER, so a string key
+                          ; crosses over first: the key is cut out of the
+                          ; template with Str8, and a dict's keys are strs --
+                          ; the platform string would match none of them and
+                          ; the lookup would raise KeyError on a key that is
+                          ; plainly there.  (An attribute tail, just above,
+                          ; wants the platform string and keeps it.)
                           (%py-index v
-                            (if (%py-fmt-digit? (%py-spec-code key 0)) (%py-int-of-str key) key)))))))))))
+                            (if (%py-fmt-digit? (%py-spec-code key 0))
+                              (%py-int-of-str key)
+                              (%py-str-of-x key))))))))))))
         (tail he base)))
     (def go
       (fn (self i acc)
@@ -3320,7 +3336,9 @@
                               "' object has no attribute '")
                             (Str8 append name "'"))
                           ())
-                        (ga obj name))))))
+                        ; __getattr__ is Python code and takes a str, not the
+                        ; platform string the attribute tables are keyed by.
+                        (ga obj (%py-str-of-x name)))))))
               (#t (%py-bind-method m obj)))))))))
 
 ; obj(...) is __call__, through the PY-OBJ type's call handler.
@@ -3734,20 +3752,23 @@
       ((Str8 =? name "builtins") (%py-module-new "builtins" ()))
       (#t ()))))
 
+; THE NAME HERE IS THE PLATFORM'S STRING, not a str.  This is the INTERNAL
+; door: the parser calls it with a name it read out of the source, and the
+; module table is keyed the same way.  `__import__()` is the Python-facing
+; door, and it is the one that crosses a str over -- putting the check here
+; instead would reject every `import x` the parser ever emitted.
 (def %py-import
   (fn (_ name)
-    (if (not (%py-str-is name))
-      (Err raise (lit type) "module name must be a string" ())
-      (if (= (Str8 length name) 0)
-        (Err raise (lit value) "empty module name" ())
-        (let ((have (%py-module-find name (first %py-modules))))
-          (if (not (null? have))
-            have
-            (let ((built (%py-module-build name)))
-              (if (null? built)
-                (Err raise (lit import)
-                  (Str8 append (Str8 append "No module named '" name) "'") ())
-                (%py-module-put! name built)))))))))
+    (if (= (Str8 length name) 0)
+      (Err raise (lit value) "empty module name" ())
+      (let ((have (%py-module-find name (first %py-modules))))
+        (if (not (null? have))
+          have
+          (let ((built (%py-module-build name)))
+            (if (null? built)
+              (Err raise (lit import)
+                (Str8 append (Str8 append "No module named '" name) "'") ())
+              (%py-module-put! name built))))))))
 
 ; `from X import a, b` and `from X import *` both read attributes off the
 ; module the same way an ordinary program would.
@@ -3756,7 +3777,10 @@
     (if (null? a)
       (Err raise (lit type)
         "__import__() missing required argument 'name'" ())
-      (%py-import (first a)))))
+      (let ((n (first a)))
+        (if (not (%py-str-is n))
+          (Err raise (lit type) "module name must be a string" ())
+          (%py-import (%ps->x (%py-str-cps n))))))))
 
 (def %py-import-from
   (fn (_ name attr)
@@ -4458,10 +4482,14 @@
   (fn (self acc rows)
     (if (null? rows)
       acc
+      ; A `**dict` KEY IS A str AND A KEYWORD NAME IS THE PLATFORM'S STRING:
+      ; the row comes out of a Python dict, the keyword table is keyed the way
+      ; every other name here is, so the key crosses over on the way in.
       (let ((k (first (first rows))))
         (if (not (%py-str-is k))
           (Err raise (lit type) "keywords must be strings" ())
-          (self (%py-attr-put acc k (rest (first rows))) (rest rows)))))))
+          (self (%py-attr-put acc (%ps->x (%py-str-cps k)) (rest (first rows)))
+                (rest rows)))))))
 
 (def %py-kwcall
   (fn (_ f pos kws)
@@ -4516,7 +4544,9 @@
               (%py-none-holes (%py-kw-args (list (Str8 append "list." name) names 0 #f) pos kws))))))
       ((%py-str-is obj)
         (if (Str8 =? name "format")
-          (%py-strformat-kw obj pos kws)
+          ; the template crosses over and the result crosses back -- the brace
+          ; engine works in platform strings from end to end
+          (%py-str-of-x (%py-strformat-kw (%ps->x (%py-str-cps obj)) pos kws))
           (let ((names (%py-str-kw-names name)))
             (if (null? names)
               (Err raise (lit type)
@@ -4706,6 +4736,13 @@
       ((eq? v %py-Ellipsis) "Ellipsis")
       (#t (%py-write-to-str v)))))
 
+; repr() the BUILTIN, against %py-repr-of the internal one -- the same split
+; str() makes just above, and for the same reason: every other caller of
+; %py-repr-of is appending its answer to a platform string.  A repr never
+; carries a NUL out (%py-str-repr writes one as \x00), so this crossing is
+; always safe.
+(def %py-repr-builtin (fn (_ v) (%py-str-of-x (%py-repr-of v))))
+
 ; str(o) and repr(o) for an object: __str__ (falling back to __repr__) and
 ; __repr__, each answering a string; an exception instance's str is its
 ; message; the default is the <qualname object> form.
@@ -4788,32 +4825,42 @@
           (%seq (%set-first! %py-ids (pair (pair v n) (first %py-ids))) n))))))
 
 ; getattr's default catches ONLY AttributeError, as in Python
+;
+; AN ATTRIBUTE NAME IS A PLATFORM STRING INSIDE, a Python str outside.  The
+; attribute tables are keyed by the platform's strings and compared with
+; `Str8 =?`, so a name arriving from Python code has to cross over -- which is
+; what this returns.  Its callers must USE that return: it reads like a pure
+; assertion (the `!`), and it was one before str became a code point list, but
+; passing the ORIGINAL value on from here hands `Str8 =?` a PY-TEXT and the
+; lookup dies with "not a string" instead of answering.
 (def %py-attr-name!
   (fn (_ n)
     (if (%py-str-is n) (%ps->x (%py-str-cps n))
       (Err raise (lit type) "attribute name must be string" ()))))
 (def %py-getattr3
-  (fn (_ o n . d)
-    (%py-attr-name! n)
+  (fn (_ o n0 . d)
+    (def n (%py-attr-name! n0))
     (if (null? d)
       (%py-getattr o n)
       (guard (e (if (%py-exc-match e %py-exc-AttributeError) (first d) (error e)))
         (%py-getattr o n)))))
 (def %py-setattr3
-  (fn (_ o n v)
-    (%py-attr-name! n)
+  (fn (_ o n0 v)
+    (def n (%py-attr-name! n0))
     (if (%py-obj-is o)
       (%py-setattr o n v)
       (Err raise (lit attribute) "object has no settable attributes" ()))))
 (def %py-delattr
-  (fn (_ o n)
-    (%py-attr-name! n)
+  (fn (_ o n0)
+    (def n (%py-attr-name! n0))
     (if (not (%py-obj-is o))
       (Err raise (lit attribute) "object has no deletable attributes" ())
-      ; __delattr__ is the same hook on `del obj.x`
+      ; __delattr__ is the same hook on `del obj.x`, and it is PYTHON code:
+      ; it takes the name as a str, not as the platform string the tables below
+      ; are keyed by.
       (let ((m (%py-dunder o "__delattr__")))
         (if (not (null? m))
-          (%seq (m n) ())
+          (%seq (m n0) ())
           (let ((d (%py-method-find (%py-obj-class o) n)))
             (if (%py-desc-delete? d)
               (%seq ((%py-dunder d "__delete__") o) ())
@@ -5144,8 +5191,8 @@
 ; raise?", not a separate lookup, so anything reachable by attribute access is
 ; reachable here and the two can never disagree.
 (def %py-hasattr
-  (fn (_ o name)
-    (%py-attr-name! name)
+  (fn (_ o name0)
+    (def name (%py-attr-name! name0))
     (guard (e (if (%py-exc-match e %py-exc-AttributeError) #f (error e)))
       (%seq (%py-getattr o name) #t))))
 
@@ -5418,8 +5465,19 @@
 (def %py-bool-ctor
   (fn (_ . a) (if (null? a) #f (%py-truthy (first a)))))
 
+; str() IS THE PYTHON-FACING DOOR and answers a str; %py-str under it is the
+; INTERNAL one and answers a platform string, which is what its nineteen other
+; callers want (they are building error messages with `Str8 append`).  Only
+; this door crosses back.
+;
+; A str ARGUMENT IS RETURNED AS IT CAME, never round-tripped: str(s) on a
+; NUL-bearing s would otherwise go out through a platform string and refuse.
 (def %py-str-ctor
-  (fn (_ . a) (if (null? a) "" (%py-str (first a)))))
+  (fn (_ . a)
+    (if (null? a)
+      (%py-str-new ())
+      (let ((v (first a)))
+        (if (%py-str-is v) v (%py-str-of-x (%py-str v)))))))
 
 (def %py-list-ctor
   (fn (_ . a) (if (null? a) (%py-list-new ()) (%py-mklist-of (first a)))))

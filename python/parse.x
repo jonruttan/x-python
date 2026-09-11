@@ -1303,7 +1303,7 @@
         ; str and list are now the CLASS OBJECTS -- calling one still converts,
         ; through the %ctor entry, and `type(x) == str` is an identity compare.
         (list "str"     (lit %py-cls-str))
-        (list "repr"    (lit %py-repr-of))
+        (list "repr"    (lit %py-repr-builtin))
         (list "list"    (lit %py-cls-list))
         (list "hasattr" (lit %py-hasattr))
         (list "object"  (lit %py-cls-object))

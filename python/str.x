@@ -38,14 +38,24 @@
 ;
 ; Three things still speak the platform's string: the READER (a literal
 ; arrives as one), the WRITER (display takes one), and this runtime's own
-; internals (an attribute name, an error message).  %ps-of-x and %ps->x are
-; those doors, and %ps->x REFUSES a NUL rather than truncating -- the same
-; rule python/bytes.x's %pb->str follows, and for the same reason.
+; internals (an attribute name, an error message).  %ps-of-x, %ps-write and
+; %ps->x are those doors.
+;
+; Two of them cannot carry a zero byte and say so: %ps->x REFUSES rather than
+; truncating -- the same rule python/bytes.x's %pb->str follows, and for the
+; same reason -- because what it returns IS a platform string, and an attribute
+; name or an error message that stopped early would be worse than an error.
+;
+; The WRITER is the one that can, because writing is the one direction where a
+; LENGTH can travel beside the bytes.  See "the writer" below.
 
 (import python/bytes)
+; (File write) -- the only door out of here that takes a length, and so the
+; only one a NUL can leave through.  See "the writer".
+(import x/sys/file)
 
 (provide python/str
-  %ps-of-x %ps->x %ps-nul? %ps-encode %ps-enc1 %ps-decode %ps-repr
+  %ps-of-x %ps->x %ps-write %ps-nul? %ps-encode %ps-enc1 %ps-decode %ps-repr
   %ps-upper %ps-lower %ps-swapcase %ps-capitalize %ps-title
   %ps-isspace %ps-isalpha %ps-isdigit %ps-isalnum %ps-isupper %ps-islower)
 
@@ -114,3 +124,52 @@
     (if (%ps-nul? l)
       (Err raise (lit value) "a NUL byte is not representable here" ())
       (%pb->str (%ps-encode l ())))))
+
+; --- the writer --------------------------------------------------------------
+;
+; A NUL-BEARING str PRINTS, and this is the door that lets it.
+;
+; Every other way out stops at the zero byte, because every other way out hands
+; the platform a C string: `display` of a string stops there, %ps->x refuses
+; rather than reach it, and a CHARACTER is no escape either -- (display (int
+; ->char 0)) writes nothing at all, measured, not assumed.
+;
+; The way out is the platform's own, the one x/codec/zlib.x takes for binary:
+; copy the bytes into a (str make) region and hand the kernel the LENGTH.  That
+; is the whole trick -- a length is the one thing that can travel beside a
+; NUL-blind buffer, which is why (File write) asks for one.  The region's own
+; `str byte-len` would answer 1 here, so the length is carried and never read
+; back.
+;
+; `display` and `File write` interleave in program order -- checked, because if
+; the engine buffered one and not the other a print would come out shuffled --
+; so a string taking this path still lands between the sep and end around it.
+;
+; THE FAST PATH IS STILL display.  A str with no zero byte -- which is every
+; str in almost every program -- is written exactly as it was before: no
+; region, no syscall, nothing new to pay for.
+(def %ps-write
+  (fn (_ l)
+    (if (%ps-nul? l)
+      (%ps-write-bytes (%ps-encode l ()))
+      (display (%pb->str (%ps-encode l ()))))))
+
+; The region is GC-owned and dies with the call.  An empty list writes nothing:
+; (str make 0) is not a buffer, and there is nothing to put in it.
+(def %ps-write-bytes
+  (fn (_ bs)
+    (let ((n (List length bs)))
+      (unless (= n 0)
+        (let ((region (%ps-make n)))
+          (%seq (%ps-fill (%ps->ptr region) bs 0)
+                (File write 1 region n)))))))
+
+(def %ps-fill
+  (fn (self p bs i)
+    (unless (null? bs)
+      (%seq (%ps-pset p i (first bs) 1)
+            (self p (rest bs) (+ i 1))))))
+
+(def %ps-make (prim-ref (lit str) (lit make)))
+(def %ps->ptr (prim-ref (lit str) (lit ->ptr)))
+(def %ps-pset (prim-ref (lit ptr) (lit set!)))

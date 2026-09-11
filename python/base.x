@@ -48,6 +48,7 @@
 (import python/tokens)
 (import python/indent)
 (import python/types)
+(import python/str)
 (import python/runtime)
 (import python/parse)
 
@@ -105,14 +106,21 @@
 
 ; Source to forms.  `eval` mode is ONE EXPRESSION -- python-parse-expr answers
 ; (form . rest) and the rest is the newline that ended it.
+; THE SOURCE ARRIVES AS A str AND THE LEXER TAKES A PLATFORM STRING, so this
+; is a crossing like any other: `str?` asks the platform whether it holds one
+; of ITS strings, which a Python str is no longer, so the test is %py-str-is
+; and the value has to come over before python-lex sees it.
 (def %py-code-of
   (fn (_ src mode)
     (match
       ((%py-code-is src) (%py-code-forms src))
-      ((not (str? src))
+      ((not (%py-str-is src))
         (Err raise (lit type) "eval()/exec() wants a string or a code object" ()))
-      ((Str8 =? mode "eval") (list (first (python-parse-expr (python-lex src)))))
-      (#t (python-parse src)))))
+      (#t
+        (let ((x (%ps->x (%py-str-cps src))))
+          (if (Str8 =? mode "eval")
+            (list (first (python-parse-expr (python-lex x))))
+            (python-parse x)))))))
 
 (def %py-code-run
   (fn (self forms last)
