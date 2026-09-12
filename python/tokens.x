@@ -267,7 +267,7 @@
 ; mode is Python's IndentationError, which is the one place Logo, x-sweet and
 ; this bundle genuinely disagree -- and the first error it raises is parked
 ; here for python-tokenize to re-raise once reading is over and x is driving
-; again.  The error object is kept whole, so the kind and message are the ones
+; again.  The error object is kept whole, so the tag and message are the ones
 ; Indent chose.
 (def %py-ind-error (pair () ()))
 

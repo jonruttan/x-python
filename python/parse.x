@@ -1197,6 +1197,16 @@
 ; an ordinary character in a format template -- the fill in `{0:'>5}`, part of
 ; the key in `{a[it's]}` -- so this must NOT read string literals the way the
 ; f-string expression scanner does.
+; `:` opens a format spec; `!` opens a conversion, but only when `=` does not
+; follow -- {a!=b} is a comparison, not a conversion of `a`.  One rule, read by
+; both scanners below.
+(def %py-fs-marker?
+  (fn (_ s i c)
+    (if (= c 58) #t
+      (if (= c 33)
+        (if (< (+ i 1) (Str8 length s)) (not (= (%py-fs-code s (+ i 1)) 61)) #t)
+        #f))))
+
 (def %py-fs-split
   (fn (self s i depth)
     (if (>= i (Str8 length s))
@@ -1205,15 +1215,27 @@
         (match
           ((%py-fs-open? c) (self s (+ i 1) (+ depth 1)))
           ((%py-fs-shut? c) (self s (+ i 1) (- depth 1)))
-          ((if (= depth 0)
-                  (if (= c 58) #t
-                    ; `!` opens a conversion only when `=` does not follow:
-                    ; {a!=b} is a comparison
-                    (if (= c 33)
-                      (if (< (+ i 1) (Str8 length s)) (not (= (%py-fs-code s (+ i 1)) 61)) #t)
-                      #f))
-                  #f)
-            i)
+          ((if (= depth 0) (%py-fs-marker? s i c) #f) i)
+          (#t (self s (+ i 1) depth)))))))
+
+; The same question for an F-STRING field, where what precedes the marker is an
+; EXPRESSION and a quote opens a string: `f"{'a:b'}"` is one string with a
+; colon in it, not a value with a format spec.  `f"{'a:b':>8}"` is both, and
+; only a scanner that steps over the literal finds the second colon.
+;
+; str.format keeps %py-fs-split above for the reason it keeps its own closer
+; scanner: a quote in a template is an ordinary character -- the fill in
+; `{0:'>5}`, part of the key in `{a[it's]}`.
+(def %py-fs-expr-split
+  (fn (self s i depth)
+    (if (>= i (Str8 length s))
+      ()
+      (let ((c (%py-fs-code s i)))
+        (match
+          ((%py-fs-quote? c) (self s (%py-fs-string-end s (+ i 1) c) depth))
+          ((%py-fs-open? c) (self s (+ i 1) (+ depth 1)))
+          ((%py-fs-shut? c) (self s (+ i 1) (- depth 1)))
+          ((if (= depth 0) (%py-fs-marker? s i c) #f) i)
           (#t (self s (+ i 1) depth)))))))
 
 ; {x=} DEBUG FIELDS: an expression ending in `=` (not ==, !=, <=, >=) prints
@@ -1258,7 +1280,7 @@
 (def %py-fstring-field
   (fn (_ field)
     (def n (Str8 length field))
-    (def at (%py-fs-split field 0 0))
+    (def at (%py-fs-expr-split field 0 0))
     (def expr-s0 (if (null? at) field (Str8 sub 0 at field)))
     (def dbg (%py-fs-debug-at expr-s0))
     (def expr-s (if (null? dbg) expr-s0 (Str8 sub 0 dbg expr-s0)))

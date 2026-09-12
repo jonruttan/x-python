@@ -9,9 +9,9 @@ common base MEANS, and a flat table has no way to say it.
 So the builtins are real class values in Python's own shape, `Exception` is no
 longer special, and a user-defined exception is caught by exactly the same code.
 
-Two kinds of raised value arrive at a handler. A `raise` in Python source makes
+Two shapes of raised value arrive at a handler. A `raise` in Python source makes
 an instance; everything this runtime raises itself makes an `Err` carrying a
-kind, because those raises predate classes by a long way. A kind names the class
+tag, because those raises predate classes by a long way. A tag names the class
 it would have been, and from there both match identically.
 
 ## the builtin hierarchy
