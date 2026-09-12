@@ -2180,6 +2180,14 @@
         (def align2 (if (if zero (null? align) #f) "=" align))
         (if (match
               ((%py-str-is v) #t)
+              ; ALREADY TEXT, AND ALREADY THE PLATFORM'S.  A conversion ran
+              ; ahead of this -- !r and !s in %py-fmtfield hand their answer on
+              ; as a platform string -- and without this arm it falls through to
+              ; the numeric branch below, where %py-num-kind is nil and the
+              ; complaint is "unsupported format string passed to
+              ; object.__format__" about a string.  `f'{x!r:>8}'` and
+              ; `'{!r:>8}'.format(x)` both land here.
+              ((str? v) #t)
               ((= tc 115) #t)
               ((%py-obj-is v) #t)
               ((null? v) #t)
