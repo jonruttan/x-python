@@ -1783,7 +1783,7 @@
       (#t
         (let ((sig (%py-sig-of obj)))
           (if (if (null? sig) #f (Str8 =? name "__name__"))
-            (first sig)
+            (%py-str-of-x (first sig))
             (Err raise (lit attribute)
               (Str8 append (Str8 append "object has no attribute '" name) "'")())))))))
 
@@ -1829,7 +1829,12 @@
     ; 'str' object has no attribute __name__ -- when what was asked was the
     ; name of the class itself, which `type(x).__name__` asks constantly.
     (match
-      ((Str8 =? name "__name__") (%py-class-name cls))
+      ; __name__ IS A str, like every other text a program can get at.  It
+      ; is the platform's string in the class record, and `type(x).__name__ ==
+      ; "Foo"` compared it against a str and answered False -- a wrong answer,
+      ; not an error, which is why it took a decorator spec and a descriptor
+      ; spec to notice.
+      ((Str8 =? name "__name__") (%py-str-of-x (%py-class-name cls)))
       ((Str8 =? name "__bases__") (%py-tuple-of-list (%py-class-bases cls)))
       ((Str8 =? name "__dict__") (%py-dict-new (%py-class-rows cls)))
       ; dict.fromkeys is a CLASSMETHOD: it answers a new dict, so it hangs
@@ -3538,7 +3543,7 @@
 (def %py-module-new
   (fn (_ name rows)
     (let ((m (%py-obj-new %py-cls-module)))
-      (%seq (%py-obj-set-attrs! m (pair (pair "__name__" name) rows)) m))))
+      (%seq (%py-obj-set-attrs! m (pair (pair "__name__" (%py-str-of-x name)) rows)) m))))
 
 ; The modules this runtime has, built once and remembered, so that `sys.modules`
 ; and repeated imports answer the same object.
@@ -4236,7 +4241,7 @@
             (if (if (null? a) #t (if (null? (rest a)) (null? (first a)) #f)) e (%py-exc-instance e a)))))
       ((Str8 =? name "close") (fn (_) (%py-gen-close g)))
       ((Str8 =? name "__iter__") (fn (_) g))
-      ((Str8 =? name "__name__") (%py-gen-name g))
+      ((Str8 =? name "__name__") (%py-str-of-x (%py-gen-name g)))
       (#t
         (Err raise (lit attribute)
           (Str8 append (Str8 append "'generator' object has no attribute '" name) "'") ())))))
@@ -4849,7 +4854,11 @@
               ((= c 10) "\\n")
               ((= c 13) "\\r")
               ((= c 9) "\\t")
-              ((< c 32) (Str8 append "\\x" (%py-hex2 c)))
+              ; DEL IS A CONTROL CHARACTER TOO, and the note above this function
+              ; always said so ("any other control character (and DEL) as
+              ; \xhh") -- the test just read `< 32` and let 0x7f through as
+              ; itself, which prints as nothing at all.
+              ((if (< c 32) #t (= c 127)) (Str8 append "\\x" (%py-hex2 c)))
               (#t (%pb->str (%ps-enc1 c))))))))))
 
 (def %py-repr-of
@@ -4912,7 +4921,13 @@
     (if (not (eq? (%py-num-kind (%py-boolnorm v)) (lit int)))
       (Err raise (lit type) "an integer is required" ())
       (let ((m (%py-fmt-base (%py-boolnorm v) base tbl)))
-        (Str8 append (if (first m) "-" "") (Str8 append pfx (rest m)))))))
+        ; bin/hex/oct ARE PYTHON-FACING and answer strs -- its only three
+        ; callers are those builtins.  `bin(b)[:20]` slices the result, and a
+        ; platform string is not a str, so the subscript fell past the string
+        ; arm into the mapping one and complained "unhashable type: 'slice'"
+        ; about a perfectly ordinary slice.
+        (%py-str-of-x
+          (Str8 append (if (first m) "-" "") (Str8 append pfx (rest m))))))))
 (def %py-bin (fn (_ v) (%py-based-str v 2 "01" "0b")))
 (def %py-hex (fn (_ v) (%py-based-str v 16 "0123456789abcdef" "0x")))
 (def %py-oct (fn (_ v) (%py-based-str v 8 "01234567" "0o")))

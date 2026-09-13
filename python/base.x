@@ -149,7 +149,12 @@
 ; ValueError, as it is in Python.
 (def %py-compile
   (%py-sig!
-    (fn (_ src file mode)
+    (fn (_ src file mode0)
+      ; THE MODE ARRIVES AS A str AND IS COMPARED WITH Str8, so it crosses over
+      ; first -- `compile(src, "<s>", "eval")` died with "Str8 =?: not a string"
+      ; before it could read its own argument.  %py-code-of takes the crossed
+      ; one too: it asks the same question of it.
+      (def mode (if (%py-str-is mode0) (%ps->x (%py-str-cps mode0)) mode0))
       (if (if (Str8 =? mode "exec") #t (if (Str8 =? mode "eval") #t (Str8 =? mode "single")))
         (%py-code-new mode (%py-code-of src mode))
         (Err raise (lit value)
