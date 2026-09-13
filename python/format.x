@@ -256,20 +256,20 @@
   (fn (_ conv v left plus space zero alt width prec bad)
     ; s and r: text, precision truncates, zero pads with spaces; c is the
     ; character of a code point, or a one-character string as itself
-    (if (if (= conv 115) #t (if (= conv 114) #t (= conv 99)))
-      (do
-        (def s0
-          (if (= conv 99)
-            (if (str? v)
-              (if (= (%py-len v) 1) v
-                (Err raise (lit type) "%c requires an int or a unicode char, not a string of length other than 1" ()))
-              (%py-chr v))
-            (if (= conv 115) (%py-str v) (%py-repr-of v))))
-        (def s (if (if (>= prec 0) (> (Str8 length s0) prec) #f)
-          (Str8 sub 0 prec s0) s0))
-        (%py-fmt-pad "" s width left #f))
-      ; d i u
-      (if (if (= conv 100) #t (if (= conv 105) #t (= conv 117)))
+    (match
+      ((match ((= conv 115) #t) ((= conv 114) #t) ((= conv 99) #t) (#t #f))
+        (do
+          (def s0
+            (if (= conv 99)
+              (if (str? v)
+                (if (= (%py-len v) 1) v
+                  (Err raise (lit type) "%c requires an int or a unicode char, not a string of length other than 1" ()))
+                (%py-chr v))
+              (if (= conv 115) (%py-str v) (%py-repr-of v))))
+          (def s (if (if (>= prec 0) (> (Str8 length s0) prec) #f)
+            (Str8 sub 0 prec s0) s0))
+          (%py-fmt-pad "" s width left #f)))
+      ((match ((= conv 100) #t) ((= conv 105) #t) ((= conv 117) #t) (#t #f))
         (do
           (def m (%py-fmt-int-mag (%py-fmt-int-of v)))
           (def body
@@ -277,53 +277,52 @@
               (Str8 append (%py-fmt-zeros (- prec (Str8 length (rest m)))) (rest m))
               (rest m)))
           (%py-fmt-pad (%py-fmt-sign (first m) plus space)
-            body width left (if left #f zero)))
-        ; o x X
-        (if (if (= conv 111) #t (if (= conv 120) #t (= conv 88)))
-          (do
-            (def b (if (= conv 111) 8 16))
-            (def tbl (if (= conv 88) "0123456789ABCDEF" "0123456789abcdef"))
-            (def m (%py-fmt-base v b tbl))
-            (def pfx
-              (if alt
-                (if (= conv 111) "0o" (if (= conv 88) "0X" "0x"))
-                ""))
-            (%py-fmt-pad (Str8 append (%py-fmt-sign (first m) plus space) pfx)
-              (rest m) width left (if left #f zero)))
-          ; e E f F g G
-          (if (if (= conv 101) #t (if (= conv 69) #t
-              (if (= conv 102) #t (if (= conv 70) #t
-              (if (= conv 103) #t (= conv 71))))))
+            body width left (if left #f zero))))
+      ((match ((= conv 111) #t) ((= conv 120) #t) ((= conv 88) #t) (#t #f))
+        (do
+          (def b (if (= conv 111) 8 16))
+          (def tbl (if (= conv 88) "0123456789ABCDEF" "0123456789abcdef"))
+          (def m (%py-fmt-base v b tbl))
+          (def pfx
+            (if alt
+              (if (= conv 111) "0o" (if (= conv 88) "0X" "0x"))
+              ""))
+          (%py-fmt-pad (Str8 append (%py-fmt-sign (first m) plus space) pfx)
+            (rest m) width left (if left #f zero))))
+      ((match ((= conv 101) #t) ((= conv 69) #t) ((= conv 102) #t)
+              ((= conv 70) #t)  ((= conv 103) #t) ((= conv 71) #t)
+              (#t #f))
+        (do
+          (def upper
+            (match ((= conv 69) #t) ((= conv 70) #t) ((= conv 71) #t)
+                   (#t #f)))
+          (def p (if (>= prec 0) prec 6))
+          (def fv (%py-fmt-float-of v))
+          (def ex (%py-f-exact fv))
+          (def kind (first ex))
+          (def neg (Str8 =? (first (rest ex)) "-"))
+          (if (not (eq? kind (lit num)))
+            ; inf and nan zero-pad like any number under %-formatting
+            ; ('%06e' % inf is 000inf -- measured, not assumed); nan
+            ; never carries the value's sign, only a flag's
             (do
-              (def upper
-                (if (= conv 69) #t (if (= conv 70) #t (= conv 71))))
-              (def p (if (>= prec 0) prec 6))
-              (def fv (%py-fmt-float-of v))
-              (def ex (%py-f-exact fv))
-              (def kind (first ex))
-              (def neg (Str8 =? (first (rest ex)) "-"))
-              (if (not (eq? kind (lit num)))
-                ; inf and nan zero-pad like any number under %-formatting
-                ; ('%06e' % inf is 000inf -- measured, not assumed); nan
-                ; never carries the value's sign, only a flag's
-                (do
-                  (def body0 (if (eq? kind (lit inf)) "inf" "nan"))
-                  (def body (if upper (if (eq? kind (lit inf)) "INF" "NAN") body0))
-                  (%py-fmt-pad
-                    (%py-fmt-sign (if (eq? kind (lit nan)) #f neg) plus space)
-                    body width left (if left #f zero)))
-                (do
-                  (def D (first (rest (rest ex))))
-                  (def x10 (first (rest (rest (rest ex)))))
-                  (def body
-                    (if (if (= conv 101) #t (= conv 69))
-                      (%py-fmt-e D x10 p upper)
-                      (if (if (= conv 102) #t (= conv 70))
-                        (%py-fmt-f D x10 p)
-                        (%py-fmt-g D x10 p upper alt))))
-                  (%py-fmt-pad (%py-fmt-sign neg plus space)
-                    body width left (if left #f zero)))))
-            (bad)))))))
+              (def body0 (if (eq? kind (lit inf)) "inf" "nan"))
+              (def body (if upper (if (eq? kind (lit inf)) "INF" "NAN") body0))
+              (%py-fmt-pad
+                (%py-fmt-sign (if (eq? kind (lit nan)) #f neg) plus space)
+                body width left (if left #f zero)))
+            (do
+              (def D (first (rest (rest ex))))
+              (def x10 (first (rest (rest (rest ex)))))
+              (def body
+                (if (if (= conv 101) #t (= conv 69))
+                  (%py-fmt-e D x10 p upper)
+                  (if (if (= conv 102) #t (= conv 70))
+                    (%py-fmt-f D x10 p)
+                    (%py-fmt-g D x10 p upper alt))))
+              (%py-fmt-pad (%py-fmt-sign neg plus space)
+                body width left (if left #f zero))))))
+      (#t (bad)))))
 
 (def %py-format
   (fn (_ fmt arg)
@@ -358,12 +357,13 @@
         (def flags
           (fn (self j left plus space zero alt)
             (let ((c (if (< j n) (%py-fmt-code fmt j) 0)))
-              (if (= c 45) (self (+ j 1) #t plus space zero alt)
-              (if (= c 43) (self (+ j 1) left #t space zero alt)
-              (if (= c 32) (self (+ j 1) left plus #t zero alt)
-              (if (= c 48) (self (+ j 1) left plus space #t alt)
-              (if (= c 35) (self (+ j 1) left plus space zero #t)
-                (list j left plus space zero alt)))))))))
+              (match
+                ((= c 45) (self (+ j 1) #t plus space zero alt))
+                ((= c 43) (self (+ j 1) left #t space zero alt))
+                ((= c 32) (self (+ j 1) left plus #t zero alt))
+                ((= c 48) (self (+ j 1) left plus space #t alt))
+                ((= c 35) (self (+ j 1) left plus space zero #t))
+                (#t (list j left plus space zero alt))))))
         (def keyed
           (if (if (< j0 n) (= (%py-fmt-code fmt j0) 40) #f)
             (let ((close (Str8 index-of ")" (Str8 sub j0 (- n j0) fmt))))

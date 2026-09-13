@@ -434,7 +434,11 @@
 ; After a leading 0: x/X o/O b/B open a based literal; otherwise the body.
 (def %py-number-zero
   (fn (_ buffer score chr)
-    (if (if (= chr 120) #t (if (= chr 88) #t (if (= chr 111) #t (if (= chr 79) #t (if (= chr 98) #t (= chr 66))))))
+    (if (match
+          ((= chr 120) #t) ((= chr 88) #t)   ; x X
+          ((= chr 111) #t) ((= chr 79) #t)   ; o O
+          ((= chr 98) #t)  ((= chr 66) #t)   ; b B
+          (#t #f))
       %py-number-base-first
       (%py-number-body buffer score chr))))
 
@@ -607,34 +611,35 @@
     (def code (at (+ i 1)))
     (def simple
       (fn (_ t) (pair (+ i 2) t)))
-    (if (= code 10)  (pair (+ i 2) "")
-    (if (= code 110) (simple "\n")
-    (if (= code 116) (simple "\t")
-    (if (= code 114) (simple "\r")
-    (if (= code 92)  (simple "\\")
-    (if (= code 39)  (simple "'")
-    (if (= code 34)  (simple "\"")
-    (if (= code 97)  (simple (%py-cp->str 7))
-    (if (= code 98)  (simple (%py-cp->str 8))
-    (if (= code 102) (simple (%py-cp->str 12))
-    (if (= code 118) (simple (%py-cp->str 11))
-    (if (= code 120)
-      (let ((h1 (if (< (+ i 2) len) (%py-hexval (at (+ i 2))) ()))
-            (h2 (if (< (+ i 3) len) (%py-hexval (at (+ i 3))) ())))
-        (if (if (null? h1) #t (null? h2))
-          (simple "\\x")
-          (let ((v (+ (* h1 16) h2)))
-            (pair (+ i 4) (%py-esc-cp v raw?)))))
-    (if (if (>= code 48) (<= code 55) #f)
-      (let ((d1 (- code 48)))
-        (let ((n2 (if (if (< (+ i 2) len) (if (>= (at (+ i 2)) 48) (<= (at (+ i 2)) 55) #f) #f) 1 0)))
-          (let ((n3 (if (if (= n2 1) (if (< (+ i 3) len) (if (>= (at (+ i 3)) 48) (<= (at (+ i 3)) 55) #f) #f) #f) 1 0)))
-            (let ((v (if (= n2 0) d1
-                       (if (= n3 0) (+ (* d1 8) (- (at (+ i 2)) 48))
-                         (+ (* (+ (* d1 8) (- (at (+ i 2)) 48)) 8) (- (at (+ i 3)) 48))))))
-              (pair (+ i (+ 2 (+ n2 n3))) (%py-esc-cp v raw?))))))
+    (match
+      ((= code 10)  (pair (+ i 2) ""))
+      ((= code 110) (simple "\n"))
+      ((= code 116) (simple "\t"))
+      ((= code 114) (simple "\r"))
+      ((= code 92)  (simple "\\"))
+      ((= code 39)  (simple "'"))
+      ((= code 34)  (simple "\""))
+      ((= code 97)  (simple (%py-cp->str 7)))
+      ((= code 98)  (simple (%py-cp->str 8)))
+      ((= code 102) (simple (%py-cp->str 12)))
+      ((= code 118) (simple (%py-cp->str 11)))
+      ((= code 120)
+        (let ((h1 (if (< (+ i 2) len) (%py-hexval (at (+ i 2))) ()))
+              (h2 (if (< (+ i 3) len) (%py-hexval (at (+ i 3))) ())))
+          (if (if (null? h1) #t (null? h2))
+            (simple "\\x")
+            (let ((v (+ (* h1 16) h2)))
+              (pair (+ i 4) (%py-esc-cp v raw?))))))
+      ((if (>= code 48) (<= code 55) #f)
+        (let ((d1 (- code 48)))
+          (let ((n2 (if (if (< (+ i 2) len) (if (>= (at (+ i 2)) 48) (<= (at (+ i 2)) 55) #f) #f) 1 0)))
+            (let ((n3 (if (if (= n2 1) (if (< (+ i 3) len) (if (>= (at (+ i 3)) 48) (<= (at (+ i 3)) 55) #f) #f) #f) 1 0)))
+              (let ((v (if (= n2 0) d1
+                         (if (= n3 0) (+ (* d1 8) (- (at (+ i 2)) 48))
+                           (+ (* (+ (* d1 8) (- (at (+ i 2)) 48)) 8) (- (at (+ i 3)) 48))))))
+                (pair (+ i (+ 2 (+ n2 n3))) (%py-esc-cp v raw?)))))))
       ; unknown: keep the backslash and the character, Python's rule
-      (pair (+ i 2) (Str8 sub i 2 s)))))))))))))))))
+      (#t (pair (+ i 2) (Str8 sub i 2 s))))))
 (def %py-string-read
   (fn (_ . args)
     (def raw (%buffer-token (first args)))
@@ -685,8 +690,12 @@
 
 (def %py-prefix-char?
   (fn (_ c)
-    (if (= c 98) #t (if (= c 66) #t (if (= c 102) #t (if (= c 70) #t
-      (if (= c 114) #t (if (= c 82) #t (if (= c 117) #t (= c 85))))))))))
+    (match
+      ((= c 98) #t)  ((= c 66) #t)           ; b B
+      ((= c 102) #t) ((= c 70) #t)           ; f F
+      ((= c 114) #t) ((= c 82) #t)           ; r R
+      ((= c 117) #t) ((= c 85) #t)           ; u U
+      (#t #f))))
 
 (def %py-prefixed-read
   (fn (_ . args)
@@ -814,27 +823,44 @@
   (fn (_ c)
     ; + - * / % = < > ! ~ | ^ & , : . ; and @, which is a decorator here
     ; (Python's other @ is matrix multiply, which this runtime has no use
-    ; for).  GENERATED from the code list rather than hand-nested: a
-    ; mis-nested predicate of this shape is paren-balanced and silently
-    ; wrong, which is how x-python#40 reached CI red.
-    (if (= c 43) #t (if (= c 45) #t (if (= c 42) #t (if (= c 47) #t (if (= c 37) #t (if (= c 61) #t (if (= c 60) #t (if (= c 62) #t (if (= c 33) #t (if (= c 126) #t (if (= c 124) #t (if (= c 94) #t (if (= c 38) #t (if (= c 44) #t (if (= c 58) #t (if (= c 46) #t (if (= c 59) #t (= c 64))))))))))))))))))))
+    ; for).  A `match` rather than a tower of ifs: the tower had to be
+    ; GENERATED from the code list because a mis-nested predicate of that
+    ; shape is paren-balanced and silently wrong, which is how
+    ; x-python#40 reached CI red.  Arms cannot mis-nest.
+    (match
+      ((= c 43) #t)  ((= c 45) #t)  ((= c 42) #t)  ((= c 47) #t)
+      ((= c 37) #t)  ((= c 61) #t)  ((= c 60) #t)  ((= c 62) #t)
+      ((= c 33) #t)  ((= c 126) #t) ((= c 124) #t) ((= c 94) #t)
+      ((= c 38) #t)  ((= c 44) #t)  ((= c 58) #t)  ((= c 46) #t)
+      ((= c 59) #t)  ((= c 64) #t)
+      (#t #f))))
 
 ; Which pairs extend: a second `=`, or one of the four doubled operators.
 (def %py-op-pair?
   (fn (_ a b)
     (if (= b 61)
       ; ==  !=  <=  >=  +=  -=  *=  /=  %=  |=  &=  ^=
-      (if (= a 61) #t (if (= a 33) #t (if (= a 60) #t (if (= a 62) #t (if (= a 43) #t (if (= a 45) #t (if (= a 42) #t (if (= a 47) #t (if (= a 37) #t (if (= a 124) #t (if (= a 38) #t (= a 94))))))))))))
+      (match
+        ((= a 61) #t)  ((= a 33) #t)  ((= a 60) #t)  ((= a 62) #t)
+        ((= a 43) #t)  ((= a 45) #t)  ((= a 42) #t)  ((= a 47) #t)
+        ((= a 37) #t)  ((= a 124) #t) ((= a 38) #t)  ((= a 94) #t)
+        (#t #f))
       ; // ** << >>
-      (if (if (= a 47) (= b 47) #f) #t
-        (if (if (= a 42) (= b 42) #f) #t
-          (if (if (= a 60) (= b 60) #f) #t
-            (if (= a 62) (= b 62) #f)))))))
+      (match
+        ((if (= a 47) (= b 47) #f) #t)
+        ((if (= a 42) (= b 42) #f) #t)
+        ((if (= a 60) (= b 60) #f) #t)
+        ((if (= a 62) (= b 62) #f) #t)
+        (#t #f)))))
 
 (def %py-op-pairable?
   (fn (_ c)
     ; = ! < > / * + - %, and | & ^ for |= &= ^=
-    (if (= c 61) #t (if (= c 33) #t (if (= c 60) #t (if (= c 62) #t (if (= c 47) #t (if (= c 42) #t (if (= c 43) #t (if (= c 45) #t (if (= c 37) #t (if (= c 124) #t (if (= c 38) #t (= c 94))))))))))))))
+    (match
+      ((= c 61) #t)  ((= c 33) #t)  ((= c 60) #t)  ((= c 62) #t)
+      ((= c 47) #t)  ((= c 42) #t)  ((= c 43) #t)  ((= c 45) #t)
+      ((= c 37) #t)  ((= c 124) #t) ((= c 38) #t)  ((= c 94) #t)
+      (#t #f))))
 
 ; Which pairs take a THIRD character.  Only the doubled four do, and the only
 ; third character is `=`: `//=` `**=` `>>=` `<<=`.  Nothing else triples --
