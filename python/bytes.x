@@ -387,9 +387,19 @@
 (def %pb-replace
   (fn (_ l old new n)
     (if (null? old)
-      (%pb-cat new (%pb-join-every l new ()))
+      (%pb-replace-empty l new n ())
       (%pb-replace-go l old new n ()))))
-(def %pb-join-every
-  (fn (self l new acc)
-    (if (null? l) (List reverse acc)
-      (self (rest l) new (%pb-onto new (pair (first l) acc))))))
+
+; AN EMPTY old INSERTS new AT EVERY POSITION -- there are length+1 of them, so
+; "AB".replace("", "1") is 1A1B1 -- AND THE COUNT STILL BOUNDS IT: with a count
+; of 1 the answer is 1AB.  The arm this replaces ignored n outright, so every
+; count behaved like no count at all.  A count of 0 therefore copies the input,
+; which is the same thing the walk does when it runs out of budget: the rest of
+; the input goes on verbatim.
+(def %pb-replace-empty
+  (fn (self l new n acc)
+    (if (= n 0)
+      (List reverse (%pb-onto l acc))
+      (if (null? l)
+        (List reverse (%pb-onto new acc))
+        (self (rest l) new (- n 1) (pair (first l) (%pb-onto new acc)))))))

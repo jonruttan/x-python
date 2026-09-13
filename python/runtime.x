@@ -1923,6 +1923,29 @@
       (Err raise (lit type)
         (Str8 append who " argument must be str") ()))))
 
+; __str__ AND __repr__ ANSWER EITHER KIND OF TEXT, so the four places that take
+; their answer need not ask which.  A user's dunder returns a str; the fallbacks
+; beside it -- an exception's message, the default repr -- are the platform's
+; strings, and both are text that must print as itself.  `display` of a PY-TEXT
+; writes its code points as raw values, which is how an object whose __str__
+; returned "as str" printed as mojibake.
+;
+; The display door goes through %ps-write, so an object whose __str__ answers a
+; NUL-bearing str prints the byte like any other str does.
+(def %py-text->x
+  (fn (_ s) (if (%py-str-is s) (%ps->x (%py-str-cps s)) s)))
+(def %py-text-display
+  (fn (_ s) (if (%py-str-is s) (%ps-write (%py-str-cps s)) (display s))))
+
+; A REQUIRED SEPARATOR THAT MAY NOT BE EMPTY.  `"asdf".partition("")` is a
+; ValueError in CPython; the degenerate triple ('', '', 'asdf') came back
+; instead.  Unlike split's separator this one is never absent, so there is
+; nothing for an empty one to be confused with -- see %py-s-sep for that case.
+(def %py-s-cps1
+  (fn (_ v who)
+    (let ((l (%py-s-cps v who)))
+      (if (null? l) (Err raise (lit value) "empty separator" ()) l))))
+
 ; startswith AND endswith TAKE A TUPLE OF CANDIDATES and answer true if any one
 ; of them matches -- `"foobar".startswith(("x", "foo"))` is True in CPython.  A
 ; plain str is the one-candidate case, so both spellings go through here rather
@@ -2048,9 +2071,9 @@
             (let ((w (%pb-sub l s (- (%py-s-end l a 2) s))))
               (%py-s-any? (first a) "endswith" (fn (_ n) (%pb-ends? w n)))))))
       ((Str8 =? name "partition")
-        (fn (_ . a) (%py-s-triple (%pb-partition l (%py-s-cps (first a) "partition")))))
+        (fn (_ . a) (%py-s-triple (%pb-partition l (%py-s-cps1 (first a) "partition")))))
       ((Str8 =? name "rpartition")
-        (fn (_ . a) (%py-s-triple (%pb-rpartition l (%py-s-cps (first a) "rpartition")))))
+        (fn (_ . a) (%py-s-triple (%pb-rpartition l (%py-s-cps1 (first a) "rpartition")))))
       ((Str8 =? name "center")
         (fn (_ . a) (%py-str-new (%pb-center l (first a) (%py-s-fill a 1)))))
       ((Str8 =? name "ljust")
@@ -3010,7 +3033,7 @@
       ; An exception INSTANCE prints as its message too -- print(e)
       ; has to read the same whether the raise came from Python source
       ; or from this runtime.
-      ((%py-obj-is v) (display (%py-obj-repr v)))
+      ((%py-obj-is v) (%py-text-display (%py-obj-repr v)))
       ((eq? v %py-NotImplemented) (display "NotImplemented"))
       ((eq? v %py-Ellipsis) (display "Ellipsis"))
       (#t (display v)))))
@@ -3040,7 +3063,7 @@
     (if (%py-str-is v)
       (%py-str-display (%py-str-cps v))
       (if (%py-obj-is v)
-        (display (%py-obj-str v))
+        (%py-text-display (%py-obj-str v))
         (%py-write v)))))
 
 (def %py-print-with
@@ -4793,7 +4816,7 @@
       ((%py-complex-is v) (%py-crepr v))
       ; str(e) is the MESSAGE, the same rule %py-write states for print(e)
       ((Err err? v) (v msg))
-      ((%py-obj-is v) (%py-obj-str v))
+      ((%py-obj-is v) (%py-text->x (%py-obj-str v)))
       (#t (%py-write-to-str v)))))
 
 ; A STRING'S repr IS PYTHON'S: single quotes unless the text holds a single
@@ -4838,7 +4861,7 @@
       ((%py-str-is v) (%py-str-repr v))
       ((%py-float-is v) (%py-frepr v))
       ((%py-complex-is v) (%py-crepr v))
-      ((%py-obj-is v) (%py-obj-repr v))
+      ((%py-obj-is v) (%py-text->x (%py-obj-repr v)))
       ((eq? v %py-Ellipsis) "Ellipsis")
       (#t (%py-write-to-str v)))))
 

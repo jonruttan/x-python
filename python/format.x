@@ -393,7 +393,14 @@
         (if (null? keyed) ()
           (if (null? mapping)
             (Err raise (lit type) "format requires a mapping" ())
-            (%set-first! cell (list (%py-dget mapping (rest keyed))))))
+            ; THE KEY CROSSES OVER BEFORE THE LOOKUP.  `%(foo)s` cuts the name
+            ; out of the template with Str8, and the mapping's keys are strs --
+            ; a platform string matches none of them, so `"%(foo)s" % {"foo":
+            ; "bar"}` raised KeyError about a key that is plainly there (and
+            ; said `"foo"`, with the platform string's double quotes, which is
+            ; the tell).
+            (%set-first! cell
+              (list (%py-dget mapping (%py-str-of-x (rest keyed)))))))
         (def fl (flags (if (null? keyed) j0 (first keyed)) #f #f #f #f #f))
         (def j1 (first fl))
         (def left (first (rest fl)))
