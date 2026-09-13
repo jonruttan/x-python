@@ -91,14 +91,51 @@
         (do (%il-walk (first form) file top)
             (self (rest form) file top)))))
 
-  ; the name a ladder is reported under: the top-level def or set! it sits in
+  ; THREE BINDERS, BECAUSE THIS CHECKER IS ONE FILE IN THREE PLACES.  Every
+  ; module here says `def` or `set!`, and on this corpus the third binder is
+  ; dead code.  It is carried anyway: x-r5rs and x-r7rs run the same checker,
+  ; and seven of x-r7rs's ten modules are `include-once`d after the Scheme
+  ; vocabulary exists and say `define`, in the plain and the curried spelling
+  ; both.  Three copies that drift are how the spec-gate trap bug came to need
+  ; the same fix in three repositories on the same day.
+  ;
+  ; A match, not a chain -- this file should be able to pass itself.
+  (def %il-binder?
+    (fn (_ x)
+      (let ((s (%il-name x)))
+        (match ((str=? s "def")    #t)
+               ((str=? s "set!")   #t)
+               ((str=? s "define") #t)
+               (#t                 #f)))))
+
+  ; (def NAME ...) and (define NAME ...) name a symbol; Scheme's curried
+  ; (define (NAME . args) body) names the head of a list.
+  (def %il-bound-name
+    (fn (_ x)
+      (match ((pair? x) (%il-name (first x)))
+             (#t        (%il-name x)))))
+
+  ; The name a ladder is reported under: the top-level binder it sits in, or a
+  ; PLACEHOLDER when it sits in none.
+  ;
+  ; THE PLACEHOLDER IS NOT DECORATION, and this corpus is where it earns its
+  ; keep.  A ladder can sit in a top-level CALL rather than a definition --
+  ; python/types.x registers operators with (%type-push-op TYPE (lit +) ...)
+  ; and python/runtime.x its exception methods the same way, and the lambdas
+  ; handed to those are full of conditionals.  There are 29 such chains here
+  ; today, 25 of them in types.x.  Reported under an EMPTY name they would be
+  ; worse than missed: the row has three fields and the aggregate keys on the
+  ; first two, so a blank middle field slides the depth into the name and
+  ; leaves the count empty -- a manifest built out of rows naming nothing.
+  ; None of the 29 has reached four arms, which is the only reason this has
+  ; never bitten.  The placeholder carries no space, so the row stays three
+  ; fields.
   (def %il-top-name
     (fn (_ form)
-      (if (pair? form)
-        (if (if (%il-is? (first form) "def") #t (%il-is? (first form) "set!"))
-          (%il-name (first (rest form)))
-          "")
-        "")))
+      (match ((not (pair? form))               "(top-level)")
+             ((not (pair? (rest form)))        "(top-level)")
+             ((not (%il-binder? (first form))) "(top-level)")
+             (#t (%il-bound-name (first (rest form)))))))
 
   ; A SWEEP BETWEEN TOP-LEVEL FORMS.  Nothing here collects on its own, and a
   ; module of ten thousand lines is one long walk; without this the guard

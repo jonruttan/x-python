@@ -20,6 +20,13 @@
 # Set X to point at a particular x; otherwise the one on PATH is used.  The
 # checker itself is x -- an if ladder is a SHAPE, and reading the file as
 # s-expressions is the only way to see one.  A grep would count parens.
+#
+# NOT A GLOB, because a glob only sees one directory deep.  python/ is flat
+# today and this changes nothing here; it is the shape the sibling bundles
+# need -- x-r7rs keeps seven of its ten modules under r7rs/x/, where
+# `r7rs/*.x` left most of the bundle unchecked -- and the point of writing it
+# the same way here is that a module directory which grows a subdirectory
+# later does not quietly open a hole in the gate.
 set -e
 
 BUNDLE="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -30,20 +37,36 @@ command -v "$X" >/dev/null 2>&1 || {
 	exit 1
 }
 
+MODULES="$BUNDLE/python"
 MANIFEST="$BUNDLE/tools/contract/if-ladders.txt"
 TMP="${TMPDIR:-/tmp}/if-ladders.$$"
-trap 'rm -f "$TMP" "$TMP.want" "$TMP.have"' EXIT
+trap 'rm -f "$TMP.files" "$TMP.raw" "$TMP.want" "$TMP.have"' EXIT
+
+find "$MODULES" -name '*.x' | sort > "$TMP.files"
+# AN EMPTY SWEEP IS A BUG, NOT A CLEAN BILL.  With no files read, every
+# manifest row looks fixed and the ratchet would cheerfully ask for the whole
+# file to be deleted.  A moved module directory should say so instead.
+[ -s "$TMP.files" ] || {
+	echo "if-ladders: no *.x under $MODULES -- has the module directory moved?" >&2
+	exit 1
+}
 
 # The wrapper's repo mode wants the platform's own root as the cwd, so the
 # files are named absolutely and the checker runs from there.
 X_ROOT="$("$X" --share-dir)"
+: > "$TMP.raw"
 # ONE FILE PER PROCESS: the walker reads every form of every body, and the
-# largest file here is enough to trip a shared ceiling half way through -- a
-# truncated report would quietly make the manifest wrong rather than loud.
-for f in "$BUNDLE"/python/*.x; do
-	( cd "$X_ROOT" && "$X" --no-pin -q -f "$BUNDLE/tools/check/if-ladders.x" -- "$f" )
-done \
-  | sed "s|^$BUNDLE/||" \
+# largest file here is enough to trip a shared ceiling half way through.
+# `set -e` carries a checker that DID trip out to here as a failed check -- a
+# truncated report would quietly make the manifest wrong rather than loud,
+# which is the one failure this whole arrangement cannot tolerate.  It is also
+# how the first manifest came to say 31 functions when the truth was 67.
+while IFS= read -r f; do
+	( cd "$X_ROOT" && "$X" --no-pin -q -f "$BUNDLE/tools/check/if-ladders.x" -- "$f" ) \
+		>> "$TMP.raw"
+done < "$TMP.files"
+
+sed "s|^$BUNDLE/||" "$TMP.raw" \
   | awk '{ n[$1" "$2]++; if ($3 > m[$1" "$2]) m[$1" "$2] = $3 }
          END { for (k in n) print k, n[k], m[k] }' \
   | sort > "$TMP.have"
