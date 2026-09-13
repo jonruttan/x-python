@@ -322,10 +322,16 @@
 ; rsplit is split from the other end, and reversing three times is cheaper to
 ; READ than a second walk written backwards -- the bytes, each part, and the
 ; order of the parts.
+; BOTH ARMS SPLIT FROM THE RIGHT, which is the whole difference from %pb-split.
+; The whitespace arm used to hand straight to %pb-ws-split, which walks from the
+; LEFT -- without a maxsplit nothing shows (the same parts come out either way),
+; but `"a b c d".rsplit(None, 1)` answered ['a', 'b c d'] where CPython answers
+; ['a b c', 'd'].  Reversing the input, splitting, then un-reversing each part
+; and their order is what the separator arm below already does.
 (def %pb-rsplit
   (fn (_ l sep n)
     (if (null? sep)
-      (%pb-ws-split l n ())
+      (List reverse (%pb-map-rev (%pb-ws-split (List reverse l) n ()) ()))
       (List reverse (%pb-map-rev (%pb-sep-split (List reverse l) (List reverse sep) n () ()) ())))))
 (def %pb-map-rev
   (fn (self ps acc)

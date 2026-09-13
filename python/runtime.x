@@ -1466,7 +1466,7 @@
               (go 0 ()))))))))
 
 (def %py-iter-elems
-  (fn (_ v)
+  (fn (_ v . who)
     (match
       ((%py-obj-is v) (%py-obj-elems v))
       ; Iterating a dict yields its KEYS, as in Python.
@@ -1481,7 +1481,13 @@
         (%py-bytes-list v))
       ; a generator runs to its end; every consumer here wants the whole list
       ((%py-gen-is v) (%py-gen-drain v ()))
-      (#t (Err raise (lit type) "object is not iterable" ())))))
+      ; A CALLER MAY NAME ITSELF IN THE REFUSAL.  "object is not iterable" is
+      ; true and says nothing about what was being attempted; `','.join(5)`
+      ; wants to talk about join.  Taken as a trailing argument so that the
+      ; thirty-odd existing call sites stay exactly as they are -- one
+      ; implementation with a door, not a copy per caller.
+      (#t (Err raise (lit type)
+            (if (null? who) "object is not iterable" (first who)) ())))))
 
 ; range(stop) / range(start, stop) / range(start, stop, step)
 ;
@@ -1916,6 +1922,23 @@
       (%py-str-cps v)
       (Err raise (lit type)
         (Str8 append who " argument must be str") ()))))
+
+; startswith AND endswith TAKE A TUPLE OF CANDIDATES and answer true if any one
+; of them matches -- `"foobar".startswith(("x", "foo"))` is True in CPython.  A
+; plain str is the one-candidate case, so both spellings go through here rather
+; than the test being written twice.
+(def %py-s-any?
+  (fn (_ v who test)
+    (if (%py-tuple-is v)
+      (%py-s-any-of (%py-tuple-elems v) who test)
+      (test (%py-s-cps v who)))))
+(def %py-s-any-of
+  (fn (self els who test)
+    (if (null? els)
+      #f
+      (if (test (%py-s-cps (first els) who))
+        #t
+        (self (rest els) who test)))))
 (def %py-s-arg (fn (_ a i) (if (> (%py-length a) i) (List ref i a) ())))
 (def %py-s-opt
   (fn (_ a i d) (let ((v (%py-s-arg a i))) (if (null? v) d v))))
@@ -1923,20 +1946,41 @@
 (def %py-s-set
   (fn (_ a i who)
     (let ((v (%py-s-arg a i))) (if (null? v) () (%py-s-cps v who)))))
+; A SEPARATOR FOR split/rsplit, WHERE EMPTY IS AN ERROR AND ABSENT IS NOT.
+; The two cannot be told apart once the value is code points -- `""` and None
+; both arrive as () -- so the RAW argument decides: absent or None means split
+; on whitespace, and a str that happens to be empty is the ValueError CPython
+; raises.  %py-s-set is still right for strip() and friends, where an empty set
+; is simply an empty set.
 (def %py-s-sep
   (fn (_ a i who)
-    (let ((v (%py-s-set a i who)))
-      (if (null? v) () (if (null? v) () v)))))
+    (let ((raw (%py-s-arg a i)))
+      (if (null? raw)
+        ()
+        (let ((v (%py-s-cps raw who)))
+          (if (null? v)
+            (Err raise (lit value) "empty separator" ())
+            v))))))
 
 (def %py-s-start (fn (_ l a i) (%py-b-clamp (%py-s-opt a i 0) (%pb-len l))))
 (def %py-s-end (fn (_ l a i) (%py-b-clamp (%py-s-opt a i (%pb-len l)) (%pb-len l))))
+; A START PAST THE END FINDS NOTHING -- not even the empty needle, which
+; matches everywhere else.  The clamp pulls 6 back to 5, so "hello".find("", 6)
+; answered 5 where CPython answers -1; only a start actually within the string
+; can match.  A NEGATIVE start counts from the end, so it is normalised first
+; and never trips this.  A non-empty needle was already right: its window is
+; empty there and the search fails on its own.
 (def %py-s-search
   (fn (_ l a rev)
-    (let ((s (%py-s-start l a 1)))
-      (let ((e (%py-s-end l a 2)))
-        (let ((w (%pb-sub l s (- e s))) (n (%py-s-cps (first a) "sub")))
-          (let ((r (if rev (%pb-rfind w n) (%pb-find w n))))
-            (if (< r 0) r (+ r s))))))))
+    (let ((len (%pb-len l)))
+      (let ((raw (%py-boolnorm (%py-s-opt a 1 0))))
+        (if (> (if (< raw 0) (+ len raw) raw) len)
+          (- 0 1)
+          (let ((s (%py-s-start l a 1)))
+            (let ((e (%py-s-end l a 2)))
+              (let ((w (%pb-sub l s (- e s))) (n (%py-s-cps (first a) "sub")))
+                (let ((r (if rev (%pb-rfind w n) (%pb-find w n))))
+                  (if (< r 0) r (+ r s)))))))))))
 (def %py-s-index
   (fn (_ i) (if (< i 0) (Err raise (lit value) "substring not found" ()) i)))
 
@@ -1970,13 +2014,17 @@
       ((Str8 =? name "rstrip")
         (fn (_ . a) (%py-str-new (%pb-strip l (%py-s-set a 0 "rstrip") #f #t))))
       ((Str8 =? name "split")
-        (fn (_ . a) (%py-s-parts (%pb-split l (%py-s-set a 0 "split") (%py-s-opt a 1 (- 0 1))) ())))
+        (fn (_ . a) (%py-s-parts (%pb-split l (%py-s-sep a 0 "split") (%py-s-opt a 1 (- 0 1))) ())))
       ((Str8 =? name "rsplit")
-        (fn (_ . a) (%py-s-parts (%pb-rsplit l (%py-s-set a 0 "rsplit") (%py-s-opt a 1 (- 0 1))) ())))
+        (fn (_ . a) (%py-s-parts (%pb-rsplit l (%py-s-sep a 0 "rsplit") (%py-s-opt a 1 (- 0 1))) ())))
       ((Str8 =? name "splitlines")
         (fn (_ . a) (%py-s-parts (%pb-splitlines l (%py-truthy (%py-s-opt a 0 #f))) ())))
       ((Str8 =? name "join")
-        (fn (_ it) (%py-str-new (%pb-join l (%py-s-join-seq (%py-iter-elems it) ())))))
+        (fn (_ it)
+          (%py-str-new
+            (%pb-join l
+              (%py-s-join-seq
+                (%py-iter-elems it "can only join an iterable of str") ())))))
       ((Str8 =? name "replace")
         (fn (_ old new . a)
           (%py-str-new
@@ -1991,11 +2039,14 @@
           (let ((s (%py-s-start l a 1)))
             (%pb-count (%pb-sub l s (- (%py-s-end l a 2) s)) (%py-s-cps (first a) "count") 0))))
       ((Str8 =? name "startswith")
-        (fn (_ . a) (%pb-starts? (%pb-drop (%py-s-start l a 1) l) (%py-s-cps (first a) "startswith"))))
+        (fn (_ . a)
+          (let ((w (%pb-drop (%py-s-start l a 1) l)))
+            (%py-s-any? (first a) "startswith" (fn (_ n) (%pb-starts? w n))))))
       ((Str8 =? name "endswith")
         (fn (_ . a)
           (let ((s (%py-s-start l a 1)))
-            (%pb-ends? (%pb-sub l s (- (%py-s-end l a 2) s)) (%py-s-cps (first a) "endswith")))))
+            (let ((w (%pb-sub l s (- (%py-s-end l a 2) s))))
+              (%py-s-any? (first a) "endswith" (fn (_ n) (%pb-ends? w n)))))))
       ((Str8 =? name "partition")
         (fn (_ . a) (%py-s-triple (%pb-partition l (%py-s-cps (first a) "partition")))))
       ((Str8 =? name "rpartition")
