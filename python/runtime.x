@@ -26,6 +26,17 @@
 ; Python rule can be stated. Today most of them are thin; that is the point --
 ; they are named seams, not indirection for its own sake.
 
+; THE LIBRARIES THIS BUNDLE NEEDS, named rather than inherited from a
+; dialect.  Python's data model asks for three things helium does not
+; carry: ONE arbitrary-precision integer type (2 ** 200 is not an error
+; and not a float), true division that always lands on float, and dict
+; as syntax.  x/num/tower brings bigint, rational, float and complex;
+; x/type/dict is the container.  Declaring them here rather than taking
+; the xenon dialect keeps the boot to what this bundle actually uses --
+; and keeps the modules loadable one at a time, which is what the
+; platform's linter does.
+(import x/num/tower)
+(import x/type/dict)
 (import python/util)
 (import python/types)
 (import python/format)
