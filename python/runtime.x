@@ -2825,7 +2825,7 @@
   (fn (_ e)
     (if (%py-obj-is e)
       (%py-obj-class e)
-      (%py-kind-class (Err kind-of e) %py-kind-classes))))
+      (%py-kind-class (Err tag e) %py-kind-classes))))
 
 (def %py-subclass?
   (fn (self c target)
