@@ -1,0 +1,707 @@
+; # x-python -- Python on x-lang
+;
+; ## python/runtime-type.x -- type objects, constructors, slicing and def
+;
+; @description The type objects themselves, the constructors behind int() and
+;   friends, slicing, and def at whatever frame depth it appears.
+; @author [Jon Ruttan](jonruttan@gmail.com)
+; @copyright 2026 Jon Ruttan
+; @license MIT No Attribution (MIT-0)
+;
+;     ., .,
+;     {O,O}
+;     (   )
+;      " "
+;
+; A FRAGMENT OF python/runtime.x, NOT A MODULE.  It carries no provide
+; and is include-once'd by runtime.x in load order; the %py-* names are
+; shared across the whole rather than exported.  runtime.x was one
+; 6,062-line file, which the platform's linter could not analyse -- it
+; ran 91 seconds and the engine died with no diagnostic at all.
+
+; --- Type objects ------------------------------------------------------------
+;
+; `type(x)` answers a CLASS, and the builtin types get real class objects --
+; ordinary PY-CLASS values, so `type(1) == int` is the same identity compare
+; user classes already get, and print(int) goes through the same write handler.
+;
+; TWO x TYPES ARE ONE PYTHON TYPE.  A small integer and a bigint are different
+; types to x's tower and both are `int` to Python, so the dispatch below maps
+; both handles to one class -- measured with eq? on the handles, which is how
+; the handles compare.  bool's base is int, which is Python's own arrangement
+; and the reason isinstance(True, int) is True while isinstance(1, bool) is not.
+
+(def %py-char-code (prim-ref (lit char) (lit ->int)))
+
+; --- constructors ------------------------------------------------------------
+; int('abc') is a ValueError with Python's own message, and the parse is walked
+; BY HAND: the reader-base shortcut accepts prefixes ("12ab" would answer 12),
+; and `Float from` answers 0.0 for garbage -- both silent wrong numbers, the
+; failure mode this bundle keeps finding, so neither is trusted with input the
+; program supplied.
+
+; Digits in a base (2, 8, 16), promoting through the tower like the
+; decimal parser; used by the 0x/0o/0b literals.
+(def %py-int-of-based
+  (fn (_ s base)
+    (def n (Str8 length s))
+    (def val
+      (fn (_ c)
+        (match
+          ((if (>= c 48) (<= c 57) #f) (- c 48))
+          ((if (>= c 97) (<= c 122) #f) (- c 87))
+          ((if (>= c 65) (<= c 90) #f) (- c 55))
+          (#t 99))))
+    (def go
+      (fn (self i acc)
+        (if (>= i n) acc
+          (let ((c (%py-char-code (%str-ref s i))))
+            (if (= c 95) (self (+ i 1) acc)
+              (let ((v (val c)))
+                (if (>= v base)
+                  (Err raise (lit value) (Str8 append "invalid literal for int() with base: " s) ())
+                  (self (+ i 1) (+ (* acc base) v)))))))))
+    (if (= n 0) (Err raise (lit value) "invalid literal for int()" ()) (go 0 0))))
+
+(def %py-int-of-str
+  (fn (_ s)
+    (def n (%py-byte-len s))
+    (def bad
+      (fn (_)
+        (Err raise (lit value)
+          (Str8 append
+            (Str8 append "invalid literal for int() with base 10: '" s) "'")
+          ())))
+    (def code (fn (_ i) (%py-char-code (%str-ref s i))))
+    (def digits
+      (fn (self i acc seen)
+        (if (>= i n)
+          (if seen acc (bad))
+          (let ((c (code i)))
+            (if (if (>= c 48) (<= c 57) #f)
+              (self (+ i 1) (+ (* acc 10) (- c 48)) #t)
+              ; underscores are spelling (`1_2_3`), skipped the way the
+              ; float path strips them
+              (if (= c 95)
+                (self (+ i 1) acc seen)
+                (bad)))))))
+    (if (= n 0)
+      (bad)
+      (let ((c0 (code 0)))
+        (if (= c0 45)
+          (- 0 (digits 1 0 #f))
+          (if (= c0 43)
+            (digits 1 0 #f)
+            (digits 0 0 #f)))))))
+
+; float('...') is shape-checked before Float from sees it: sign, digits, one
+; dot, one exponent.  Stricter than CPython (no inf/nan, no surrounding
+; spaces), and strictness fails LOUDLY where the alternative answered 0.0.
+(def %py-float-str-ok?
+  (fn (_ s)
+    (def n (Str8 length s))
+    (def code (fn (_ i) (%py-char-code (%str-ref s i))))
+    (def walk
+      (fn (self i seen-digit seen-dot seen-e)
+        (if (>= i n)
+          seen-digit
+          (let ((c (code i)))
+            (match
+              ((if (>= c 48) (<= c 57) #f) (self (+ i 1) #t seen-dot seen-e))
+              ((= c 46)
+                (if (if seen-dot #t seen-e) #f (self (+ i 1) seen-digit #t seen-e)))
+              ((if (= c 101) #t (= c 69))
+                (if seen-e #f
+                  (if (not seen-digit) #f
+                    (let ((j (if (< (+ i 1) n)
+                               (if (if (= (code (+ i 1)) 43) #t (= (code (+ i 1)) 45))
+                                 (+ i 2) (+ i 1))
+                               (+ i 1))))
+                      (self j #f seen-dot #t)))))
+              (#t #f))))))
+    (if (= n 0)
+      #f
+      (let ((c0 (code 0)))
+        (if (if (= c0 45) #t (= c0 43))
+          (if (= n 1) #f (walk 1 #f #f #f))
+          (walk 0 #f #f #f))))))
+
+; Python's float() also takes "inf", "infinity" and "nan" in any case, with an
+; optional sign and surrounding whitespace, and underscores between digits.
+; The specials are matched HERE and handed to strtod by their canonical
+; spelling; everything else is underscore-stripped and shape-checked as before.
+(def %py-f-trim
+  (fn (_ s)
+    (def n (Str8 length s))
+    (def ws? (fn (_ c) (match
+                         ((= c 32) #t)
+                         ((= c 9) #t)
+                         ((= c 10) #t)
+                         (#t (= c 13)))))
+    (def a
+      (fn (self i)
+        (if (>= i n) i (if (ws? (%py-f-code s i)) (self (+ i 1)) i))))
+    (def b
+      (fn (self i)
+        (if (< i 0) i (if (ws? (%py-f-code s i)) (self (- i 1)) i))))
+    (let ((lo (a 0)))
+      (let ((hi (b (- n 1))))
+        (if (> lo hi) "" (Str8 sub lo (+ (- hi lo) 1) s))))))
+
+(def %py-f-lower
+  (fn (_ s)
+    (def n (Str8 length s))
+    (def go
+      (fn (self i acc)
+        (if (>= i n)
+          acc
+          (let ((c (%py-f-code s i)))
+            (self (+ i 1)
+              (Str8 append acc
+                (if (if (>= c 65) (<= c 90) #f)
+                  (Str8 sub (- c 65) 1 "abcdefghijklmnopqrstuvwxyz")
+                  (Str8 sub i 1 s))))))))
+    (go 0 "")))
+
+(def %py-f-strip-us
+  (fn (_ s)
+    (if (null? (Str8 index-of "_" s))
+      s
+      (do
+        (def n (Str8 length s))
+        (def go
+          (fn (self i acc)
+            (if (>= i n)
+              acc
+              (let ((c (Str8 sub i 1 s)))
+                (self (+ i 1)
+                  (if (Str8 =? c "_") acc (Str8 append acc c)))))))
+        (go 0 "")))))
+
+(def %py-float-of-str
+  (fn (_ s0)
+    (def s (%py-f-trim s0))
+    (def bad
+      (fn (_)
+        (Err raise (lit value)
+          (Str8 append
+            (Str8 append "could not convert string to float: '" s0) "'")
+          ())))
+    (def signed
+      (fn (_)
+        (if (= (Str8 length s) 0)
+          (pair "" "")
+          (let ((c (%py-f-code s 0)))
+            (if (= c 45) (pair "-" (Str8 sub 1 (- (Str8 length s) 1) s))
+              (if (= c 43) (pair "" (Str8 sub 1 (- (Str8 length s) 1) s))
+                (pair "" s)))))))
+    (let ((sp (signed)))
+      (let ((low (%py-f-lower (rest sp))))
+        (if (if (Str8 =? low "inf") #t (Str8 =? low "infinity"))
+          (Float from (Str8 append (first sp) "inf"))
+          (if (Str8 =? low "nan")
+            (Float from "nan")
+            (let ((t (%py-f-strip-us s)))
+              (if (%py-float-str-ok? t)
+                (Float from t)
+                (bad)))))))))
+
+(def %py-num-kind
+  (fn (_ v)
+    (let ((h (%py-typeof-prim v)))
+      (match
+        ((eq? h %py-th-int) (lit int))
+        ((eq? h %py-th-big) (lit int))
+        ((eq? h %py-th-float) (lit float))
+        ((eq? h %py-th-complex) (lit complex))
+        (#t ())))))
+
+(def %py-int-ctor
+  (fn (_ . a)
+    (if (null? a)
+      0
+      (let ((v (first a)))
+        (match
+          ((eq? v #t) 1)
+          ((eq? v #f) 0)
+          ((%py-str-is v) (%py-int-of-str (%ps->x (%py-str-cps v))))
+          ((%py-obj-is v)
+            (let ((m (%py-dunder v "__int__")))
+              (if (null? m)
+                (Err raise (lit type) "int() argument must be a number or string" ())
+                (m))))
+          (#t
+            (let ((k (%py-num-kind v)))
+              (if (eq? k (lit int)) v
+              (if (eq? k (lit float))
+                ; toward zero through the EXACT DIGITS, so int(1e19) and
+                ; int(2.0 ** 100) answer bigints instead of a wrapped int64
+                (let ((m (%py-fmt-int-mag v)))
+                  (let ((n (%py-int-of-str (rest m))))
+                    (if (first m) (- 0 n) n)))
+                (Err raise (lit type) "int() argument must be a number or string" ()))))))))))
+
+(def %py-float-ctor
+  (fn (_ . a)
+    (if (null? a)
+      0.0
+      (let ((v (first a)))
+        (match
+          ((eq? v #t) 1.0)
+          ((eq? v #f) 0.0)
+          ((%py-str-is v) (%py-float-of-str (%ps->x (%py-str-cps v))))
+          ((%py-obj-is v)
+            (let ((m (%py-dunder v "__float__")))
+              (if (null? m)
+                (Err raise (lit type) "float() argument must be a number or string" ())
+                (m))))
+          ((%py-bytes-is v) (%py-float-of-str (%py-bytes-str v)))
+          (#t
+            (let ((k (%py-num-kind v)))
+              (if (eq? k (lit float)) v
+              (if (eq? k (lit int)) (* v 1.0)
+                (Err raise (lit type) "float() argument must be a number or string" ()))))))))))
+
+; Python's truthiness, stated once: the empties and the zeros are false and
+; everything else is true.  Objects and classes are unconditionally true.
+(def %py-truthy
+  (fn (_ v)
+    (match
+      ((eq? v #f) #f)
+      ((eq? v #t) #t)
+      ((null? v) #f)
+      ((%py-str-is v) (> (%pb-len (%py-str-cps v)) 0))
+      ((%py-list-is v) (not (null? (%py-list-elems v))))
+      ((%py-set-is v) (not (null? (%py-set-elems v))))
+      ((%py-view-is v) (not (null? (%py-view-elems v))))
+      ((%py-dict-is v) (not (null? (%py-dict-entries v))))
+      ((%py-tuple-is v) (not (null? (%py-tuple-elems v))))
+      ((%py-obj-is v)
+        (let ((b (%py-dunder v "__bool__")))
+          (if (not (null? b))
+            (%py-truthy (b))
+            (let ((l (%py-dunder v "__len__")))
+              (if (null? l) #t (not (= (l) 0)))))))
+      ((%py-class-is v) #t)
+      (#t (not (= v 0))))))
+
+(def %py-bool-ctor
+  (fn (_ . a) (if (null? a) #f (%py-truthy (first a)))))
+
+; str() IS THE PYTHON-FACING DOOR and answers a str; %py-str under it is the
+; INTERNAL one and answers a platform string, which is what its nineteen other
+; callers want (they are building error messages with `Str8 append`).  Only
+; this door crosses back.
+;
+; A str ARGUMENT IS RETURNED AS IT CAME, never round-tripped: str(s) on a
+; NUL-bearing s would otherwise go out through a platform string and refuse.
+(def %py-str-ctor
+  (fn (_ . a)
+    (if (null? a)
+      (%py-str-new ())
+      (let ((v (first a)))
+        (if (%py-str-is v) v (%py-str-of-x (%py-str v)))))))
+
+(def %py-list-ctor
+  (fn (_ . a) (if (null? a) (%py-list-new ()) (%py-mklist-of (first a)))))
+
+(def %py-dict-copy
+  (fn (self es)
+    (if (null? es)
+      ()
+      (pair (pair (first (first es)) (rest (first es))) (self (rest es))))))
+
+(def %py-dict-ctor
+  (fn (_ . a)
+    (if (null? a)
+      (%py-dict-new ())
+      (if (%py-dict-is (first a))
+        ; a COPY, with fresh entry pairs: dict(d) in Python is a new dict, and
+        ; sharing the pairs would make a store into one visible in the other
+        (%py-dict-new (%py-dict-copy (%py-dict-entries (first a))))
+        ; any other iterable is a sequence of (key, value) pairs
+        (%py-dict-new (%py-pairs-of (%py-iter-elems (first a)) ()))))))
+; dict(a=1) and d.update(a=1): the keywords ARE the entries
+; dict(a=1) MAKES A str KEY.  A keyword name is the platform's string -- it
+; came off the call syntax -- and a dict's keys are Python values, so it
+; crosses over here.  Left bare the entry was still findable by another bare
+; one, which is why this showed up as a repr (`{colour: 'red'}`, the key with
+; no quotes) rather than as a lookup failure.
+(def %py-dict-kwargs
+  (fn (_ kws)
+    (def go
+      (fn (self l acc)
+        (if (null? l) (%py-reverse acc)
+          (self (rest l)
+            (pair (pair (%py-str-of-x (first (first l))) (rest (first l))) acc)))))
+    (go kws ())))
+
+(def %py-tuple-ctor
+  (fn (_ . a)
+    (if (null? a) (%py-tuple-new ()) (%py-tuple-new (%py-iter-elems (first a))))))
+
+(def %py-type-ctor
+  (fn (_ . a)
+    (if (if (null? a) #t (not (null? (rest a))))
+      (Err raise (lit type) "type() takes 1 argument here" ())
+      (%py-type-of (first a)))))
+
+; --- the class objects -------------------------------------------------------
+; int before bool, because bool derives from it.
+
+(def %py-cls-int
+  (%py-class-new "int" %py-cls-object (list (pair "%ctor" %py-int-ctor)) "int"))
+(def %py-cls-bool
+  (%py-class-new "bool" %py-cls-int
+    (list (pair "%final" #t) (pair "%ctor" %py-bool-ctor)) "bool"))
+(def %py-cls-float
+  (%py-class-new "float" %py-cls-object (list (pair "%ctor" %py-float-ctor)) "float"))
+(def %py-cls-complex
+  (%py-class-new "complex" %py-cls-object (list (pair "%ctor" %py-complex-ctor)) "complex"))
+(def %py-str-methods
+  (list
+    (pair "%ctor" %py-str-ctor)
+    (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
+    (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
+    (pair "__iter__"     (fn (_ self) (%py-native-of self)))
+    (pair "__contains__" (fn (_ self x) (%py-in x (%py-native-of self))))
+    (pair "__eq__"       (fn (_ self o) (%py-eq (%py-native-of self) (%py-native-of o))))
+    (pair "__lt__"       (fn (_ self o) (%py-lt (%py-native-of self) (%py-native-of o))))
+    (pair "__gt__"       (fn (_ self o) (%py-gt (%py-native-of self) (%py-native-of o))))
+    (pair "__le__"       (fn (_ self o) (%py-le (%py-native-of self) (%py-native-of o))))
+    (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
+    (pair "__str__"      (fn (_ self) (%py-str (%py-native-of self))))
+    (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
+    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))))
+
+(def %py-cls-str
+  (%py-class-new "str" %py-cls-object %py-str-methods "str"))
+; THE BUILTIN TYPE OBJECT CARRIES THE PROTOCOL, which is what makes
+; `class mylist(list)` work without teaching seventy dispatch sites about
+; wrappers: a subclass inherits these through the base walk that was already
+; there, so every `(%py-dunder obj "__len__")` in this file finds one.  Each
+; reads through %py-native-of, which is the instance's value for a subclass
+; and the value itself for a plain list.
+(def %py-list-methods
+  (list
+    (pair "%ctor" %py-list-ctor)
+    (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
+    (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
+    (pair "__setitem__"  (fn (_ self i v) (%py-setindex (%py-native-of self) i v)))
+    (pair "__delitem__"  (fn (_ self i) (%py-delindex (%py-native-of self) i)))
+    ; __iter__ answers the list itself; %py-obj-elems takes a non-iterator
+    ; answer and iterates it, which is exactly what is wanted here.
+    (pair "__iter__"     (fn (_ self) (%py-native-of self)))
+    (pair "__contains__" (fn (_ self x) (%py-in x (%py-native-of self))))
+    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))
+    (pair "__eq__"       (fn (_ self o) (%py-eq (%py-native-of self) (%py-native-of o))))
+    (pair "__str__"      (fn (_ self) (%py-repr-of (%py-native-of self))))
+    (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
+    ; `list.__init__(self, xs)` FILLS the instance, which is how a subclass
+    ; that writes its own __init__ passes the arguments down.
+    (pair "__init__"
+      (fn (_ self . args)
+        (%seq
+          (if (null? args)
+            ()
+            (%py-list-set! self (%py-iter-elems (first args))))
+          ())))))
+
+; THE LAZY BUILTINS ARE CLASSES IN PYTHON, not functions -- `class mymap(map)`
+; is ordinary code, and the corpus writes it.  Each keeps the function it
+; always was as its %ctor, so `map(f, xs)` answers exactly what it did; what is
+; new is that the name is a CLASS, so it can be named as a base and a subclass
+; inherits an iterator's surface: __iter__ answers the value the instance
+; carries, and __next__ pulls from it.
+(def %py-lazy-methods
+  (fn (_ ctor)
+    (list
+      (pair "%ctor" ctor)
+      (pair "__iter__" (fn (_ self) (%py-native-of self)))
+      (pair "__next__" (fn (_ self) (%py-next (%py-native-of self)))))))
+
+(def %py-cls-list
+  (%py-class-new "list" %py-cls-object %py-list-methods "list"))
+(def %py-cls-set
+  (%py-class-new "set" %py-cls-object (list (pair "%ctor" %py-set-ctor)) "set"))
+(def %py-cls-frozenset
+  (%py-class-new "frozenset" %py-cls-object (list (pair "%ctor" %py-frozenset-ctor)) "frozenset"))
+(def %py-dict-methods
+  (list
+    (pair "%ctor" %py-dict-ctor)
+    (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
+    (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
+    (pair "__iter__"     (fn (_ self) (%py-native-of self)))
+    (pair "__contains__" (fn (_ self x) (%py-in x (%py-native-of self))))
+    (pair "__eq__"       (fn (_ self o) (%py-eq (%py-native-of self) (%py-native-of o))))
+    (pair "__lt__"       (fn (_ self o) (%py-lt (%py-native-of self) (%py-native-of o))))
+    (pair "__gt__"       (fn (_ self o) (%py-gt (%py-native-of self) (%py-native-of o))))
+    (pair "__le__"       (fn (_ self o) (%py-le (%py-native-of self) (%py-native-of o))))
+    (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
+    (pair "__str__"      (fn (_ self) (%py-str (%py-native-of self))))
+    (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
+    (pair "__setitem__"  (fn (_ self i v) (%py-setindex (%py-native-of self) i v)))
+    (pair "__delitem__"  (fn (_ self i) (%py-delindex (%py-native-of self) i)))))
+
+(def %py-cls-dict
+  (%py-class-new "dict" %py-cls-object %py-dict-methods "dict"))
+(def %py-tuple-methods
+  (list
+    (pair "%ctor" %py-tuple-ctor)
+    (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
+    (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
+    (pair "__iter__"     (fn (_ self) (%py-native-of self)))
+    (pair "__contains__" (fn (_ self x) (%py-in x (%py-native-of self))))
+    (pair "__eq__"       (fn (_ self o) (%py-eq (%py-native-of self) (%py-native-of o))))
+    (pair "__lt__"       (fn (_ self o) (%py-lt (%py-native-of self) (%py-native-of o))))
+    (pair "__gt__"       (fn (_ self o) (%py-gt (%py-native-of self) (%py-native-of o))))
+    (pair "__le__"       (fn (_ self o) (%py-le (%py-native-of self) (%py-native-of o))))
+    (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
+    (pair "__str__"      (fn (_ self) (%py-str (%py-native-of self))))
+    (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
+    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))))
+
+(def %py-cls-tuple
+  (%py-class-new "tuple" %py-cls-object %py-tuple-methods "tuple"))
+(def %py-cls-type
+  (%py-class-new "type" %py-cls-object (list (pair "%ctor" %py-type-ctor)) "type"))
+(def %py-cls-NoneType
+  (%py-class-new "NoneType" %py-cls-object () "NoneType"))
+
+; bytes(...) -- from a list of ints, from a count (that many zero bytes), or
+; from something already bytes.  The type object makes `bytes` a name and
+; gives type(b'a') something to answer.
+(def %py-bytes-ctor
+  (fn (_ . args)
+    (if (null? args)
+      (%py-bytes-new ())
+      (let ((v (first args)))
+        (match
+          ; bytes(bytearray(b'x')) is a bytes, and a bytes of its own -- this
+          ; is one of the two places the strict test earns its keep.
+          ((%py-bytes-only? v) v)
+          ((%py-bytes-is v) (%py-bytes-new (%py-bytes-list v)))
+          ((%py-list? v)
+            (%py-bytes-new (%py-bytes-of-codes (%py-list-elems v) ())))
+          ((%py-tuple-is v)
+            (%py-bytes-new (%py-bytes-of-codes (%py-tuple-elems v) ())))
+          ((%py-str-is v)
+            (Err raise (lit type) "string argument without an encoding" ()))
+          (#t (%py-bytes-new (%py-bytes-zeros v ()))))))))
+
+; A NUL BYTE CANNOT BE CARRIED HERE, and saying so is better than answering a
+; short bytes.  A string on this platform is a C STRING BY AN ENGINE GUARANTEE
+; -- `str/nul-terminated`, in docs/engine-contract.md -- so it ends at its
+; first NUL and there is no argument that changes that.  The limit is the
+; string layer's, not this constructor's; what this constructor does is refuse
+; to hide it.
+;
+; EVERY SPELLING REFUSES, with this sentence: the literals `'\x00'` and
+; `b'\x00'` in python/tokens.x, chr(0) and so `'%c' % 0` in %py-chr, and both
+; arms here.  docs/nul-and-the-string-layer.md is the decision and its cost --
+; including why carrying a NUL in bytes ALONE would move the silent loss to
+; .decode() rather than remove it.
+; A ZERO IS A BYTE LIKE ANY OTHER NOW.  This used to refuse it -- and so did
+; bytes(n), chr(0) and every literal -- because the payload was a string that
+; would have ended there.  The payload is a byte list; the only rule left is
+; Python's own, that a byte is in range(0, 256).
+(def %py-bytes-of-codes
+  (fn (self codes acc)
+    (if (null? codes)
+      (List reverse acc)
+      (let ((c (%py-boolnorm (first codes))))
+        (if (if (< c 0) #t (> c 255))
+          (Err raise (lit value) "bytes must be in range(0, 256)" ())
+          (self (rest codes) (pair c acc)))))))
+
+; THE COUNT IS VALIDATED BEFORE THE BYTES ARE BUILT, and negative is its own
+; answer rather than a share of zero's.  Measured, CPython 3.14.7: bytes(0) is
+; b'', bytes(-1) is ValueError("negative count").  A positive count asks for
+; that many NUL bytes, and now gets them.
+(def %py-bytes-zeros
+  (fn (self n acc)
+    (if (< n 0)
+      (Err raise (lit value) "negative count" ())
+      (if (= n 0) acc (self (- n 1) (pair 0 acc))))))
+
+(def %py-bytes-methods
+  (list
+    (pair "%ctor" %py-bytes-ctor)
+    (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
+    (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
+    (pair "__iter__"     (fn (_ self) (%py-native-of self)))
+    (pair "__contains__" (fn (_ self x) (%py-in x (%py-native-of self))))
+    (pair "__eq__"       (fn (_ self o) (%py-eq (%py-native-of self) (%py-native-of o))))
+    (pair "__lt__"       (fn (_ self o) (%py-lt (%py-native-of self) (%py-native-of o))))
+    (pair "__gt__"       (fn (_ self o) (%py-gt (%py-native-of self) (%py-native-of o))))
+    (pair "__le__"       (fn (_ self o) (%py-le (%py-native-of self) (%py-native-of o))))
+    (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
+    (pair "__str__"      (fn (_ self) (%py-str (%py-native-of self))))
+    (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
+    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))))
+
+(def %py-cls-bytes
+  (%py-class-new "bytes" %py-cls-object %py-bytes-methods "bytes"))
+
+(def %py-bytearray-methods
+  (list
+    (pair "%ctor" %py-bytearray-ctor)
+    (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
+    (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
+    (pair "__iter__"     (fn (_ self) (%py-native-of self)))
+    (pair "__contains__" (fn (_ self x) (%py-in x (%py-native-of self))))
+    (pair "__eq__"       (fn (_ self o) (%py-eq (%py-native-of self) (%py-native-of o))))
+    (pair "__lt__"       (fn (_ self o) (%py-lt (%py-native-of self) (%py-native-of o))))
+    (pair "__gt__"       (fn (_ self o) (%py-gt (%py-native-of self) (%py-native-of o))))
+    (pair "__le__"       (fn (_ self o) (%py-le (%py-native-of self) (%py-native-of o))))
+    (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
+    (pair "__str__"      (fn (_ self) (%py-str (%py-native-of self))))
+    (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
+    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))))
+
+(def %py-cls-bytearray
+  (%py-class-new "bytearray" %py-cls-object %py-bytearray-methods "bytearray"))
+
+(def %py-type-of
+  ; ELEVEN ARMS, so a match: the class a value answers to, asked once per
+  ; kind.  bool is checked before int because True is an int in this runtime
+  ; as it is in Python, and the numeric kinds are read from one place at the
+  ; end rather than re-asked per arm.
+  (fn (_ v)
+    (match
+      ((eq? v #t) %py-cls-bool)
+      ((eq? v #f) %py-cls-bool)
+      ((null? v) %py-cls-NoneType)
+      ((%py-barr-is v) %py-cls-bytearray)
+      ((%py-bytes-is v) %py-cls-bytes)
+      ((%py-str-is v) %py-cls-str)
+      ((%py-list-is v) %py-cls-list)
+      ((%py-set-is v) (if (%py-set-frozen? v) %py-cls-frozenset %py-cls-set))
+      ((%py-dict-is v) %py-cls-dict)
+      ((%py-tuple-is v) %py-cls-tuple)
+      ((%py-obj-is v) (%py-obj-class v))
+      ((%py-class-is v) %py-cls-type)
+      (#t
+        (let ((k (%py-num-kind v)))
+          (match
+            ((eq? k (lit int)) %py-cls-int)
+            ((eq? k (lit float)) %py-cls-float)
+            ((eq? k (lit complex)) %py-cls-complex)
+            (#t (Err raise (lit type) "type: unsupported value"))))))))
+
+; isinstance walks the base chain with the same %py-subclass? the exception
+; matcher uses, so user classes, user exceptions and builtins all answer from
+; one definition.  The tuple form is Python's "any of these".
+(def %py-isinstance-any ())
+(set! %py-isinstance-any
+  (fn (self v clss)
+    (if (null? clss)
+      #f
+      (if (%py-isinstance v (first clss)) #t (self v (rest clss))))))
+
+(def %py-isinstance
+  (fn (_ v cls)
+    (if (%py-tuple-is cls)
+      (%py-isinstance-any v (%py-tuple-elems cls))
+      (if (not (%py-class-is cls))
+        (Err raise (lit type)
+          "isinstance() arg 2 must be a type or tuple of types" ())
+        (%py-subclass? (%py-type-of v) cls)))))
+
+; --- Slicing -----------------------------------------------------------------
+;
+; Python's slice rules, stated once and used by str, list and tuple:
+;
+;   - a missing step is 1, and step 0 is a ValueError
+;   - negative indices count from the end, AFTER which anything still out of
+;     range CLAMPS rather than raising -- `lst[1:100]` answers what is there,
+;     which is the deliberate difference between slicing and indexing
+;   - a negative step defaults start to the last element and stop to "before
+;     the first", which is how 'hello'[::-1] reverses
+;
+; The walk collects INDICES, then each type maps them its own way: a sequence
+; through List ref over its element list, a string through one-character subs
+; joined at the end.
+
+(def %py-sl-adj
+  (fn (_ v len step lo hi)
+    (let ((a (if (< v 0) (+ v len) v)))
+      (if (< a lo) lo (if (> a hi) hi a)))))
+
+(def %py-sl-bounds
+  (fn (_ len start stop step)
+    (if (> step 0)
+      (pair
+        (if (null? start) 0 (%py-sl-adj start len step 0 len))
+        (if (null? stop) len (%py-sl-adj stop len step 0 len)))
+      (pair
+        (if (null? start) (- len 1) (%py-sl-adj start len step (- 0 1) (- len 1)))
+        (if (null? stop) (- 0 1) (%py-sl-adj stop len step (- 0 1) (- len 1)))))))
+
+(def %py-sl-idxs
+  (fn (self i stop step acc)
+    (if (if (> step 0) (>= i stop) (<= i stop))
+      (%py-reverse acc)
+      (self (+ i step) stop step (pair i acc)))))
+
+(def %py-slice-idxs
+  (fn (_ len start stop step)
+    (let ((b (%py-sl-bounds len start stop step)))
+      (%py-sl-idxs (first b) (rest b) step ()))))
+
+(def %py-sl-pick
+  (fn (self elems idxs acc)
+    (if (null? idxs)
+      (%py-reverse acc)
+      (self elems (rest idxs) (pair (List ref (first idxs) elems) acc)))))
+
+(def %py-sl-chars
+  (fn (self str idxs acc)
+    (if (null? idxs)
+      (%py-reverse acc)
+      (self str (rest idxs) (pair (Str sub (first idxs) 1 str) acc)))))
+
+(def %py-slice
+  (fn (_ obj start stop step)
+    (let ((st (if (null? step) 1 step)))
+      (match
+        ((= st 0) (Err raise (lit value) "slice step cannot be zero" ()))
+        ((%py-str-is obj)
+          (let ((l (%py-str-cps obj)))
+            (%py-str-new (%py-sl-pick l (%py-slice-idxs (%pb-len l) start stop st) ()))))
+        ((%py-bytes-is obj)
+          (let ((l (%py-bytes-list obj)))
+            ((if (%py-barr-is obj) %py-barr-new %py-bytes-new)
+              (%py-sl-pick l (%py-slice-idxs (%pb-len l) start stop st) ()))))
+        ((%py-list-is obj)
+          (%py-list-new
+            (%py-sl-pick (%py-list-elems obj)
+              (%py-slice-idxs (%py-length (%py-list-elems obj)) start stop st) ())))
+        ((%py-tuple-is obj)
+          (%py-tuple-new
+            (%py-sl-pick (%py-tuple-elems obj)
+              (%py-slice-idxs (%py-length (%py-tuple-elems obj)) start stop st) ())))
+        ; a dict gets Python's own complaint: a slice is not a key
+        (#t (Err raise (lit type) "unhashable type: 'slice'" ()))))))
+
+; --- def, whatever the frame depth -------------------------------------------
+;
+; The REPL's conditional hoists run inside a guard HANDLER, where a plain def
+; binds in the handler's frame and vanishes with it.  base/def-global is the
+; engine door that defines for the CALLER at any depth; the symbol comes
+; quoted, the value evaluated.
+(def %py-defg-prim (prim-ref (lit base) (lit def-global)))
+(def %py-defg (fn (_ sym v) (%py-defg-prim sym v)))
+
+; Each of these was a bare function until the corpus asked to subclass one.
+(def %py-cls-map       (%py-class-new "map"       %py-cls-object (%py-lazy-methods %py-map)       "map"))
+(def %py-cls-filter    (%py-class-new "filter"    %py-cls-object (%py-lazy-methods %py-filter)    "filter"))
+(def %py-cls-zip       (%py-class-new "zip"       %py-cls-object (%py-lazy-methods %py-zip)       "zip"))
+(def %py-cls-enumerate (%py-class-new "enumerate" %py-cls-object (%py-lazy-methods %py-enumerate) "enumerate"))
+(def %py-cls-reversed  (%py-class-new "reversed"  %py-cls-object (%py-lazy-methods %py-reversed)  "reversed"))
+; NOT EVERY BUILTIN IS AN ACCEPTABLE BASE.  CPython refuses `class X(range)`
+; and `class X(bool)` outright -- "type 'range' is not an acceptable base
+; type" -- so the marker below says so, under a key no Python name can spell.
+(def %py-cls-range
+  (%py-class-new "range" %py-cls-object
+    (pair (pair "%final" #t) (%py-lazy-methods %py-range)) "range"))
