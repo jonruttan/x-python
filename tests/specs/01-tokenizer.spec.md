@@ -153,13 +153,20 @@ denotes belongs to the evaluator, not here.
 
 ## tokenizer strings
 
+A string token's value is a list of UTF-8 BYTES, not a platform string, and
+that is what these cases assert. It has to be: a platform string ends at its
+first NUL, so a token holding one could not carry `'a\x00b'` -- the literal
+would arrive two characters short with no error where the mistake was made.
+The parser decodes the bytes to code points once, at parse time, and `str` is
+that code point list (python/str.x).
+
 ### a single-quoted string
 
 ```python
 (%seq (write (python-tokenize "'hi'")) (newline))
 ```
 ---
-    (('tok-string "hi"))
+    (('tok-string (104 105)))
 
 ### a double-quoted string
 
@@ -167,7 +174,7 @@ denotes belongs to the evaluator, not here.
 (%seq (write (python-tokenize "\"hi\"")) (newline))
 ```
 ---
-    (('tok-string "hi"))
+    (('tok-string (104 105)))
 
 ### an empty string
 
@@ -175,7 +182,7 @@ denotes belongs to the evaluator, not here.
 (%seq (write (python-tokenize "''")) (newline))
 ```
 ---
-    (('tok-string ""))
+    (('tok-string ()))
 
 ### a one-character string
 
@@ -187,7 +194,7 @@ rather than accumulating during `analyse`, is why this one holds.
 (%seq (write (python-tokenize "'a'")) (newline))
 ```
 ---
-    (('tok-string "a"))
+    (('tok-string (97)))
 
 ### an escaped quote does not end the string
 
@@ -195,7 +202,7 @@ rather than accumulating during `analyse`, is why this one holds.
 (%seq (write (python-tokenize "'it\\'s'")) (newline))
 ```
 ---
-    (('tok-string "it's"))
+    (('tok-string (105 116 39 115)))
 
 ### a newline escape becomes one character, not two
 
@@ -203,7 +210,7 @@ Asserted by length rather than by rendering, so the case does not also depend
 on how the writer spells a control character.
 
 ```python
-(%seq (write (Str8 length (first (rest (first (python-tokenize "'a\\nb'")))))) (newline))
+(%seq (write (List length (first (rest (first (python-tokenize "'a\\nb'")))))) (newline))
 ```
 ---
     3
@@ -309,7 +316,7 @@ second is, so `//` before a name is still floor division.
 (%seq (write (python-tokenize "print('hi')")) (newline))
 ```
 ---
-    (('tok-name "print") ('tok-group "(" (('tok-string "hi")) ")"))
+    (('tok-name "print") ('tok-group "(" (('tok-string (104 105))) ")"))
 
 ### two lines
 

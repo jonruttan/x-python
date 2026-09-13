@@ -30,6 +30,7 @@
 (import python/types)
 (import python/format)
 (import python/bytes)
+(import python/str)
 
 (provide python/runtime
   %py-add %py-sub %py-mul %py-div %py-floordiv %py-mod %py-pow %py-neg
@@ -41,7 +42,7 @@
   %py-Ellipsis %py-dir %py-cls-bytearray
   %py-raise %py-exc-match %py-exc-match-any
   %py-mkclass %py-setattr %py-super
-  %py-str %py-repr-of %py-mklist-of %py-hasattr
+  %py-str %py-repr-of %py-repr-builtin %py-mklist-of %py-hasattr
   %py-cls-type %py-cls-int %py-cls-float %py-cls-bool %py-cls-str
   %py-cls-list %py-cls-dict %py-cls-tuple %py-cls-NoneType %py-cls-set %py-cls-frozenset
   %py-type-of %py-isinstance %py-truthy %py-slice %py-defg
@@ -170,11 +171,11 @@
           (Err raise (lit type) "can't concat to bytes" ())))
       ((%py-bytes-is b)
         (Err raise (lit type) "can't concat bytes to non-bytes" ()))
-      ((str? a)
-        (if (str? b)
-          (Str8 append a b)
+      ((%py-str-is a)
+        (if (%py-str-is b)
+          (%py-str-new (%pb-cat (%py-str-cps a) (%py-str-cps b)))
           (Err raise (lit type) "can only concatenate str to str" ())))
-      ((str? b)
+      ((%py-str-is b)
         (Err raise (lit type) "unsupported operand type(s) for +" ()))
       ; Lists concatenate through PY-LIST's own `+` op, which the engine
       ; dispatches from here.  Bools are ints here too: 1j + True.
@@ -272,7 +273,45 @@
 ; containers can have ops because they are types this bundle invented; str is
 ; not, so its Python rules stay behind a `str?` test.
 (def %py-str-repeat
-  (fn (self s n) (if (<= n 0) "" (Str8 append s (self s (- n 1))))))
+  (fn (_ s n) (%py-str-new (%pb-repeat (%py-str-cps s) n ()))))
+
+; --- the str seams that are not the method table -----------------------------
+;
+; PRINTING A NUL WORKS, and the refusal that used to stand here is worth
+; remembering rather than just deleting.  The value always carried the byte --
+; len, indexing, slicing, comparison and repr all answered for it -- but the
+; shared spec harness truncated captured stdout at the first zero byte, so a
+; `print` that emitted one could not be pinned by any test, and shipping
+; behaviour no spec can hold was the worse of the two trades.
+;
+; The harness was the fix, and it landed: a captured NUL now reaches the
+; comparison as the literal text `<<NUL>>`, so the behaviour is assertable and
+; 88-str-nul.spec.md asserts it.  %ps-write is the door -- see "the writer" in
+; python/str.x for why print cannot simply `display` a string like everything
+; else does.
+(def %py-str-display (fn (_ l) (%ps-write l)))
+
+; ONE CHARACTER IS A str OF ONE CODE POINT, which is what iterating a str
+; yields -- not an int, the way iterating a bytes does.
+(def %py-str-chars-of
+  (fn (self l acc)
+    (if (null? l) (List reverse acc)
+      (self (rest l) (pair (%py-str-new (list (first l))) acc)))))
+
+; A POLYNOMIAL OVER THE CODE POINTS.  The platform's Hash takes a string and
+; a str can no longer be handed to it -- and a NUL-bearing key has to hash
+; like any other, which is the whole point.  Multiply-and-add rather than
+; FNV, because xor would be a bit walk per character here and this is asked
+; once per dict subscript.
+(def %py-cp-hash
+  (fn (self l h)
+    (if (null? l) h
+      (self (rest l) (% (+ (* h 31) (first l)) 4294967296)))))
+
+; `s % args` -- the formatter still speaks the platform's string, so this is
+; its door.  A NUL in the FORMAT would stop it, and says so.
+(def %py-format-str
+  (fn (_ a b) (%py-str-of-x (%py-format (%ps->x (%py-str-cps a)) b))))
 
 (def %py-mul
   (fn (_ a b)
@@ -289,11 +328,11 @@
         ((if (%py-barr-is a) %py-barr-new %py-bytes-new) (%pb-repeat (%py-bytes-list a) b ())))
       ((%py-bytes-is b)
         ((if (%py-barr-is b) %py-barr-new %py-bytes-new) (%pb-repeat (%py-bytes-list b) a ())))
-      ((str? a)
-        (if (str? b)
+      ((%py-str-is a)
+        (if (%py-str-is b)
           (Err raise (lit type) "can't multiply sequence by non-int" ())
           (%py-str-repeat a b)))
-      ((str? b) (%py-str-repeat b a))
+      ((%py-str-is b) (%py-str-repeat b a))
       ((if (eq? (%py-typeof-prim a) %py-th-complex) #t
               (eq? (%py-typeof-prim b) %py-th-complex))
         (%py-cx-arith a b "*" 2))
@@ -406,7 +445,7 @@
     ; str.__mod__ answers first: "%d" % obj formats the object, it does not
     ; ask the object for __rmod__
     (match
-      ((str? a) (%py-format a b))
+      ((%py-str-is a) (%py-format-str a b))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__mod__" "__rmod__" "%"))
       ((if (%py-complex-is a) #t (%py-complex-is b))
@@ -584,9 +623,9 @@
           (if (eq? (%py-num-kind (%py-boolnorm a)) (lit int))
             (%py-in-walk (%py-boolnorm a) (%py-bytes-list b))
             (Err raise (lit type) "a bytes-like object is required" ()))))
-      ((str? b)
-        (if (str? a)
-          (Str8 includes? a b)
+      ((%py-str-is b)
+        (if (%py-str-is a)
+          (%pb-in? (%py-str-cps a) (%py-str-cps b))
           (Err raise (lit type)
             "'in <string>' requires string as left operand" ())))
       ((%py-set-is b) (%py-set-has? a (%py-set-elems b)))
@@ -761,7 +800,7 @@
   (fn (_ a)
     (match
       ((%py-bytes-is a) (%py-bytes-list a))
-      ((str? a) (Err raise (lit type) "a bytes-like object is required, not 'str'" ()))
+      ((%py-str-is a) (Err raise (lit type) "a bytes-like object is required, not 'str'" ()))
       (#t (Err raise (lit type) "a bytes-like object is required" ())))))
 
 ; A NEEDLE MAY BE ONE BYTE WRITTEN AS AN INT.  `b"abc".find(ord("b"))` is
@@ -953,10 +992,10 @@
       (let ((v (first args)))
         (match
           ((%py-bytes-is v) (%py-barr-new (%py-bytes-list v)))
-          ((str? v)
+          ((%py-str-is v)
             (if (null? (rest args))
               (Err raise (lit type) "string argument without an encoding" ())
-              (%py-barr-of-str v)))
+              (%py-barr-new (%ps-encode (%py-str-cps v) ()))))
           ((%py-list? v) (%py-barr-new (%py-bytes-of-codes (%py-list-elems v) ())))
           ((%py-tuple-is v) (%py-barr-new (%py-bytes-of-codes (%py-tuple-elems v) ())))
           ((%py-num? v) (%py-barr-new (%py-bytes-zeros v ())))
@@ -1019,8 +1058,8 @@
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__eq__" "__eq__")))
           (if (eq? r %py-NotImplemented) (eq? a b) r)))
-      ((str? a) (if (str? b) (Str8 =? a b) #f))
-      ((str? b) #f)
+      ((%py-str-is a) (if (%py-str-is b) (%pb-eq? (%py-str-cps a) (%py-str-cps b)) #f))
+      ((%py-str-is b) #f)
       ((%py-bytes-is a)
         (if (%py-bytes-is b) (%pb-eq? (%py-bytes-list a) (%py-bytes-list b)) #f))
       ((%py-bytes-is b) #f)
@@ -1115,8 +1154,8 @@
 (def %py-lt-num
   (fn (_ a b)
     (%py-cmp-refuse a b "<")
-    (if (if (str? a) (str? b) #f)
-      (< (%py-strcmp a b 0) 0)
+    (if (if (%py-str-is a) (%py-str-is b) #f)
+      (< (%pb-cmp (%py-str-cps a) (%py-str-cps b)) 0)
       (< (if (eq? a #t) 1 (if (eq? a #f) 0 a))
          (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
 (def %py-gt
@@ -1139,8 +1178,8 @@
 (def %py-gt-num
   (fn (_ a b)
     (%py-cmp-refuse a b ">")
-    (if (if (str? a) (str? b) #f)
-      (> (%py-strcmp a b 0) 0)
+    (if (if (%py-str-is a) (%py-str-is b) #f)
+      (> (%pb-cmp (%py-str-cps a) (%py-str-cps b)) 0)
       (> (if (eq? a #t) 1 (if (eq? a #f) 0 a))
          (if (eq? b #t) 1 (if (eq? b #f) 0 b))))))
 (def %py-le
@@ -1157,7 +1196,7 @@
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__le__" "__ge__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse "<=") r)))
-      ((if (str? a) (str? b) #f) (<= (%py-strcmp a b 0) 0))
+      ((if (%py-str-is a) (%py-str-is b) #f) (<= (%pb-cmp (%py-str-cps a) (%py-str-cps b)) 0))
       ((%py-lt a b) #t)
       (#t (%py-eq a b)))))
 (def %py-ge
@@ -1174,7 +1213,7 @@
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__ge__" "__le__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse ">=") r)))
-      ((if (str? a) (str? b) #f) (>= (%py-strcmp a b 0) 0))
+      ((if (%py-str-is a) (%py-str-is b) #f) (>= (%pb-cmp (%py-str-cps a) (%py-str-cps b)) 0))
       ((%py-gt a b) #t)
       (#t (%py-eq a b)))))
 
@@ -1207,7 +1246,7 @@
       ((%py-list? v) (%py-length (%py-list-elems v)))
       ((%py-set-is v) (%py-length (%py-set-elems v)))
       ((%py-view-is v) (%py-length (%py-view-elems v)))
-      ((str? v) (Str length v))
+      ((%py-str-is v) (%pb-len (%py-str-cps v)))
       ((%py-bytes-is v) (%pb-len (%py-bytes-list v)))
       (#t (Err raise (lit type) "object of this type has no len()" ())))))
 
@@ -1221,12 +1260,13 @@
       ((%py-obj-is v)
         (let ((m (%py-dunder v "__getitem__")))
           (if (null? m) (Err raise (lit type) "object is not subscriptable" ()) (m i))))
-      ((str? v)
-        (let ((n (Str length v)))
-          (let ((k (if (< i 0) (+ n i) i)))
-            (if (if (< k 0) #t (>= k n))
-              (Err raise (lit index) "string index out of range" ())
-              (Str sub k 1 v)))))
+      ((%py-str-is v)
+        (let ((l (%py-str-cps v)))
+          (let ((n (%pb-len l)))
+            (let ((k (if (< i 0) (+ n i) i)))
+              (if (if (< k 0) #t (>= k n))
+                (Err raise (lit index) "string index out of range" ())
+                (%py-str-new (list (%pb-ref l k))))))))
       ; a bytes index is the byte's value, an int
       ((%py-bytes-is v)
         (let ((l (%py-bytes-list v)))
@@ -1426,7 +1466,7 @@
               (go 0 ()))))))))
 
 (def %py-iter-elems
-  (fn (_ v)
+  (fn (_ v . who)
     (match
       ((%py-obj-is v) (%py-obj-elems v))
       ; Iterating a dict yields its KEYS, as in Python.
@@ -1435,13 +1475,19 @@
       ((%py-list? v) (%py-list-elems v))
       ((%py-set-is v) (%py-set-elems v))
       ((%py-view-is v) (%py-view-elems v))
-      ((str? v) (%py-str-chars v 0 (Str8 length v)))
+      ((%py-str-is v) (%py-str-chars-of (%py-str-cps v) ()))
       ; iterating bytes yields ints
       ((%py-bytes-is v)
         (%py-bytes-list v))
       ; a generator runs to its end; every consumer here wants the whole list
       ((%py-gen-is v) (%py-gen-drain v ()))
-      (#t (Err raise (lit type) "object is not iterable" ())))))
+      ; A CALLER MAY NAME ITSELF IN THE REFUSAL.  "object is not iterable" is
+      ; true and says nothing about what was being attempted; `','.join(5)`
+      ; wants to talk about join.  Taken as a trailing argument so that the
+      ; thirty-odd existing call sites stay exactly as they are -- one
+      ; implementation with a door, not a copy per caller.
+      (#t (Err raise (lit type)
+            (if (null? who) "object is not iterable" (first who)) ())))))
 
 ; range(stop) / range(start, stop) / range(start, stop, step)
 ;
@@ -1718,7 +1764,7 @@
       ((%py-obj-is obj) (%py-obj-attr obj name))
       ((%py-list? obj) (%py-list-attr obj name))
       ((%py-dict? obj) (%py-dict-attr obj name))
-      ((str? obj) (%py-str-method obj name))
+      ((%py-str-is obj) (%py-str-method obj name))
       ((%py-barr-is obj) (%py-barr-attr obj name))
       ((%py-bytes-is obj) (%py-bytes-attr obj name))
       ((%py-set-is obj) (%py-set-attr obj name))
@@ -1737,7 +1783,7 @@
       (#t
         (let ((sig (%py-sig-of obj)))
           (if (if (null? sig) #f (Str8 =? name "__name__"))
-            (first sig)
+            (%py-str-of-x (first sig))
             (Err raise (lit attribute)
               (Str8 append (Str8 append "object has no attribute '" name) "'")())))))))
 
@@ -1753,7 +1799,11 @@
        (if (null? rows) ()
          (if (Str8 =? (first (first rows)) "%ctor")
            (go (rest rows))
-           (pair (pair (first (first rows)) (rest (first rows))) (go (rest rows))))))
+           ; __dict__ IS A DICT, so the names cross over: they are the
+           ; platform's strings in the method table and strs once they are
+           ; keys a Python program can look up.
+           (pair (pair (%py-str-of-x (first (first rows))) (rest (first rows)))
+                 (go (rest rows))))))
      (%py-class-methods cls))))
 
 ; AN UNBOUND METHOD IS THE ATTRIBUTE ASKED OF A RECEIVER, with the receiver
@@ -1779,7 +1829,12 @@
     ; 'str' object has no attribute __name__ -- when what was asked was the
     ; name of the class itself, which `type(x).__name__` asks constantly.
     (match
-      ((Str8 =? name "__name__") (%py-class-name cls))
+      ; __name__ IS A str, like every other text a program can get at.  It
+      ; is the platform's string in the class record, and `type(x).__name__ ==
+      ; "Foo"` compared it against a str and answered False -- a wrong answer,
+      ; not an error, which is why it took a decorator spec and a descriptor
+      ; spec to notice.
+      ((Str8 =? name "__name__") (%py-str-of-x (%py-class-name cls)))
       ((Str8 =? name "__bases__") (%py-tuple-of-list (%py-class-bases cls)))
       ((Str8 =? name "__dict__") (%py-dict-new (%py-class-rows cls)))
       ; dict.fromkeys is a CLASSMETHOD: it answers a new dict, so it hangs
@@ -1850,337 +1905,210 @@
 ; Ranges follow Python's slice clamping (None, negatives, past-the-end);
 ; index/rindex raise ValueError where find/rfind answer -1.
 
-(def %py-s-ws?
-  (fn (_ c) (match
-              ((= c 32) #t)
-              ((= c 9) #t)
-              ((= c 10) #t)
-              ((= c 13) #t)
-              ((= c 11) #t)
-              (#t (= c 12)))))
-(def %py-s-code (fn (_ s i) (%py-char-code (%str-ref s i))))
+; --- str, over code points ---------------------------------------------------
+;
+; THIS USED TO BE 331 LINES, and 24 helpers, every one of them a string
+; algorithm over Str8.  python/bytes.x wrote all of them again over lists of
+; ints for `bytes`, and a str is a list of ints too -- code points rather than
+; bytes -- so the second copy is the only copy now and this is the table onto
+; it.
+;
+; It is not just deduplication.  The old helpers ran on BYTES while len, [],
+; ord and slicing reached for the code-point-aware Str: for ASCII the two
+; agree and nothing showed, and for anything else `find` counted one unit
+; while `len` counted another.  One carrier, one unit, one answer.
+;
+; An argument arrives as a str and leaves as its code points; anything else is
+; Python's TypeError, said where the argument is taken rather than deep in a
+; walk.
+(def %py-s-cps
+  (fn (_ v who)
+    (if (%py-str-is v)
+      (%py-str-cps v)
+      (Err raise (lit type)
+        (Str8 append who " argument must be str") ()))))
 
-; (lo . hi) for a start/end pair the way a slice clamps them.
-(def %py-s-range
-  (fn (_ n start end)
-    (def clamp
-      (fn (_ v0 dflt)
-        (def v (if (eq? v0 #t) 1 (if (eq? v0 #f) 0 v0)))
-        (if (null? v) dflt
-          (let ((w (if (< v 0) (+ n v) v)))
-            (if (< w 0) 0 (if (> w n) n w))))))
-    (pair (clamp start 0) (clamp end n))))
-; A start past the end finds nothing, even an empty substring -- Python
-; answers -1 there where a clamped start would answer len.
-(def %py-s-start-past?
-  (fn (_ n start0)
-    (def start (if (eq? start0 #t) 1 (if (eq? start0 #f) 0 start0)))
-    (if (null? start) #f
-      (let ((w (if (< start 0) (+ n start) start))) (> w n)))))
+; __str__ AND __repr__ ANSWER EITHER KIND OF TEXT, so the four places that take
+; their answer need not ask which.  A user's dunder returns a str; the fallbacks
+; beside it -- an exception's message, the default repr -- are the platform's
+; strings, and both are text that must print as itself.  `display` of a PY-TEXT
+; writes its code points as raw values, which is how an object whose __str__
+; returned "as str" printed as mojibake.
+;
+; The display door goes through %ps-write, so an object whose __str__ answers a
+; NUL-bearing str prints the byte like any other str does.
+(def %py-text->x
+  (fn (_ s) (if (%py-str-is s) (%ps->x (%py-str-cps s)) s)))
+(def %py-text-display
+  (fn (_ s) (if (%py-str-is s) (%ps-write (%py-str-cps s)) (display s))))
 
-; First index of sub in s within [lo, hi), or -1.
-(def %py-s-find
-  (fn (_ s sub lo hi)
-    (def m (Str8 length sub))
-    (def go
-      (fn (self i)
-        (if (> (+ i m) hi) (- 0 1)
-          (if (Str8 =? (Str8 sub i m s) sub) i (self (+ i 1))))))
-    (if (> lo hi) (- 0 1) (go lo))))
-(def %py-s-rfind
-  (fn (_ s sub lo hi)
-    (def m (Str8 length sub))
-    (def go
-      (fn (self i)
-        (if (< i lo) (- 0 1)
-          (if (Str8 =? (Str8 sub i m s) sub) i (self (- i 1))))))
-    (if (> lo hi) (- 0 1) (go (- hi m)))))
+; A REQUIRED SEPARATOR THAT MAY NOT BE EMPTY.  `"asdf".partition("")` is a
+; ValueError in CPython; the degenerate triple ('', '', 'asdf') came back
+; instead.  Unlike split's separator this one is never absent, so there is
+; nothing for an empty one to be confused with -- see %py-s-sep for that case.
+(def %py-s-cps1
+  (fn (_ v who)
+    (let ((l (%py-s-cps v who)))
+      (if (null? l) (Err raise (lit value) "empty separator" ()) l))))
 
-(def %py-s-count
-  (fn (_ s sub lo hi)
-    (def m (Str8 length sub))
-    (if (= m 0)
-      (if (> lo hi) 0 (+ (- hi lo) 1))
-      (do
-        (def go
-          (fn (self i acc)
-            (let ((k (%py-s-find s sub i hi)))
-              (if (< k 0) acc (self (+ k m) (+ acc 1))))))
-        (go lo 0)))))
-
-(def %py-s-strip
-  (fn (_ s chars left right)
-    (def n (Str8 length s))
-    (def in?
-      (fn (_ c)
-        (if (null? chars)
-          (%py-s-ws? c)
-          (Str8 includes? (%py-cp->str c) chars))))
-    (def lo (if left (do (def go (fn (self i) (if (if (< i n) (in? (%py-s-code s i)) #f) (self (+ i 1)) i))) (go 0)) 0))
-    (def hi (if right (do (def go (fn (self i) (if (if (> i lo) (in? (%py-s-code s (- i 1))) #f) (self (- i 1)) i))) (go n)) n))
-    (Str8 sub lo (- hi lo) s)))
-
-; Whitespace split: runs of whitespace separate, none kept, maxsplit honoured.
-(def %py-s-wsplit
-  (fn (_ s maxsplit)
-    (def n (Str8 length s))
-    (def skip (fn (self i) (if (if (< i n) (%py-s-ws? (%py-s-code s i)) #f) (self (+ i 1)) i)))
-    (def word (fn (self i) (if (if (< i n) (not (%py-s-ws? (%py-s-code s i))) #f) (self (+ i 1)) i)))
-    (def go
-      (fn (self i k acc)
-        (let ((st (skip i)))
-          (if (>= st n)
-            (%py-reverse acc)
-            (if (if (>= maxsplit 0) (>= k maxsplit) #f)
-              ; the remainder is kept verbatim, trailing whitespace and all
-              (%py-reverse (pair (Str8 sub st (- n st) s) acc))
-              (let ((e (word st)))
-                (self e (+ k 1) (pair (Str8 sub st (- e st) s) acc))))))))
-    (go 0 0 ())))
-
-(def %py-s-sepsplit
-  (fn (_ s sep maxsplit)
-    (def n (Str8 length s))
-    (def m (Str8 length sep))
-    (def go
-      (fn (self i k acc)
-        (let ((j (if (if (>= maxsplit 0) (>= k maxsplit) #f) (- 0 1) (%py-s-find s sep i n))))
-          (if (< j 0)
-            (%py-reverse (pair (Str8 sub i (- n i) s) acc))
-            (self (+ j m) (+ k 1) (pair (Str8 sub i (- j i) s) acc))))))
-    (if (= m 0) (Err raise (lit value) "empty separator" ()) (go 0 0 ()))))
-
-; rsplit: split from the right; without a separator, whitespace from the right.
-(def %py-s-rsepsplit
-  (fn (_ s sep maxsplit)
-    (def n (Str8 length s))
-    (def m (Str8 length sep))
-    (def go
-      (fn (self hi k acc)
-        (let ((j (if (if (>= maxsplit 0) (>= k maxsplit) #f) (- 0 1) (%py-s-rfind s sep 0 hi))))
-          (if (< j 0)
-            (pair (Str8 sub 0 hi s) acc)
-            (self j (+ k 1) (pair (Str8 sub (+ j m) (- hi (+ j m)) s) acc))))))
-    (if (= m 0) (Err raise (lit value) "empty separator" ()) (go n 0 ()))))
-(def %py-s-rwsplit
-  (fn (_ s maxsplit)
-    (def n (Str8 length s))
-    (def back (fn (self i) (if (if (> i 0) (%py-s-ws? (%py-s-code s (- i 1))) #f) (self (- i 1)) i)))
-    (def wordb (fn (self i) (if (if (> i 0) (not (%py-s-ws? (%py-s-code s (- i 1)))) #f) (self (- i 1)) i)))
-    (def go
-      (fn (self hi k acc)
-        (let ((e (back hi)))
-          (if (<= e 0)
-            acc
-            (if (if (>= maxsplit 0) (>= k maxsplit) #f)
-              (pair (Str8 sub 0 e s) acc)
-              (let ((st (wordb e)))
-                (self st (+ k 1) (pair (Str8 sub st (- e st) s) acc))))))))
-    (go n 0 ())))
-
-(def %py-s-splitlines
-  (fn (_ s keep)
-    (def n (Str8 length s))
-    (def go
-      (fn (self i st acc)
-        (if (>= i n)
-          (%py-reverse (if (> i st) (pair (Str8 sub st (- i st) s) acc) acc))
-          (let ((c (%py-s-code s i)))
-            (if (if (= c 10) #t (= c 13))
-              (let ((w (if (if (= c 13) (if (< (+ i 1) n) (= (%py-s-code s (+ i 1)) 10) #f) #f) 2 1)))
-                (self (+ i w) (+ i w)
-                  (pair (Str8 sub st (- (+ i (if keep w 0)) st) s) acc)))
-              (self (+ i 1) st acc))))))
-    (go 0 0 ())))
-
-(def %py-s-all?
-  (fn (_ s pred)
-    (def n (Str8 length s))
-    (def go (fn (self i) (if (>= i n) #t (if (pred (%py-s-code s i)) (self (+ i 1)) #f))))
-    (if (= n 0) #f (go 0))))
-(def %py-s-upper? (fn (_ c) (if (>= c 65) (<= c 90) #f)))
-(def %py-s-lower? (fn (_ c) (if (>= c 97) (<= c 122) #f)))
-(def %py-s-alpha? (fn (_ c) (if (%py-s-upper? c) #t (%py-s-lower? c))))
-(def %py-s-digit? (fn (_ c) (if (>= c 48) (<= c 57) #f)))
-(def %py-s-any? (fn (_ s pred) (not (%py-s-all? s (fn (_ c) (not (pred c)))))))
-
-(def %py-s-map
-  (fn (_ s f)
-    (def n (Str8 length s))
-    (def go (fn (self i acc) (if (>= i n) acc (self (+ i 1) (Str8 append acc (%py-cp->str (f (%py-s-code s i) i)))))))
-    (go 0 "")))
-
-; CPython's centring: the extra character goes on the RIGHT when width is
-; odd relative to the string, which the marg & width & 1 term encodes.
-(def %py-s-center
-  (fn (_ s width fill)
-    (def n (Str8 length s))
-    (if (<= width n) s
-      (let ((marg (- width n)))
-        (let ((left (+ (Num quotient marg 2) (%py-bitand marg (%py-bitand width 1)))))
-          (Str8 append (%py-s-rep fill left) (Str8 append s (%py-s-rep fill (- marg left)))))))))
-(def %py-s-rep (fn (self f k) (if (<= k 0) "" (Str8 append f (self f (- k 1))))))
-
+; startswith AND endswith TAKE A TUPLE OF CANDIDATES and answer true if any one
+; of them matches -- `"foobar".startswith(("x", "foo"))` is True in CPython.  A
+; plain str is the one-candidate case, so both spellings go through here rather
+; than the test being written twice.
+(def %py-s-any?
+  (fn (_ v who test)
+    (if (%py-tuple-is v)
+      (%py-s-any-of (%py-tuple-elems v) who test)
+      (test (%py-s-cps v who)))))
+(def %py-s-any-of
+  (fn (self els who test)
+    (if (null? els)
+      #f
+      (if (test (%py-s-cps (first els) who))
+        #t
+        (self (rest els) who test)))))
 (def %py-s-arg (fn (_ a i) (if (> (%py-length a) i) (List ref i a) ())))
+(def %py-s-opt
+  (fn (_ a i d) (let ((v (%py-s-arg a i))) (if (null? v) d v))))
+; a separator or strip set: absent or None means "not given"
+(def %py-s-set
+  (fn (_ a i who)
+    (let ((v (%py-s-arg a i))) (if (null? v) () (%py-s-cps v who)))))
+; A SEPARATOR FOR split/rsplit, WHERE EMPTY IS AN ERROR AND ABSENT IS NOT.
+; The two cannot be told apart once the value is code points -- `""` and None
+; both arrive as () -- so the RAW argument decides: absent or None means split
+; on whitespace, and a str that happens to be empty is the ValueError CPython
+; raises.  %py-s-set is still right for strip() and friends, where an empty set
+; is simply an empty set.
+(def %py-s-sep
+  (fn (_ a i who)
+    (let ((raw (%py-s-arg a i)))
+      (if (null? raw)
+        ()
+        (let ((v (%py-s-cps raw who)))
+          (if (null? v)
+            (Err raise (lit value) "empty separator" ())
+            v))))))
 
-(def %py-s-subs
-  (fn (_ v) (if (%py-tuple-is v) (%py-tuple-elems v) (list v))))
+(def %py-s-start (fn (_ l a i) (%py-b-clamp (%py-s-opt a i 0) (%pb-len l))))
+(def %py-s-end (fn (_ l a i) (%py-b-clamp (%py-s-opt a i (%pb-len l)) (%pb-len l))))
+; A START PAST THE END FINDS NOTHING -- not even the empty needle, which
+; matches everywhere else.  The clamp pulls 6 back to 5, so "hello".find("", 6)
+; answered 5 where CPython answers -1; only a start actually within the string
+; can match.  A NEGATIVE start counts from the end, so it is normalised first
+; and never trips this.  A non-empty needle was already right: its window is
+; empty there and the search fails on its own.
+(def %py-s-search
+  (fn (_ l a rev)
+    (let ((len (%pb-len l)))
+      (let ((raw (%py-boolnorm (%py-s-opt a 1 0))))
+        (if (> (if (< raw 0) (+ len raw) raw) len)
+          (- 0 1)
+          (let ((s (%py-s-start l a 1)))
+            (let ((e (%py-s-end l a 2)))
+              (let ((w (%pb-sub l s (- e s))) (n (%py-s-cps (first a) "sub")))
+                (let ((r (if rev (%pb-rfind w n) (%pb-find w n))))
+                  (if (< r 0) r (+ r s)))))))))))
+(def %py-s-index
+  (fn (_ i) (if (< i 0) (Err raise (lit value) "substring not found" ()) i)))
+
+; the parts of a split, each a str again
+(def %py-s-parts
+  (fn (self ps acc)
+    (if (null? ps) (%py-list-new (List reverse acc))
+      (self (rest ps) (pair (%py-str-new (first ps)) acc)))))
+(def %py-s-join-seq
+  (fn (self l acc)
+    (if (null? l) (List reverse acc)
+      (self (rest l) (pair (%py-s-cps (first l) "join") acc)))))
+(def %py-s-fill
+  (fn (_ a i) (let ((c (%py-s-opt a i ()))) (if (null? c) 32 (first (%py-s-cps c "fill"))))))
 
 (def %py-str-attr
-  (fn (_ s name)
-    (def n (Str8 length s))
+  (fn (_ v name) (%py-s-attr (%py-str-cps v) name)))
+
+(def %py-s-attr
+  (fn (_ l name)
     (match
-      ((Str8 =? name "upper") (fn (_) (Str8 upcase s)))
-      ((Str8 =? name "lower") (fn (_) (Str8 downcase s)))
+      ((Str8 =? name "upper")      (fn (_ . a) (%py-str-new (%pb-upper l))))
+      ((Str8 =? name "lower")      (fn (_ . a) (%py-str-new (%pb-lower l))))
+      ((Str8 =? name "swapcase")   (fn (_ . a) (%py-str-new (%pb-swapcase l))))
+      ((Str8 =? name "capitalize") (fn (_ . a) (%py-str-new (%pb-capitalize l))))
+      ((Str8 =? name "title")      (fn (_ . a) (%py-str-new (%pb-title l))))
       ((Str8 =? name "strip")
-        (fn (_ . a) (%py-s-strip s (%py-s-arg a 0) #t #t)))
+        (fn (_ . a) (%py-str-new (%pb-strip l (%py-s-set a 0 "strip") #t #t))))
       ((Str8 =? name "lstrip")
-        (fn (_ . a) (%py-s-strip s (%py-s-arg a 0) #t #f)))
+        (fn (_ . a) (%py-str-new (%pb-strip l (%py-s-set a 0 "lstrip") #t #f))))
       ((Str8 =? name "rstrip")
-        (fn (_ . a) (%py-s-strip s (%py-s-arg a 0) #f #t)))
+        (fn (_ . a) (%py-str-new (%pb-strip l (%py-s-set a 0 "rstrip") #f #t))))
       ((Str8 =? name "split")
-        (fn (_ . a)
-          (let ((sep (%py-s-arg a 0)) (mx (let ((m (%py-s-arg a 1))) (if (null? m) (- 0 1) m))))
-            (%py-list-new (if (null? sep) (%py-s-wsplit s mx) (%py-s-sepsplit s sep mx))))))
+        (fn (_ . a) (%py-s-parts (%pb-split l (%py-s-sep a 0 "split") (%py-s-opt a 1 (- 0 1))) ())))
       ((Str8 =? name "rsplit")
-        (fn (_ . a)
-          (let ((sep (%py-s-arg a 0)) (mx (let ((m (%py-s-arg a 1))) (if (null? m) (- 0 1) m))))
-            (%py-list-new (if (null? sep) (%py-s-rwsplit s mx) (%py-s-rsepsplit s sep mx))))))
+        (fn (_ . a) (%py-s-parts (%pb-rsplit l (%py-s-sep a 0 "rsplit") (%py-s-opt a 1 (- 0 1))) ())))
       ((Str8 =? name "splitlines")
-        (fn (_ . a) (%py-list-new (%py-s-splitlines s (if (null? a) #f (%py-truthy (first a)))))))
+        (fn (_ . a) (%py-s-parts (%pb-splitlines l (%py-truthy (%py-s-opt a 0 #f))) ())))
       ((Str8 =? name "join")
         (fn (_ it)
-          (if (not (match
-                     ((%py-list? it) #t)
-                     ((%py-tuple-is it) #t)
-                     ((str? it) #t)
-                     ((%py-dict? it) #t)
-                     ((%py-obj-is it) #t)
-                     (#t (%py-gen-is it))))
-            (Err raise (lit type) "can only join an iterable of str" ())
-            (let ((es (%py-iter-elems it)))
-              (def all-str (fn (self l) (if (null? l) #t (if (str? (first l)) (self (rest l)) #f))))
-              (if (all-str es)
-                (Str8 join s es)
-                (Err raise (lit type) "can only join an iterable of str" ()))))))
+          (%py-str-new
+            (%pb-join l
+              (%py-s-join-seq
+                (%py-iter-elems it "can only join an iterable of str") ())))))
       ((Str8 =? name "replace")
         (fn (_ old new . a)
-          (if (not (str? old))
-            (Err raise (lit type) "replace() argument 1 must be str" ())
-            (if (not (str? new))
-              (Err raise (lit type) "replace() argument 2 must be str" ())
-              ()))
-          (let ((cnt (let ((c (%py-s-arg a 0))) (if (null? c) (- 0 1) c))))
-            (if (= (Str8 length old) 0)
-              ; empty old: new before every character and after the last, count
-              ; permitting -- "A".replace("", "1") is 1A1 and "" gives one
-              (do
-                (def go
-                  (fn (self cs k acc)
-                    (let ((ins (if (if (>= cnt 0) (>= k cnt) #f) "" new)))
-                      (if (null? cs)
-                        (Str8 append acc ins)
-                        (self (rest cs) (+ k 1) (Str8 append (Str8 append acc ins) (first cs)))))))
-                (go (%py-str-chars s 0 n) 0 ""))
-              (do
-                (def go
-                  (fn (self i k acc)
-                    (let ((j (if (if (>= cnt 0) (>= k cnt) #f) (- 0 1) (%py-s-find s old i n))))
-                      (if (< j 0)
-                        (Str8 append acc (Str8 sub i (- n i) s))
-                        (self (+ j (Str8 length old)) (+ k 1)
-                          (Str8 append acc (Str8 append (Str8 sub i (- j i) s) new)))))))
-                (go 0 0 ""))))))
-      ((if (Str8 =? name "startswith") #t (Str8 =? name "endswith"))
-        (fn (_ sub . a)
-          (let ((r (%py-s-range n (%py-s-arg a 0) (%py-s-arg a 1))))
-            (def lo (first r))
-            (def hi (rest r))
-            (def one
-              (fn (_ p)
-                (let ((m (Str8 length p)))
-                  (if (> (+ lo m) hi) #f
-                    (if (Str8 =? name "startswith")
-                      (Str8 =? (Str8 sub lo m s) p)
-                      (Str8 =? (Str8 sub (- hi m) m s) p))))))
-            (def any (fn (self ps) (if (null? ps) #f (if (one (first ps)) #t (self (rest ps))))))
-            (any (%py-s-subs sub)))))
-      ((if (Str8 =? name "find") #t (Str8 =? name "index"))
-        (fn (_ sub . a)
-          (let ((r (%py-s-range n (%py-s-arg a 0) (%py-s-arg a 1))))
-            (let ((k (if (%py-s-start-past? n (%py-s-arg a 0)) (- 0 1) (%py-s-find s sub (first r) (rest r)))))
-              (if (if (< k 0) (Str8 =? name "index") #f)
-                (Err raise (lit value) "substring not found" ())
-                k)))))
-      ((if (Str8 =? name "rfind") #t (Str8 =? name "rindex"))
-        (fn (_ sub . a)
-          (let ((r (%py-s-range n (%py-s-arg a 0) (%py-s-arg a 1))))
-            (let ((k (if (%py-s-start-past? n (%py-s-arg a 0)) (- 0 1) (%py-s-rfind s sub (first r) (rest r)))))
-              (if (if (< k 0) (Str8 =? name "rindex") #f)
-                (Err raise (lit value) "substring not found" ())
-                k)))))
+          (%py-str-new
+            (%pb-replace l (%py-s-cps old "replace()") (%py-s-cps new "replace()")
+              (%py-s-opt a 0 (- 0 1))))))
+      ((Str8 =? name "find")   (fn (_ . a) (%py-s-search l a #f)))
+      ((Str8 =? name "rfind")  (fn (_ . a) (%py-s-search l a #t)))
+      ((Str8 =? name "index")  (fn (_ . a) (%py-s-index (%py-s-search l a #f))))
+      ((Str8 =? name "rindex") (fn (_ . a) (%py-s-index (%py-s-search l a #t))))
       ((Str8 =? name "count")
-        (fn (_ sub . a)
-          (let ((r (%py-s-range n (%py-s-arg a 0) (%py-s-arg a 1))))
-            (if (%py-s-start-past? n (%py-s-arg a 0)) 0 (%py-s-count s sub (first r) (rest r))))))
-      ((if (Str8 =? name "partition") #t (Str8 =? name "rpartition"))
-        (fn (_ sep)
-          (if (not (str? sep))
-            (Err raise (lit type) "must be str, not int" ())
-            (if (= (Str8 length sep) 0)
-              (Err raise (lit value) "empty separator" ())
-              ()))
-          (let ((k (if (Str8 =? name "partition") (%py-s-find s sep 0 n) (%py-s-rfind s sep 0 n))))
-            (if (< k 0)
-              (if (Str8 =? name "partition") (%py-tuple-new (list s "" "")) (%py-tuple-new (list "" "" s)))
-              (%py-tuple-new (list (Str8 sub 0 k s) sep
-                (Str8 sub (+ k (Str8 length sep)) (- n (+ k (Str8 length sep))) s)))))))
-      ((if (Str8 =? name "center") #t (if (Str8 =? name "ljust") #t (Str8 =? name "rjust")))
-        (fn (_ width . a)
-          (let ((f (let ((x (%py-s-arg a 0))) (if (null? x) " " x))))
-            (match
-              ((Str8 =? name "center") (%py-s-center s width f))
-              ((<= width n) s)
-              ((Str8 =? name "ljust")
-                (Str8 append s (%py-s-rep f (- width n))))
-              (#t (Str8 append (%py-s-rep f (- width n)) s))))))
-      ((Str8 =? name "isspace") (fn (_) (%py-s-all? s %py-s-ws?)))
-      ((Str8 =? name "isalpha") (fn (_) (%py-s-all? s %py-s-alpha?)))
-      ((Str8 =? name "isdigit") (fn (_) (%py-s-all? s %py-s-digit?)))
-      ((Str8 =? name "isalnum")
-        (fn (_) (%py-s-all? s (fn (_ c) (if (%py-s-alpha? c) #t (%py-s-digit? c))))))
-      ((Str8 =? name "isupper")
-        (fn (_) (if (%py-s-any? s %py-s-upper?) (not (%py-s-any? s %py-s-lower?)) #f)))
-      ((Str8 =? name "islower")
-        (fn (_) (if (%py-s-any? s %py-s-lower?) (not (%py-s-any? s %py-s-upper?)) #f)))
-      ((Str8 =? name "swapcase")
-        (fn (_) (%py-s-map s (fn (_ c i) (if (%py-s-upper? c) (+ c 32) (if (%py-s-lower? c) (- c 32) c))))))
-      ((Str8 =? name "capitalize")
-        (fn (_) (%py-s-map s (fn (_ c i) (if (= i 0) (if (%py-s-lower? c) (- c 32) c) (if (%py-s-upper? c) (+ c 32) c))))))
-      ((Str8 =? name "title")
-        (fn (_)
-          (%py-s-map s
-            (fn (_ c i)
-              (let ((prev-alpha (if (= i 0) #f (%py-s-alpha? (%py-s-code s (- i 1))))))
-                (if prev-alpha
-                  (if (%py-s-upper? c) (+ c 32) c)
-                  (if (%py-s-lower? c) (- c 32) c)))))))
-      ((Str8 =? name "format") (fn (_ . args) (%py-strformat s args)))
+        (fn (_ . a)
+          (let ((s (%py-s-start l a 1)))
+            (%pb-count (%pb-sub l s (- (%py-s-end l a 2) s)) (%py-s-cps (first a) "count") 0))))
+      ((Str8 =? name "startswith")
+        (fn (_ . a)
+          (let ((w (%pb-drop (%py-s-start l a 1) l)))
+            (%py-s-any? (first a) "startswith" (fn (_ n) (%pb-starts? w n))))))
+      ((Str8 =? name "endswith")
+        (fn (_ . a)
+          (let ((s (%py-s-start l a 1)))
+            (let ((w (%pb-sub l s (- (%py-s-end l a 2) s))))
+              (%py-s-any? (first a) "endswith" (fn (_ n) (%pb-ends? w n)))))))
+      ((Str8 =? name "partition")
+        (fn (_ . a) (%py-s-triple (%pb-partition l (%py-s-cps1 (first a) "partition")))))
+      ((Str8 =? name "rpartition")
+        (fn (_ . a) (%py-s-triple (%pb-rpartition l (%py-s-cps1 (first a) "rpartition")))))
+      ((Str8 =? name "center")
+        (fn (_ . a) (%py-str-new (%pb-center l (first a) (%py-s-fill a 1)))))
+      ((Str8 =? name "ljust")
+        (fn (_ . a) (%py-str-new (%pb-ljust l (first a) (%py-s-fill a 1)))))
+      ((Str8 =? name "rjust")
+        (fn (_ . a) (%py-str-new (%pb-rjust l (first a) (%py-s-fill a 1)))))
+      ((Str8 =? name "isspace") (fn (_ . a) (%pb-isspace l)))
+      ((Str8 =? name "isalpha") (fn (_ . a) (%pb-isalpha l)))
+      ((Str8 =? name "isdigit") (fn (_ . a) (%pb-isdigit l)))
+      ((Str8 =? name "isalnum") (fn (_ . a) (%pb-isalnum l)))
+      ((Str8 =? name "isupper") (fn (_ . a) (%pb-isupper l)))
+      ((Str8 =? name "islower") (fn (_ . a) (%pb-islower l)))
+      ; ENCODE IS THE CODEC, and the one place str and bytes meet by design.
+      ((Str8 =? name "encode")  (fn (_ . a) (%py-bytes-new (%ps-encode l ()))))
+      ; str.format is the BRACE engine (%py-strformat), not the percent one:
+      ; `"{}".format(x)` and `"%s" % x` are different grammars that happen to
+      ; share a spec scanner.  Its template is a platform string and its args
+      ; are a plain list, so only the template crosses over.
+      ((Str8 =? name "format")
+        (fn (_ . a) (%py-str-of-x (%py-strformat (%ps->x l) a))))
       (#t
         (Err raise (lit attribute)
-          (Str8 append (Str8 append "'str' object has no attribute '" name) "'")
-          ())))))
+          (Str8 append (Str8 append "'str' object has no attribute '" name) "'") ())))))
 
-; chr() and ord(): the engine's int->char door and the char->int one, with
-; the one-character string built the way the tokenizer builds strings.
-;
-; chr(0) REFUSES, and so does every other spelling of a NUL -- the literals in
-; python/tokens.x, and bytes() below.  A string here is a C string by an engine
-; guarantee, so the one-character string chr(0) would answer measures zero and
-; disappears into the next append: 'a' + chr(0) + 'b' was 'ab' with nothing
-; said.  docs/nul-and-the-string-layer.md is the reason this is where
-; it stops rather than where a fix starts.  %c goes through here too
-; (python/format.x), and so does an f-string's {chr(0)}.
+(def %py-s-triple
+  (fn (_ t)
+    (%py-tuple-new
+      (list (%py-str-new (first t)) (%py-str-new (first (rest t)))
+            (%py-str-new (first (rest (rest t))))))))
+
 (def %py-int->char (prim-ref (lit int) (lit ->char)))
 (def %py-chr
   (fn (_ n0)
@@ -2190,15 +2118,20 @@
         (Err raise (lit type) "an integer is required" ()))
       ((if (< n 0) #t (> n 1114111))
         (Err raise (lit value) "chr() arg not in range(0x110000)" ()))
-      ((= n 0)
-        (Err raise (lit value) "a NUL byte is not representable here" ()))
-      (#t (%py-list->string (list (%py-int->char n)))))))
-; ord() counts CODE POINTS, not bytes: chr(955) is a two-byte string that
-; is one character, so the utf-8-aware Str class measures and indexes it.
+      ; A CODE POINT IS THE INTEGER.  Nothing is encoded here and no character
+      ; is made: the carrier is a list of code points, so chr() is the list of
+      ; one.  That is also why zero needs no case of its own -- it is a code
+      ; point like any other, and the refusal that used to stand here went out
+      ; with the platform string this used to build.
+      (#t (%py-str-new (list n))))))
+; ord() COUNTS CODE POINTS, and now it simply reads one: the carrier IS a list
+; of them, so there is nothing to measure and nothing to decode.  This used to
+; index with the utf-8-aware `Str` class, which a PY-TEXT is not -- it answered
+; 144 for '\xff' rather than 255, a wrong number rather than an error.
 (def %py-ord
   (fn (_ s)
-    (if (if (str? s) (= (Str length s) 1) #f)
-      (%py-char-code (Str ref 0 s))
+    (if (if (%py-str-is s) (= (%pb-len (%py-str-cps s)) 1) #f)
+      (first (%py-str-cps s))
       ; a one-byte bytes answers that BYTE's value, so ord(b'\xff') is 255
       (if (if (%py-bytes-is s) (= (%pb-len (%py-bytes-list s)) 1) #f)
         (%pb-ref (%py-bytes-list s) 0)
@@ -2325,6 +2258,14 @@
         (def fill2 (if (if zero (Str8 =? fill " ") #f) "0" fill))
         (def align2 (if (if zero (null? align) #f) "=" align))
         (if (match
+              ((%py-str-is v) #t)
+              ; ALREADY TEXT, AND ALREADY THE PLATFORM'S.  A conversion ran
+              ; ahead of this -- !r and !s in %py-fmtfield hand their answer on
+              ; as a platform string -- and without this arm it falls through to
+              ; the numeric branch below, where %py-num-kind is nil and the
+              ; complaint is "unsupported format string passed to
+              ; object.__format__" about a string.  `f'{x!r:>8}'` and
+              ; `'{!r:>8}'.format(x)` both land here.
               ((str? v) #t)
               ((= tc 115) #t)
               ((%py-obj-is v) #t)
@@ -2361,7 +2302,11 @@
               ((if (eq? kind (lit int)) (= tc 99) #f)
                 (if (if (null? sign) #f (not (Str8 =? sign "")))
                   (Err raise (lit value) "Sign not allowed with integer format specifier 'c'" ())
-                  (%py-spec-pad (%py-chr w) width fill align ">" "")))
+                  ; chr() answers a str and the padding below is Str8's, so the
+                  ; character crosses over -- which also means '{:c}'.format(0)
+                  ; refuses, like every other crossing into a platform string.
+                  (%py-spec-pad (%ps->x (%py-str-cps (%py-chr w)))
+                    width fill align ">" "")))
               ((if (eq? kind (lit int))
                   (match
                     ((= tc 0) #t)
@@ -2583,8 +2528,17 @@
                       (Err raise (lit value) "Missing ']' in format string" ())
                       (let ((key (Str8 sub (+ j 1) (- close 1) name)))
                         (self (+ j close 1)
+                          ; {0[k]} INDEXES A PYTHON CONTAINER, so a string key
+                          ; crosses over first: the key is cut out of the
+                          ; template with Str8, and a dict's keys are strs --
+                          ; the platform string would match none of them and
+                          ; the lookup would raise KeyError on a key that is
+                          ; plainly there.  (An attribute tail, just above,
+                          ; wants the platform string and keeps it.)
                           (%py-index v
-                            (if (%py-fmt-digit? (%py-spec-code key 0)) (%py-int-of-str key) key)))))))))))
+                            (if (%py-fmt-digit? (%py-spec-code key 0))
+                              (%py-int-of-str key)
+                              (%py-str-of-x key))))))))))))
         (tail he base)))
     (def go
       (fn (self i acc)
@@ -2954,7 +2908,7 @@
       (let ((x (first a)))
         (if (null? (rest a))
           (match
-            ((str? x) (%py-cparse x))
+            ((%py-str-is x) (%py-cparse (%ps->x (%py-str-cps x))))
             ; __complex__ first, and its answer must BE a complex; then
             ; __float__, whose answer becomes the real part
             ((%py-obj-is x)
@@ -2977,7 +2931,7 @@
           ; the tower, -0.0 + 0.0 is +0.0 and the signed zero Python keeps
           ; ((-0+1j), (1-0j)) would be lost; with a complex on either side it
           ; is a + b*1j, which is where Python puts the parts too
-          (if (str? x)
+          (if (%py-str-is x)
             (Err raise (lit type) "complex() can't take second arg if first is a string" ())
             (let ((y (first (rest a))))
               (if (if (%py-complex-is x) #t (%py-complex-is y))
@@ -3039,7 +2993,7 @@
       ((%py-complex-is v)
         (+ (%py-hash (%py-cre v)) (* 1000003 (%py-hash (%py-cim v)))))
       ((eq? (%py-num-kind v) (lit int)) v)
-      ((str? v) (Hash fnv-1a v))
+      ((%py-str-is v) (%py-cp-hash (%py-str-cps v) 0))
       ((%py-obj-is v)
         (let ((m (%py-dunder v "__hash__"))) (if (null? m) 0 (m))))
       ; a frozenset hashes on its elements; a set is unhashable
@@ -3070,7 +3024,7 @@
     (match
       ((%py-float-is v) (display (%py-frepr v)))
       ((%py-complex-is v) (display (%py-crepr v)))
-      ((str? v) (display (%py-str-repr v)))
+      ((%py-str-is v) (display (%py-str-repr v)))
       ((eq? v #t) (display "True"))
       ((eq? v #f) (display "False"))
       ((null? v) (display "None"))
@@ -3084,7 +3038,7 @@
       ; An exception INSTANCE prints as its message too -- print(e)
       ; has to read the same whether the raise came from Python source
       ; or from this runtime.
-      ((%py-obj-is v) (display (%py-obj-repr v)))
+      ((%py-obj-is v) (%py-text-display (%py-obj-repr v)))
       ((eq? v %py-NotImplemented) (display "NotImplemented"))
       ((eq? v %py-Ellipsis) (display "Ellipsis"))
       (#t (display v)))))
@@ -3111,10 +3065,10 @@
 ; the one place the two writers part ways.
 (def %py-display
   (fn (_ v)
-    (if (str? v)
-      (display v)
+    (if (%py-str-is v)
+      (%py-str-display (%py-str-cps v))
       (if (%py-obj-is v)
-        (display (%py-obj-str v))
+        (%py-text-display (%py-obj-str v))
         (%py-write v)))))
 
 (def %py-print-with
@@ -3285,14 +3239,12 @@
         (rest (first rows))
         (self k (rest rows))))))
 
-; The platform's door to an error's tag.  x-lang spells it (Err tag e) from
-; the release after v0.13.0; v0.13.0 -- the release lang.xon declares --
-; spelled it (Err kind-of e).  Probed once at load, so the bundle runs on
-; both; the old spelling goes when the pin moves past it.
-(def %py-err-tag
-  (guard (_ (fn (_ e) (Err kind-of e)))
-    (%seq (Err tag "probe")
-          (fn (_ e) (Err tag e)))))
+; The platform's door to an error's tag.  This straddled two spellings while
+; the pin sat at v0.13.0, which said (Err kind-of e), and x-lang main had
+; already moved to (Err tag e) -- the probe is gone now that the pin declares
+; v0.14.0, which is the release that renamed it.  That was the instruction the
+; probe left for whoever moved the pin.
+(def %py-err-tag (fn (_ e) (Err tag e)))
 
 ; The class of whatever was raised, whichever of the two shapes it is.
 (def %py-exc-class-of
@@ -3488,7 +3440,9 @@
                               "' object has no attribute '")
                             (Str8 append name "'"))
                           ())
-                        (ga obj name))))))
+                        ; __getattr__ is Python code and takes a str, not the
+                        ; platform string the attribute tables are keyed by.
+                        (ga obj (%py-str-of-x name)))))))
               (#t (%py-bind-method m obj)))))))))
 
 ; obj(...) is __call__, through the PY-OBJ type's call handler.
@@ -3528,7 +3482,10 @@
         ; the read; this is the same rule on the write.
         (let ((m (%py-dunder obj "__setattr__")))
           (if (not (null? m))
-            (%seq (m name v) ())
+            ; the hook is PYTHON code and takes the name as a str, not as the
+            ; platform string the attribute tables below are keyed by -- the
+            ; same crossing __getattr__ needs
+            (%seq (m (%py-str-of-x name) v) ())
             ; and a DESCRIPTOR on the class takes the store before the
             ; instance does, which is what makes a data descriptor data
             (let ((d (%py-method-find (%py-obj-class obj) name)))
@@ -3586,7 +3543,7 @@
 (def %py-module-new
   (fn (_ name rows)
     (let ((m (%py-obj-new %py-cls-module)))
-      (%seq (%py-obj-set-attrs! m (pair (pair "__name__" name) rows)) m))))
+      (%seq (%py-obj-set-attrs! m (pair (pair "__name__" (%py-str-of-x name)) rows)) m))))
 
 ; The modules this runtime has, built once and remembered, so that `sys.modules`
 ; and repeated imports answer the same object.
@@ -3638,8 +3595,12 @@
   (fn (_)
     (%py-module-new "implementation"
       (list
-        (pair "name" "x-python")
-        (pair "_machine" x-machine)))))
+        ; A MODULE'S TEXT ATTRIBUTES ARE strs.  These are written here as the
+        ; platform's strings and cross over on the way in; left bare,
+        ; type(sys.implementation.name).__name__ answered something that was
+        ; not "str" and every method on it was missing.
+        (pair "name" (%py-str-of-x "x-python"))
+        (pair "_machine" (%py-str-of-x x-machine))))))
 
 ; --- the math module ------------------------------------------------------
 ;
@@ -3804,8 +3765,11 @@
         (pair "pi" (Float pi))
         (pair "e" (Float e))
         (pair "tau" (Float tau))
-        (pair "inf" (%py-float-ctor "inf"))
-        (pair "nan" (%py-float-ctor "nan"))
+        ; STRAIGHT TO THE PARSER, not through float(): these two spellings are
+        ; the platform's strings, and the constructor takes a str -- it would
+        ; refuse its own spelling of infinity.
+        (pair "inf" (%py-float-of-str "inf"))
+        (pair "nan" (%py-float-of-str "nan"))
         (pair "sqrt" (fn (_ x) (%py-mcheck (Float sqrt (%py-mfloat x)))))
         (pair "exp" (fn (_ x) (Float exp (%py-mfloat x))))
         (pair "log"
@@ -3882,11 +3846,13 @@
       ((Str8 =? name "sys")
         (%py-module-new "sys"
                 (list
-                  (pair "version" "3.14.7")
-                  (pair "platform" (%py-platform-of x-machine %py-platform-names))
+                  ; strs, for the reason in %py-sys-implementation below
+                  (pair "version" (%py-str-of-x "3.14.7"))
+                  (pair "platform"
+                    (%py-str-of-x (%py-platform-of x-machine %py-platform-names)))
                   ; every architecture this platform builds for is little-endian;
                   ; a big-endian port would have to say so here
-                  (pair "byteorder" "little")
+                  (pair "byteorder" (%py-str-of-x "little"))
                   (pair "implementation" (%py-sys-implementation))
                   ; the largest int a CPython machine word holds; this runtime has
                   ; bigints and no such limit, and the number is what programs test
@@ -3902,20 +3868,23 @@
       ((Str8 =? name "builtins") (%py-module-new "builtins" ()))
       (#t ()))))
 
+; THE NAME HERE IS THE PLATFORM'S STRING, not a str.  This is the INTERNAL
+; door: the parser calls it with a name it read out of the source, and the
+; module table is keyed the same way.  `__import__()` is the Python-facing
+; door, and it is the one that crosses a str over -- putting the check here
+; instead would reject every `import x` the parser ever emitted.
 (def %py-import
   (fn (_ name)
-    (if (not (str? name))
-      (Err raise (lit type) "module name must be a string" ())
-      (if (= (Str8 length name) 0)
-        (Err raise (lit value) "empty module name" ())
-        (let ((have (%py-module-find name (first %py-modules))))
-          (if (not (null? have))
-            have
-            (let ((built (%py-module-build name)))
-              (if (null? built)
-                (Err raise (lit import)
-                  (Str8 append (Str8 append "No module named '" name) "'") ())
-                (%py-module-put! name built)))))))))
+    (if (= (Str8 length name) 0)
+      (Err raise (lit value) "empty module name" ())
+      (let ((have (%py-module-find name (first %py-modules))))
+        (if (not (null? have))
+          have
+          (let ((built (%py-module-build name)))
+            (if (null? built)
+              (Err raise (lit import)
+                (Str8 append (Str8 append "No module named '" name) "'") ())
+              (%py-module-put! name built))))))))
 
 ; `from X import a, b` and `from X import *` both read attributes off the
 ; module the same way an ordinary program would.
@@ -3924,7 +3893,10 @@
     (if (null? a)
       (Err raise (lit type)
         "__import__() missing required argument 'name'" ())
-      (%py-import (first a)))))
+      (let ((n (first a)))
+        (if (not (%py-str-is n))
+          (Err raise (lit type) "module name must be a string" ())
+          (%py-import (%ps->x (%py-str-cps n))))))))
 
 (def %py-import-from
   (fn (_ name attr)
@@ -4269,7 +4241,7 @@
             (if (if (null? a) #t (if (null? (rest a)) (null? (first a)) #f)) e (%py-exc-instance e a)))))
       ((Str8 =? name "close") (fn (_) (%py-gen-close g)))
       ((Str8 =? name "__iter__") (fn (_) g))
-      ((Str8 =? name "__name__") (%py-gen-name g))
+      ((Str8 =? name "__name__") (%py-str-of-x (%py-gen-name g)))
       (#t
         (Err raise (lit attribute)
           (Str8 append (Str8 append "'generator' object has no attribute '" name) "'") ())))))
@@ -4338,7 +4310,7 @@
       ((null? a) (null? b))
       ((if (eq? a #t) #t (eq? a #f)) (eq? a b))
       ((if (null? b) #t (if (eq? b #t) #t (eq? b #f))) #f)
-      ((if (str? a) (str? b) #f) (Str8 =? a b))
+      ((if (%py-str-is a) (%py-str-is b) #f) (%pb-eq? (%py-str-cps a) (%py-str-cps b)))
       ((if (eq? (%py-num-kind a) (lit int)) (eq? (%py-num-kind b) (lit int)) #f)
         (= a b))
       (#t #f))))
@@ -4581,7 +4553,10 @@
           (%py-reverse acc)
           (if (known? (first (first ks)) names)
             (self (rest ks) acc)
-            (self (rest ks) (pair (pair (first (first ks)) (rest (first ks))) acc))))))
+            ; the name crosses over: these rows become the **kwargs DICT, and
+            ; a dict's keys are strs (see %py-dict-kwargs)
+            (self (rest ks)
+              (pair (pair (%py-str-of-x (first (first ks))) (rest (first ks))) acc))))))
     (def slot
       (fn (_ i)
         (let ((nm (List ref i names)))
@@ -4626,10 +4601,14 @@
   (fn (self acc rows)
     (if (null? rows)
       acc
+      ; A `**dict` KEY IS A str AND A KEYWORD NAME IS THE PLATFORM'S STRING:
+      ; the row comes out of a Python dict, the keyword table is keyed the way
+      ; every other name here is, so the key crosses over on the way in.
       (let ((k (first (first rows))))
-        (if (not (str? k))
+        (if (not (%py-str-is k))
           (Err raise (lit type) "keywords must be strings" ())
-          (self (%py-attr-put acc k (rest (first rows))) (rest rows)))))))
+          (self (%py-attr-put acc (%ps->x (%py-str-cps k)) (rest (first rows)))
+                (rest rows)))))))
 
 (def %py-kwcall
   (fn (_ f pos kws)
@@ -4682,9 +4661,11 @@
               (Str8 append (Str8 append "list." name) "() takes no keyword arguments") ())
             (apply (%py-list-attr obj name)
               (%py-none-holes (%py-kw-args (list (Str8 append "list." name) names 0 #f) pos kws))))))
-      ((str? obj)
+      ((%py-str-is obj)
         (if (Str8 =? name "format")
-          (%py-strformat-kw obj pos kws)
+          ; the template crosses over and the result crosses back -- the brace
+          ; engine works in platform strings from end to end
+          (%py-str-of-x (%py-strformat-kw (%ps->x (%py-str-cps obj)) pos kws))
           (let ((names (%py-str-kw-names name)))
             (if (null? names)
               (Err raise (lit type)
@@ -4814,9 +4795,24 @@
 ; than pushed into the writer.
 (def %py-write-to-str (prim-ref (lit io) (lit write-to-str)))
 
+; THE INTERNAL str, AND IT ALWAYS ANSWERS A PLATFORM STRING.  Every caller is
+; measuring or appending with Str8 -- an error message, a format field's
+; padding and precision -- so answering the str UNCHANGED for a str argument
+; (which this did) handed `Str8 length` a PY-TEXT and died with "not a string"
+; in the middle of str.format.  str() the builtin is %py-str-ctor, and THAT is
+; where a str argument comes back untouched, NUL and all.
+;
+; So a NUL-bearing str raises here, like at every other crossing: a format
+; field is built as a platform string and cannot carry one.
 (def %py-str
   (fn (_ v)
     (match
+      ((%py-str-is v) (%ps->x (%py-str-cps v)))
+      ; ALREADY TEXT, AND ALREADY THE PLATFORM'S.  A conversion has run ahead
+      ; of this in the format path -- %py-fmtfield's !r and !s hand their
+      ; answer on as a platform string -- and the last branch would `write` it,
+      ; which QUOTES it: `f'{x=}'` came out as `x="7"`.  On main this branch
+      ; did not need to exist, because a str WAS one of these.
       ((str? v) v)
       ((null? v) "None")
       ((eq? v #t) "True")
@@ -4825,7 +4821,7 @@
       ((%py-complex-is v) (%py-crepr v))
       ; str(e) is the MESSAGE, the same rule %py-write states for print(e)
       ((Err err? v) (v msg))
-      ((%py-obj-is v) (%py-obj-str v))
+      ((%py-obj-is v) (%py-text->x (%py-obj-str v)))
       (#t (%py-write-to-str v)))))
 
 ; A STRING'S repr IS PYTHON'S: single quotes unless the text holds a single
@@ -4836,27 +4832,34 @@
 (def %py-hex2
   (fn (_ n) (Str8 append (Str8 sub (Num quotient n 16) 1 "0123456789abcdef") (Str8 sub (Num modulo n 16) 1 "0123456789abcdef"))))
 (def %py-str-repr
-  (fn (_ s)
-    (def n (Str8 length s))
-    (def q (if (if (not (null? (Str8 index-of "'" s))) (null? (Str8 index-of "\"" s)) #f) 34 39))
-    (def go
-      (fn (self i acc)
-        (if (>= i n)
-          acc
-          (let ((c (%py-char-code (%str-ref s i))))
-            (self (+ i 1)
-              (Str8 append acc
-                (match
-                  ((= c 92) "\\\\")
-                  ((= c q) (Str8 append "\\" (Str8 sub i 1 s)))
-                  ((= c 10) "\\n")
-                  ((= c 13) "\\r")
-                  ((= c 9) "\\t")
-                  ((if (< c 32) #t (= c 127))
-                    (Str8 append "\\x" (%py-hex2 c)))
-                  (#t (Str8 sub i 1 s)))))))))
-    (let ((qs (Str8 sub (if (= q 34) 1 0) 1 "'\"")))
-      (Str8 append qs (Str8 append (go 0 "") qs)))))
+  (fn (_ v)
+    (let ((l (%py-str-cps v)))
+      (let ((q (if (if (%pb-in? (list 39) l) (not (%pb-in? (list 34) l)) #f) 34 39)))
+        (let ((qs (%py-list->string (list (%py-int->char q)))))
+          (Str8 append qs (Str8 append (%py-str-repr-go l q "") qs)))))))
+
+; A CODE POINT SHOWS AS ITSELF unless it cannot: the quote in use, a
+; backslash, the three named controls, and anything below space as \xhh --
+; which is how a NUL shows, now that one can be here.  Everything from space
+; up goes out as its utf-8, so a repr keeps its accents and its emoji.
+(def %py-str-repr-go
+  (fn (self l q acc)
+    (if (null? l) acc
+      (let ((c (first l)))
+        (self (rest l) q
+          (Str8 append acc
+            (match
+              ((= c 92) "\\\\")
+              ((= c q) (Str8 append "\\" (%py-list->string (list (%py-int->char c)))))
+              ((= c 10) "\\n")
+              ((= c 13) "\\r")
+              ((= c 9) "\\t")
+              ; DEL IS A CONTROL CHARACTER TOO, and the note above this function
+              ; always said so ("any other control character (and DEL) as
+              ; \xhh") -- the test just read `< 32` and let 0x7f through as
+              ; itself, which prints as nothing at all.
+              ((if (< c 32) #t (= c 127)) (Str8 append "\\x" (%py-hex2 c)))
+              (#t (%pb->str (%ps-enc1 c))))))))))
 
 (def %py-repr-of
   (fn (_ v)
@@ -4864,12 +4867,19 @@
       ((null? v) "None")
       ((eq? v #t) "True")
       ((eq? v #f) "False")
-      ((str? v) (%py-str-repr v))
+      ((%py-str-is v) (%py-str-repr v))
       ((%py-float-is v) (%py-frepr v))
       ((%py-complex-is v) (%py-crepr v))
-      ((%py-obj-is v) (%py-obj-repr v))
+      ((%py-obj-is v) (%py-text->x (%py-obj-repr v)))
       ((eq? v %py-Ellipsis) "Ellipsis")
       (#t (%py-write-to-str v)))))
+
+; repr() the BUILTIN, against %py-repr-of the internal one -- the same split
+; str() makes just above, and for the same reason: every other caller of
+; %py-repr-of is appending its answer to a platform string.  A repr never
+; carries a NUL out (%py-str-repr writes one as \x00), so this crossing is
+; always safe.
+(def %py-repr-builtin (fn (_ v) (%py-str-of-x (%py-repr-of v))))
 
 ; str(o) and repr(o) for an object: __str__ (falling back to __repr__) and
 ; __repr__, each answering a string; an exception instance's str is its
@@ -4911,7 +4921,13 @@
     (if (not (eq? (%py-num-kind (%py-boolnorm v)) (lit int)))
       (Err raise (lit type) "an integer is required" ())
       (let ((m (%py-fmt-base (%py-boolnorm v) base tbl)))
-        (Str8 append (if (first m) "-" "") (Str8 append pfx (rest m)))))))
+        ; bin/hex/oct ARE PYTHON-FACING and answer strs -- its only three
+        ; callers are those builtins.  `bin(b)[:20]` slices the result, and a
+        ; platform string is not a str, so the subscript fell past the string
+        ; arm into the mapping one and complained "unhashable type: 'slice'"
+        ; about a perfectly ordinary slice.
+        (%py-str-of-x
+          (Str8 append (if (first m) "-" "") (Str8 append pfx (rest m))))))))
 (def %py-bin (fn (_ v) (%py-based-str v 2 "01" "0b")))
 (def %py-hex (fn (_ v) (%py-based-str v 16 "0123456789abcdef" "0x")))
 (def %py-oct (fn (_ v) (%py-based-str v 8 "01234567" "0o")))
@@ -4953,31 +4969,52 @@
           (%seq (%set-first! %py-ids (pair (pair v n) (first %py-ids))) n))))))
 
 ; getattr's default catches ONLY AttributeError, as in Python
+;
+; AN ATTRIBUTE NAME IS A PLATFORM STRING INSIDE, a Python str outside.  The
+; attribute tables are keyed by the platform's strings and compared with
+; `Str8 =?`, so a name arriving from Python code has to cross over -- which is
+; what this returns.  Its callers must USE that return: it reads like a pure
+; assertion (the `!`), and it was one before str became a code point list, but
+; passing the ORIGINAL value on from here hands `Str8 =?` a PY-TEXT and the
+; lookup dies with "not a string" instead of answering.
 (def %py-attr-name!
   (fn (_ n)
-    (if (str? n) n (Err raise (lit type) "attribute name must be string" ()))))
+    (match
+      ((%py-str-is n) (%ps->x (%py-str-cps n)))
+      ; ALREADY THE PLATFORM'S, AND SO ALREADY DONE.  These doors have two kinds
+      ; of caller: getattr/setattr/delattr/hasattr, where the name is a str the
+      ; program computed, and the PARSER, where `del obj.x` read the name out of
+      ; the source and never had a str to begin with.  Refusing the second kind
+      ; made `del obj.x` raise "attribute name must be string" about a name that
+      ; is right there in the statement.
+      ((str? n) n)
+      (#t (Err raise (lit type) "attribute name must be string" ())))))
 (def %py-getattr3
-  (fn (_ o n . d)
-    (%py-attr-name! n)
+  (fn (_ o n0 . d)
+    (def n (%py-attr-name! n0))
     (if (null? d)
       (%py-getattr o n)
       (guard (e (if (%py-exc-match e %py-exc-AttributeError) (first d) (error e)))
         (%py-getattr o n)))))
 (def %py-setattr3
-  (fn (_ o n v)
-    (%py-attr-name! n)
+  (fn (_ o n0 v)
+    (def n (%py-attr-name! n0))
     (if (%py-obj-is o)
       (%py-setattr o n v)
       (Err raise (lit attribute) "object has no settable attributes" ()))))
 (def %py-delattr
-  (fn (_ o n)
-    (%py-attr-name! n)
+  (fn (_ o n0)
+    (def n (%py-attr-name! n0))
     (if (not (%py-obj-is o))
       (Err raise (lit attribute) "object has no deletable attributes" ())
-      ; __delattr__ is the same hook on `del obj.x`
+      ; __delattr__ is the same hook on `del obj.x`, and it is PYTHON code: it
+      ; takes the name as a str, not as the platform string the tables below are
+      ; keyed by.  Built from the CROSSED name rather than from the argument,
+      ; because the argument is a str from delattr() and a platform string from
+      ; the parser -- only one of those is a value to hand to a Python method.
       (let ((m (%py-dunder o "__delattr__")))
         (if (not (null? m))
-          (%seq (m n) ())
+          (%seq (m (%py-str-of-x n)) ())
           (let ((d (%py-method-find (%py-obj-class o) n)))
             (if (%py-desc-delete? d)
               (%seq ((%py-dunder d "__delete__") o) ())
@@ -5295,21 +5332,34 @@
       (self (rest names)
         (if (%py-dir-seen? (first names) acc) acc (pair (first names) acc))))))
 
+; THE NAMES CROSS BACK BEFORE THEY ARE SORTED.  They come off the attribute
+; tables as the platform's strings, and what dir() answers is a list of strs --
+; so they are wrapped here, ahead of the sort, because the sort is Python's `<`
+; and the numeric one underneath it has no answer for a platform string ("no <
+; for STRING").  Wrapping after the sort would leave the order to that error.
+(def %py-dir-strs
+  (fn (self l acc)
+    (if (null? l) acc
+      (self (rest l) (pair (%py-str-of-x (first l)) acc)))))
+
 (def %py-dir
   (%py-sig!
     (fn (_ . a)
       (if (null? a)
         (Err raise (lit type)
           "dir() with no arguments needs a namespace this runtime does not keep" ())
-        (%py-list-new (%py-msort-by (%py-dir-uniq (%py-dir-of (first a)) ()) %py-ident))))
+        (%py-list-new
+          (%py-msort-by
+            (%py-dir-strs (%py-dir-uniq (%py-dir-of (first a)) ()) ())
+            %py-ident))))
     "dir" (list "object") 0 #f))
 
 ; `hasattr` is defined in terms of getattr in Python too: it is "does this
 ; raise?", not a separate lookup, so anything reachable by attribute access is
 ; reachable here and the two can never disagree.
 (def %py-hasattr
-  (fn (_ o name)
-    (%py-attr-name! name)
+  (fn (_ o name0)
+    (def name (%py-attr-name! name0))
     (guard (e (if (%py-exc-match e %py-exc-AttributeError) #f (error e)))
       (%seq (%py-getattr o name) #t))))
 
@@ -5518,7 +5568,7 @@
         (match
           ((eq? v #t) 1)
           ((eq? v #f) 0)
-          ((str? v) (%py-int-of-str v))
+          ((%py-str-is v) (%py-int-of-str (%ps->x (%py-str-cps v))))
           ((%py-obj-is v)
             (let ((m (%py-dunder v "__int__")))
               (if (null? m)
@@ -5543,7 +5593,7 @@
         (match
           ((eq? v #t) 1.0)
           ((eq? v #f) 0.0)
-          ((str? v) (%py-float-of-str v))
+          ((%py-str-is v) (%py-float-of-str (%ps->x (%py-str-cps v))))
           ((%py-obj-is v)
             (let ((m (%py-dunder v "__float__")))
               (if (null? m)
@@ -5564,7 +5614,7 @@
       ((eq? v #f) #f)
       ((eq? v #t) #t)
       ((null? v) #f)
-      ((str? v) (> (Str8 length v) 0))
+      ((%py-str-is v) (> (%pb-len (%py-str-cps v)) 0))
       ((%py-list-is v) (not (null? (%py-list-elems v))))
       ((%py-set-is v) (not (null? (%py-set-elems v))))
       ((%py-view-is v) (not (null? (%py-view-elems v))))
@@ -5582,8 +5632,19 @@
 (def %py-bool-ctor
   (fn (_ . a) (if (null? a) #f (%py-truthy (first a)))))
 
+; str() IS THE PYTHON-FACING DOOR and answers a str; %py-str under it is the
+; INTERNAL one and answers a platform string, which is what its nineteen other
+; callers want (they are building error messages with `Str8 append`).  Only
+; this door crosses back.
+;
+; A str ARGUMENT IS RETURNED AS IT CAME, never round-tripped: str(s) on a
+; NUL-bearing s would otherwise go out through a platform string and refuse.
 (def %py-str-ctor
-  (fn (_ . a) (if (null? a) "" (%py-str (first a)))))
+  (fn (_ . a)
+    (if (null? a)
+      (%py-str-new ())
+      (let ((v (first a)))
+        (if (%py-str-is v) v (%py-str-of-x (%py-str v)))))))
 
 (def %py-list-ctor
   (fn (_ . a) (if (null? a) (%py-list-new ()) (%py-mklist-of (first a)))))
@@ -5605,9 +5666,18 @@
         ; any other iterable is a sequence of (key, value) pairs
         (%py-dict-new (%py-pairs-of (%py-iter-elems (first a)) ()))))))
 ; dict(a=1) and d.update(a=1): the keywords ARE the entries
+; dict(a=1) MAKES A str KEY.  A keyword name is the platform's string -- it
+; came off the call syntax -- and a dict's keys are Python values, so it
+; crosses over here.  Left bare the entry was still findable by another bare
+; one, which is why this showed up as a repr (`{colour: 'red'}`, the key with
+; no quotes) rather than as a lookup failure.
 (def %py-dict-kwargs
   (fn (_ kws)
-    (def go (fn (self l acc) (if (null? l) (%py-reverse acc) (self (rest l) (pair (pair (first (first l)) (rest (first l))) acc)))))
+    (def go
+      (fn (self l acc)
+        (if (null? l) (%py-reverse acc)
+          (self (rest l)
+            (pair (pair (%py-str-of-x (first (first l))) (rest (first l))) acc)))))
     (go kws ())))
 
 (def %py-tuple-ctor
@@ -5759,7 +5829,7 @@
             (%py-bytes-new (%py-bytes-of-codes (%py-list-elems v) ())))
           ((%py-tuple-is v)
             (%py-bytes-new (%py-bytes-of-codes (%py-tuple-elems v) ())))
-          ((str? v)
+          ((%py-str-is v)
             (Err raise (lit type) "string argument without an encoding" ()))
           (#t (%py-bytes-new (%py-bytes-zeros v ()))))))))
 
@@ -5848,7 +5918,7 @@
       ((null? v) %py-cls-NoneType)
       ((%py-barr-is v) %py-cls-bytearray)
       ((%py-bytes-is v) %py-cls-bytes)
-      ((str? v) %py-cls-str)
+      ((%py-str-is v) %py-cls-str)
       ((%py-list-is v) %py-cls-list)
       ((%py-set-is v) (if (%py-set-frozen? v) %py-cls-frozenset %py-cls-set))
       ((%py-dict-is v) %py-cls-dict)
@@ -5940,10 +6010,9 @@
     (let ((st (if (null? step) 1 step)))
       (match
         ((= st 0) (Err raise (lit value) "slice step cannot be zero" ()))
-        ((str? obj)
-          (Str8 join ""
-            (%py-sl-chars obj
-              (%py-slice-idxs (Str length obj) start stop st) ())))
+        ((%py-str-is obj)
+          (let ((l (%py-str-cps obj)))
+            (%py-str-new (%py-sl-pick l (%py-slice-idxs (%pb-len l) start stop st) ()))))
         ((%py-bytes-is obj)
           (let ((l (%py-bytes-list obj)))
             ((if (%py-barr-is obj) %py-barr-new %py-bytes-new)

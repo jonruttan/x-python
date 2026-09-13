@@ -193,23 +193,19 @@ b'\x00\x00\x00' b'\x00' bytearray(b'\x00\x00')
 b'\x00' b'\x00'
 ```
 
-### a str literal's NUL is still refused
+### a str literal's NUL is carried, not refused
 
-DIVERGENCE, and the one the bytes carrier MOVED rather than removed.  `str` is
-still the platform's string, so it still ends at its first NUL -- and a
-literal is refused while the program is being READ, so it takes the whole
-program with it and no `try` in that program catches it.  That is the shape
-CPython gives a `SyntaxError`.  CPython prints `3`.
-
-Giving `str` the same treatment is its own arc: it is a bigger change than
-this one, because `str` is the platform's string everywhere a Python program
-touches text, and this bundle's whole str surface is Str8's.
+SUPERSEDED.  This case used to assert the refusal, and the note under it said
+giving `str` the same treatment as `bytes` was "its own arc".  That arc
+landed: `str` is a list of CODE POINTS now (python/str.x), so a literal keeps
+its zero byte and the length is CPython's.  The str side is pinned in
+88-str-nul.spec.md; what stays here is the bytes side.
 
 ```python
 (python-run "print(len('a\\x00b'))")
 ```
 ---
-    Error: #<err:value a NUL byte is not representable here>
+    3
 
 ### an f-string body is read like any other str literal
 
@@ -221,22 +217,22 @@ CPython prints the three-character string `x\x00y`.
 ---
     Error: #<err:value a NUL byte is not representable here>
 
-### at runtime the str paths raise and the bytes paths do not
+### at runtime the crossings raise and the carriers do not
 
-`chr(0)` is the one every remaining runtime path goes through -- `%c` and an
-f-string's `{chr(0)}` included -- because each of them is asking for a str.
-The two `bytes()` arms used to be on this list and have left it.
+`chr(0)` has left this list too -- it answers a str of one code point now.
+What still refuses is every crossing INTO a platform string: `%c` builds its
+answer with Str8, and so does an f-string, so both end at a zero byte and say
+so rather than truncating.
 
 ```python
-(python-run "try:\n    chr(0)\nexcept ValueError as e:\n    print('chr', e)\nprint('list', bytes([0]))\nprint('count', bytes(3))\ntry:\n    '%c' % 0\nexcept ValueError as e:\n    print('pct', e)\ntry:\n    f'{chr(0)}'\nexcept ValueError as e:\n    print('fstr', e)")
+(python-run "print('chr', len(chr(0)))\nprint('list', bytes([0]))\nprint('count', bytes(3))\ntry:\n    '%c' % 0\nexcept ValueError as e:\n    print('pct', e)")
 ```
 ---
 ```output
-chr a NUL byte is not representable here
+chr 1
 list b'\x00'
 count b'\x00\x00\x00'
 pct a NUL byte is not representable here
-fstr a NUL byte is not representable here
 ```
 
 ### nothing that stops short of a NUL is touched

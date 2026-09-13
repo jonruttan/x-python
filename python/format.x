@@ -264,12 +264,20 @@
     (match
       ((if (= conv 115) #t (if (= conv 114) #t (= conv 99)))
         (do
+          ; EVERYTHING HERE IS A PLATFORM STRING: this engine pads and measures
+          ; with Str8, so each branch hands back one of those rather than a str.
+          ; `str?` asks about the PLATFORM's strings, which a Python str is not
+          ; any more, so the test is %py-str-is and the value crosses over.
+          ;
+          ; %c OF A ZERO therefore raises rather than answering "\x00": the
+          ; crossing refuses, because the rest of this pipeline is a C string.
+          ; Building a str with chr(0) and printing it is the way to emit one.
           (def s0
             (if (= conv 99)
-              (if (str? v)
-                (if (= (%py-len v) 1) v
+              (if (%py-str-is v)
+                (if (= (%py-len v) 1) (%ps->x (%py-str-cps v))
                   (Err raise (lit type) "%c requires an int or a unicode char, not a string of length other than 1" ()))
-                (%py-chr v))
+                (%ps->x (%py-str-cps (%py-chr v))))
               (if (= conv 115) (%py-str v) (%py-repr-of v))))
           (def s (if (if (>= prec 0) (> (Str8 length s0) prec) #f)
             (Str8 sub 0 prec s0) s0))
@@ -385,7 +393,14 @@
         (if (null? keyed) ()
           (if (null? mapping)
             (Err raise (lit type) "format requires a mapping" ())
-            (%set-first! cell (list (%py-dget mapping (rest keyed))))))
+            ; THE KEY CROSSES OVER BEFORE THE LOOKUP.  `%(foo)s` cuts the name
+            ; out of the template with Str8, and the mapping's keys are strs --
+            ; a platform string matches none of them, so `"%(foo)s" % {"foo":
+            ; "bar"}` raised KeyError about a key that is plainly there (and
+            ; said `"foo"`, with the platform string's double quotes, which is
+            ; the tell).
+            (%set-first! cell
+              (list (%py-dget mapping (%py-str-of-x (rest keyed)))))))
         (def fl (flags (if (null? keyed) j0 (first keyed)) #f #f #f #f #f))
         (def j1 (first fl))
         (def left (first (rest fl)))

@@ -94,7 +94,11 @@
 (def %pb->str
   (fn (self l)
     (if (%pb-nul? l)
-      (Err raise (lit value) "a NUL byte is not representable in a str" ())
+      ; THE SAME SENTENCE AS EVERY OTHER CROSSING.  The limit is stated once
+      ; wherever it is reached (docs/nul-and-the-string-layer.md), and this was
+      ; the one door saying it differently -- so a spec asserting the refusal
+      ; matched three crossings and missed this one.
+      (Err raise (lit value) "a NUL byte is not representable here" ())
       (%pb->str-go l ""))))
 (def %pb->str-go
   (fn (self l acc)
@@ -318,10 +322,16 @@
 ; rsplit is split from the other end, and reversing three times is cheaper to
 ; READ than a second walk written backwards -- the bytes, each part, and the
 ; order of the parts.
+; BOTH ARMS SPLIT FROM THE RIGHT, which is the whole difference from %pb-split.
+; The whitespace arm used to hand straight to %pb-ws-split, which walks from the
+; LEFT -- without a maxsplit nothing shows (the same parts come out either way),
+; but `"a b c d".rsplit(None, 1)` answered ['a', 'b c d'] where CPython answers
+; ['a b c', 'd'].  Reversing the input, splitting, then un-reversing each part
+; and their order is what the separator arm below already does.
 (def %pb-rsplit
   (fn (_ l sep n)
     (if (null? sep)
-      (%pb-ws-split l n ())
+      (List reverse (%pb-map-rev (%pb-ws-split (List reverse l) n ()) ()))
       (List reverse (%pb-map-rev (%pb-sep-split (List reverse l) (List reverse sep) n () ()) ())))))
 (def %pb-map-rev
   (fn (self ps acc)
@@ -377,9 +387,19 @@
 (def %pb-replace
   (fn (_ l old new n)
     (if (null? old)
-      (%pb-cat new (%pb-join-every l new ()))
+      (%pb-replace-empty l new n ())
       (%pb-replace-go l old new n ()))))
-(def %pb-join-every
-  (fn (self l new acc)
-    (if (null? l) (List reverse acc)
-      (self (rest l) new (%pb-onto new (pair (first l) acc))))))
+
+; AN EMPTY old INSERTS new AT EVERY POSITION -- there are length+1 of them, so
+; "AB".replace("", "1") is 1A1B1 -- AND THE COUNT STILL BOUNDS IT: with a count
+; of 1 the answer is 1AB.  The arm this replaces ignored n outright, so every
+; count behaved like no count at all.  A count of 0 therefore copies the input,
+; which is the same thing the walk does when it runs out of budget: the rest of
+; the input goes on verbatim.
+(def %pb-replace-empty
+  (fn (self l new n acc)
+    (if (= n 0)
+      (List reverse (%pb-onto l acc))
+      (if (null? l)
+        (List reverse (%pb-onto new acc))
+        (self (rest l) new (- n 1) (pair (first l) (%pb-onto new acc)))))))

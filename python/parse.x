@@ -48,6 +48,8 @@
 (import python/util)
 (import python/tokens)
 (import python/indent)
+(import python/bytes)
+(import python/str)
 (import python/runtime)
 
 (provide python/parse python-parse python-parse-expr)
@@ -420,8 +422,9 @@
     (if (if (null? toks) #f (eq? (%py-tag (first toks)) tag))
       (self tag (%py-lit-join acc (%py-val (first toks))) (rest toks))
       (pair acc toks))))
-(def %py-lit-join
-  (fn (_ a b) (if (str? a) (Str8 append a b) (%py-append a b))))
+; BOTH LITERAL KINDS ARE LISTS NOW -- a bytes literal's bytes, a str
+; literal's utf-8 -- so adjacency is one join.
+(def %py-lit-join (fn (_ a b) (%py-append a b)))
 
 (set! %py-postfix
   (fn (_ toks)
@@ -1022,16 +1025,43 @@
         (match
           ((eq? (%py-tag t) (lit tok-number))
             (pair (%py-num (%py-val t) (%py-tok-variant t)) (rest toks)))
+          ; A str LITERAL'S CODE POINTS ARE DECIDED HERE, once, at parse
+          ; time: the tokenizer hands over the utf-8 (it cannot reach
+          ; python/str.x, which imports it), and the emitted form is the
+          ; code point list itself rather than a decode the evaluator would
+          ; repeat on every evaluation.
           ((eq? (%py-tag t) (lit tok-string))
-            (%py-adjacent (lit tok-string) (%py-val t) (rest toks)))
+            (let ((r (%py-adjacent (lit tok-string) (%py-val t) (rest toks))))
+              (pair
+                (list (lit %py-str-new) (pair (lit list) (%ps-decode (first r) ())))
+                (rest r))))
           ; THE VALUE IS A BYTE LIST, so it is emitted as one: a (list ...)
           ; form the evaluator builds, not a datum standing where a form
           ; belongs.
           ((eq? (%py-tag t) (lit tok-bytes))
             (let ((r (%py-adjacent (lit tok-bytes) (%py-val t) (rest toks))))
               (pair (list (lit %py-bytes-new) (pair (lit list) (first r))) (rest r))))
+          ; AN f-STRING BODY IS SCANNED AS A PLATFORM STRING.  The token
+          ; carries UTF-8 bytes like tok-string above, but this body is not a
+          ; value -- it is SOURCE, re-tokenized field by field -- and the
+          ; scanner reads it with Str8 doors, so it crosses over here instead
+          ; of being decoded to code points.
+          ;
+          ; That makes a zero byte in an f-string BODY raise where a plain
+          ; literal carries it: %pb->str refuses rather than truncate.  It is
+          ; the same limit the format engines have, and where the f-string case
+          ; in 64-inplace-and-bytes.spec.md lands.
+          ; AND THE RESULT IS A str.  %py-fstring-form emits a %py-fjoin, which
+          ; builds a PLATFORM string, and that is right for the other caller --
+          ; a nested spec, which is handed to %py-format-spec as one.  At the
+          ; top level the value is what the program gets, so it crosses back:
+          ; without this an f-string evaluated to a platform string and print
+          ; showed it QUOTED (`x="7"` for `f'{x=}'`), because %py-display saw
+          ; something that was not a str and fell through to %py-write.
           ((eq? (%py-tag t) (lit tok-fstring))
-            (pair (%py-fstring-form (%py-val t)) (rest toks)))
+            (pair (list (lit %py-str-of-x)
+                    (%py-fstring-form (%pb->str (%py-val t))))
+                  (rest toks)))
           ((%py-super-call? toks)
             (match
               ((not (null? (%py-group-of (first (rest toks)))))
@@ -1314,7 +1344,7 @@
         ; str and list are now the CLASS OBJECTS -- calling one still converts,
         ; through the %ctor entry, and `type(x) == str` is an identity compare.
         (list "str"     (lit %py-cls-str))
-        (list "repr"    (lit %py-repr-of))
+        (list "repr"    (lit %py-repr-builtin))
         (list "list"    (lit %py-cls-list))
         (list "hasattr" (lit %py-hasattr))
         (list "object"  (lit %py-cls-object))
