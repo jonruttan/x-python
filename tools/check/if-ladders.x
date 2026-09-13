@@ -115,27 +115,41 @@
       (match ((pair? x) (%il-name (first x)))
              (#t        (%il-name x)))))
 
-  ; The name a ladder is reported under: the top-level binder it sits in, or a
-  ; PLACEHOLDER when it sits in none.
+  ; A ladder that sits in no binder is named for the CALL IT SITS IN, and only
+  ; falls back to a bare placeholder when there is no head to name it after.
   ;
-  ; THE PLACEHOLDER IS NOT DECORATION, and this corpus is where it earns its
-  ; keep.  A ladder can sit in a top-level CALL rather than a definition --
-  ; python/types.x registers operators with (%type-push-op TYPE (lit +) ...)
-  ; and python/runtime.x its exception methods the same way, and the lambdas
-  ; handed to those are full of conditionals.  There are 29 such chains here
-  ; today, 25 of them in types.x.  Reported under an EMPTY name they would be
-  ; worse than missed: the row has three fields and the aggregate keys on the
-  ; first two, so a blank middle field slides the depth into the name and
-  ; leaves the count empty -- a manifest built out of rows naming nothing.
-  ; None of the 29 has reached four arms, which is the only reason this has
-  ; never bitten.  The placeholder carries no space, so the row stays three
-  ; fields.
+  ; A placeholder alone was the first fix and it was too coarse.  It stopped
+  ; the blank field that slid the depth into the name, but every call site in
+  ; a file collapsed onto one key: x-python has 29 such chains, 25 of them in
+  ; python/types.x, which would have been ONE manifest row saying nothing
+  ; about which registration held the ladder.  The ratchet still caught
+  ; growth; a reader still had to go and find it.
+  ;
+  ; PARENTHESISED, so a call site can never collide with a definition.
+  ; `(%type-push-op)` is a ladder inside a call to %type-push-op; %type-push-op
+  ; is the function of that name.  A file may legitimately hold both.  No space
+  ; goes in either, so the row stays three fields.
+  (def %il-head-name
+    (fn (_ form)
+      (let ((h (%il-name (first form))))
+        (match ((str=? h "") "(top-level)")
+               (#t           (Str8 append "(" (Str8 append h ")")))))))
+
+  ; (def NAME ...) / (set! NAME ...) / (define NAME ...) and the curried
+  ; (define (NAME . args) body) -- a form that BINDS, and has something to bind.
+  (def %il-binding-form?
+    (fn (_ form)
+      (match ((not (pair? form))        #f)
+             ((not (pair? (rest form))) #f)
+             (#t (%il-binder? (first form))))))
+
+  ; The name a ladder is reported under: what the top-level form binds, else
+  ; what it calls, else the placeholder.
   (def %il-top-name
     (fn (_ form)
-      (match ((not (pair? form))               "(top-level)")
-             ((not (pair? (rest form)))        "(top-level)")
-             ((not (%il-binder? (first form))) "(top-level)")
-             (#t (%il-bound-name (first (rest form)))))))
+      (match ((%il-binding-form? form) (%il-bound-name (first (rest form))))
+             ((pair? form)             (%il-head-name form))
+             (#t                       "(top-level)"))))
 
   ; A SWEEP BETWEEN TOP-LEVEL FORMS.  Nothing here collects on its own, and a
   ; module of ten thousand lines is one long walk; without this the guard
