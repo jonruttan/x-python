@@ -25,6 +25,7 @@
 (import python/base)
 
 (import python/repl)
+(import python/line)
 
 ; The launcher runs (%banner) then (repl).  Both are platform globals, and both
 ; are REPLACED: the platform loop reads sexps through the ambient reader, and
