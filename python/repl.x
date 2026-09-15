@@ -138,9 +138,15 @@
       (pair
         (let ((f (first forms)))
           (if (if (pair? f) (eq? (first f) (lit def)) #f)
-            (list (lit %py-defg)
-              (list (lit lit) (first (rest f)))
-              (first (rest (rest f))))
+            (do
+              ; Remembered for Tab: a name defined on one line completes on
+              ; the next.
+              (guard (_ ())
+                (set! %py-session-names
+                  (pair (symbol->str (first (rest f))) %py-session-names)))
+              (list (lit %py-defg)
+                (list (lit lit) (first (rest f)))
+                (first (rest (rest f)))))
             f))
         (self (rest forms))))))
 
@@ -154,15 +160,16 @@
   (fn (_ first-line)
     (def more
       (fn (self acc)
-        (display "... ")
-        (let ((line (%py-repl-line)))
-          (if (eq? line (lit eof))
-            (%py-reverse acc)
-            (if (= (Str8 length line) 0)
-              (%py-reverse acc)
-              (self (pair line acc)))))))
+        (let ((line (%py-read "... ")))
+          (match
+            ((eq? line (lit eof)) (%py-reverse acc))
+            ; ctrl-c mid-block abandons the whole entry.
+            ((eq? line (lit cancel)) (lit cancel))
+            ((= (Str8 length line) 0) (%py-reverse acc))
+            (#t (self (pair line acc)))))))
     (if (%py-opens-block? first-line)
-      (Str8 join "\n" (more (list first-line)))
+      (let ((lines (more (list first-line))))
+        (if (eq? lines (lit cancel)) (lit cancel) (Str8 join "\n" lines)))
       first-line)))
 
 ; --- the loop ----------------------------------------------------------------
@@ -180,10 +187,13 @@
 (def %python-repl-loop ())
 (set! %python-repl-loop
   (fn (_)
-    (display ">>> ")
-    (let ((line (%py-repl-line)))
+    ; Through the line editor when there is a terminal (python/line.x),
+    ; which draws the prompt itself; through the byte reader otherwise.
+    (let ((line (%py-read ">>> ")))
       (match
         ((eq? line (lit eof)) (%seq (newline) (Sys exit 0)))
+        ; ctrl-c abandons the line being typed.
+        ((eq? line (lit cancel)) (%python-repl-loop))
         ((= (Str8 length line) 0) (%python-repl-loop))
         ((if (Str8 =? line "quit()") #t (Str8 =? line "exit()"))
           (Sys exit 0))
@@ -195,7 +205,8 @@
                   (%seq
                     (display (if (str? %py-err) %py-err (Io write-to-str %py-err)))
                     (newline))))
-              (%py-repl-eval (%py-read-entry line)))
+              (let ((entry (%py-read-entry line)))
+                (unless (eq? entry (lit cancel)) (%py-repl-eval entry))))
             (%python-repl-loop)))))))
 
 (provide python/repl %python-repl %python-banner)
