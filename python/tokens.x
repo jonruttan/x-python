@@ -1117,6 +1117,7 @@
           ((= a 37) #t)
           ((= a 124) #t)
           ((= a 38) #t)
+          ((= a 64) #t)
           (#t (= a 94))))
       ; // ** << >> and the def's return-annotation arrow ->
       ((if (= a 47) (= b 47) #f) #t)
@@ -1128,8 +1129,9 @@
 
 (def %py-op-pairable?
   (fn (_ c)
-    ; = ! < > / * + - %, and | & ^ for |= &= ^=; generated, as above
+    ; = ! < > / * + - %, | & ^ for |= &= ^=, and @ for @=; generated, as above
     (match
+      ((= c 64) #t)
       ((= c 61) #t)
       ((= c 33) #t)
       ((= c 60) #t)

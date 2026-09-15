@@ -557,7 +557,16 @@
   (%py-class-new "object" ()
     (list
       (pair "__new__" (fn (_ cls . args) (%py-obj-new cls)))
-      (pair "__init__" (fn (_ self . args) ())))
+      (pair "__init__" (fn (_ self . args) ()))
+      ; the default store and drop, reachable from a class's own __setattr__
+      ; and __delattr__ hooks -- which is the only way such a hook can
+      ; finish its work without recursing into itself
+      (pair "__setattr__"
+        (fn (_ self n v)
+          (let ((name (%py-attr-name! n)))
+            (%seq (%py-obj-set-attrs! self (%py-attr-put (%py-obj-attrs self) name v)) ()))))
+      (pair "__delattr__"
+        (fn (_ self n) (%py-obj-drop-attr! self (%py-attr-name! n)))))
     "object"))
 
 (def %py-exc-BaseException
@@ -613,6 +622,7 @@
 (def %py-exc-NameError       (%py-exc-new "NameError"       %py-exc-Exception))
 (def %py-exc-TypeError       (%py-exc-new "TypeError"       %py-exc-Exception))
 (def %py-exc-ValueError      (%py-exc-new "ValueError"      %py-exc-Exception))
+(def %py-exc-AssertionError  (%py-exc-new "AssertionError"  %py-exc-Exception))
 (def %py-exc-StopIteration   (%py-exc-new "StopIteration"   %py-exc-Exception))
 (def %py-exc-GeneratorExit   (%py-exc-new "GeneratorExit"   %py-exc-Exception))
 (def %py-exc-SystemExit      (%py-exc-new "SystemExit"      %py-exc-Exception))
@@ -839,6 +849,8 @@
               ((%py-desc-get? m)
                 ((%py-dunder m "__get__") obj (%py-obj-class obj)))
               ((if (null? m) #f (not (%py-fn-is m))) m)
+              ((if (null? m) #f (not (%py-user-fn? m))) m)
+              ((Str8 =? name "__new__") m)
               ((null? m)
                 (let ((n (%py-obj-native obj)))
                   (if (not (null? n))
@@ -879,6 +891,21 @@
         (pair (pair k v) (rest rows))
         (pair (first rows) (self (rest rows) k v))))))
 
+; Dropping an attribute the instance does not carry is an AttributeError,
+; the same one whether `del obj.x` takes the plain path below or a class's
+; own hook finishes through object.__delattr__.
+(def %py-obj-drop-attr!
+  (fn (_ obj name)
+    (let ((as (%py-obj-attrs obj)))
+      (if (null? (%py-alist-find name as))
+        (Err raise (lit attribute)
+          (Str8 append
+            (Str8 append (Str8 append "'" (%py-class-name (%py-obj-class obj)))
+              "' object has no attribute '")
+            (Str8 append name "'"))
+          ())
+        (%seq (%py-obj-set-attrs! obj (%py-attr-drop as name)) ())))))
+
 (def %py-setattr
   (fn (_ obj name v)
     ; A CLASS TAKES A STORE TOO.  `C.x = 2` puts the row in the same alist the
@@ -892,13 +919,16 @@
         ; __setattr__ INTERCEPTS EVERY STORE, which is the point of it: a class
         ; that defines one decides what `self.x = v` means, and gets no default
         ; store unless it makes one itself.  __getattr__ was already a hook on
-        ; the read; this is the same rule on the write.
-        (let ((m (%py-dunder obj "__setattr__")))
-          (if (not (null? m))
+        ; the read; this is the same rule on the write.  object carries a
+        ; built-in __setattr__ as well, so the lookup always finds one: only
+        ; a hook written in Python is a hook, and the built-in default is the
+        ; plain store below.
+        (let ((h (%py-method-find (%py-obj-class obj) "__setattr__")))
+          (if (%py-user-fn? h)
             ; the hook is PYTHON code and takes the name as a str, not as the
             ; platform string the attribute tables below are keyed by -- the
             ; same crossing __getattr__ needs
-            (%seq (m (%py-str-of-x name) v) ())
+            (%seq ((%py-bind-method h obj) (%py-str-of-x name) v) ())
             ; and a DESCRIPTOR on the class takes the store before the
             ; instance does, which is what makes a data descriptor data
             (let ((d (%py-method-find (%py-obj-class obj) name)))

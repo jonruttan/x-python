@@ -47,7 +47,15 @@
 (def %py-dunder
   (fn (_ obj name)
     (let ((m (%py-method-find (%py-obj-class obj) name)))
-      (if (null? m) () (%py-bind-method m obj)))))
+      (match
+        ((null? m) ())
+        ; the three built-in descriptors keep their meaning as dunders too
+        ((%py-desc-is m)
+          (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
+            (if (eq? k (lit static)) f
+              (if (eq? k (lit classmethod)) (%py-bind-method f (%py-obj-class obj))
+                (%py-bind-method m obj)))))
+        (#t (%py-bind-method m obj))))))
 
 ; One side of a binary dispatch: the dunder's answer, or NotImplemented when
 ; the operand is not an object or has no such method.
@@ -92,6 +100,7 @@
 
 (def %py-isub    (fn (_ a b) (%py-inplace "__isub__" %py-sub a b)))
 (def %py-imul    (fn (_ a b) (%py-inplace "__imul__" %py-mul a b)))
+(def %py-imatmul (fn (_ a b) (%py-inplace "__imatmul__" %py-matmul a b)))
 (def %py-idiv    (fn (_ a b) (%py-inplace "__itruediv__" %py-div a b)))
 (def %py-imod    (fn (_ a b) (%py-inplace "__imod__" %py-mod a b)))
 (def %py-ibitor  (fn (_ a b) (%py-inplace "__ior__" %py-bitor a b)))
@@ -274,6 +283,13 @@
 (def %py-format-str
   (fn (_ a b) (%py-str-of-x (%py-format (%ps->x (%py-str-cps a)) b))))
 
+; `a @ b` means nothing here except to an object with __matmul__.
+(def %py-matmul
+  (fn (_ a b)
+    (if (if (%py-obj-is a) #t (%py-obj-is b))
+      (%py-binop a b "__matmul__" "__rmatmul__" "@")
+      (Err raise (lit type) "unsupported operand type(s) for @" ()))))
+
 (def %py-mul
   (fn (_ a b)
     (match
@@ -338,10 +354,17 @@
   (fn (_ f name names nreq has-rest . kw)
     (%set-first! %py-sigs
       (pair (pair f (list name names nreq has-rest
-                      (if (null? kw) () (first kw))
-                      (if (if (null? kw) #t (null? (rest kw))) () (first (rest kw)))))
+                      (%py-nth-or kw 0 ())
+                      (%py-nth-or kw 1 ())
+                      (%py-nth-or kw 2 ())))
         (first %py-sigs)))
     f))
+; A def or a lambda binds as a method when read from an instance; a builtin
+; registered by hand does not, as in Python.  The seventh field says which.
+(def %py-user-fn?
+  (fn (_ f)
+    (let ((sig (%py-sig-of f)))
+      (if (null? sig) #f (if (> (%py-length sig) 6) (List ref 6 sig) #f)))))
 
 ; **kwargs ARRIVES IN A BOX, and it has to: a plain call reaches a function by
 ; apply, with no keyword machinery in the way, so a dict at the end of the

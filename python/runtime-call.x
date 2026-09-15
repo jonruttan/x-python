@@ -45,7 +45,8 @@
     (list (first sig) (rest (List ref 1 sig)) (- (List ref 2 sig) 1)
       (List ref 3 sig)
       (if (> (%py-length sig) 4) (List ref 4 sig) ())
-      (if (> (%py-length sig) 5) (List ref 5 sig) ()))))
+      (if (> (%py-length sig) 5) (List ref 5 sig) ())
+      (if (> (%py-length sig) 6) (List ref 6 sig) ()))))
 (def %py-drop
   (fn (self l k) (if (= k 0) l (if (null? l) () (self (rest l) (- k 1))))))
 (def %py-list-cat
@@ -626,12 +627,19 @@
 (def %py-setattr3
   (fn (_ o n0 v)
     (def n (%py-attr-name! n0))
-    (if (%py-obj-is o)
+    (if (if (%py-obj-is o) #t (%py-class-is o))
       (%py-setattr o n v)
       (Err raise (lit attribute) "object has no settable attributes" ()))))
 (def %py-delattr
   (fn (_ o n0)
     (def n (%py-attr-name! n0))
+    (if (%py-class-is o)
+      ; `del C.x`: the row leaves the class's own table
+      (if (null? (%py-alist-find n (%py-class-methods o)))
+        (Err raise (lit attribute)
+          (Str8 append (Str8 append "type object '" (%py-class-name o))
+            (Str8 append "' has no attribute '" (Str8 append n "'"))) ())
+        (%seq (%py-class-methods-set! o (%py-attr-drop (%py-class-methods o) n)) ()))
     (if (not (%py-obj-is o))
       (Err raise (lit attribute) "object has no deletable attributes" ())
       ; __delattr__ is the same hook on `del obj.x`, and it is PYTHON code: it
@@ -639,17 +647,16 @@
       ; keyed by.  Built from the CROSSED name rather than from the argument,
       ; because the argument is a str from delattr() and a platform string from
       ; the parser -- only one of those is a value to hand to a Python method.
-      (let ((m (%py-dunder o "__delattr__")))
-        (if (not (null? m))
-          (%seq (m (%py-str-of-x n)) ())
+      ; object carries a built-in __delattr__ as well, so the lookup always
+      ; finds one: only a hook written in Python is a hook, and the built-in
+      ; default is the drop below.
+      (let ((h (%py-method-find (%py-obj-class o) "__delattr__")))
+        (if (%py-user-fn? h)
+          (%seq ((%py-bind-method h o) (%py-str-of-x n)) ())
           (let ((d (%py-method-find (%py-obj-class o) n)))
             (if (%py-desc-delete? d)
               (%seq ((%py-dunder d "__delete__") o) ())
-              (let ((as (%py-obj-attrs o)))
-                (if (null? (%py-alist-find n as))
-                  (Err raise (lit attribute)
-                    (Str8 append (Str8 append "'" n) "'") ())
-                  (%py-obj-set-attrs! o (%py-attr-drop as n)))))))))))
+              (%py-obj-drop-attr! o n)))))))))
 (def %py-attr-drop
   (fn (self as n)
     (if (null? as) ()
@@ -659,9 +666,23 @@
 
 ; the explicit super(type, obj) form: unimplemented, and every argument
 ; shape the corpus passes is one Python itself rejects
+; super(type, obj): the explicit form, the same record the zero-argument
+; form builds from the class the parser supplies.  obj may be an instance
+; of type or a subclass of it.
 (def %py-super-args
   (fn (_ . a)
-    (Err raise (lit type) "super() argument 1 must be a type" ())))
+    (match
+      ((if (null? a) #t (not (%py-class-is (first a))))
+        (Err raise (lit type) "super() argument 1 must be a type" ()))
+      ((null? (rest a))
+        (Err raise (lit type) "super() argument 2 is required here" ()))
+      (#t
+        (let ((cls (first a)) (obj (first (rest a))))
+          (if (if (%py-obj-is obj) (%py-subclass? (%py-obj-class obj) cls)
+                (if (%py-class-is obj) (%py-subclass? obj cls) #f))
+            (%py-super-new cls obj)
+            (Err raise (lit type)
+              "super(type, obj): obj must be an instance or subtype of type" ())))))))
 
 (def %py-issubclass
   (fn (_ c b)
