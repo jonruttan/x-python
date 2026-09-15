@@ -66,6 +66,8 @@
           (#t
             (Err raise (lit attribute)
               (Str8 append (Str8 append "'complex' object has no attribute '" name) "'") ()))))
+      ; an int's methods live on the int class
+      ((eq? (%py-num-kind (%py-boolnorm obj)) (lit int)) (%py-int-attr obj name))
       (#t
         (let ((sig (%py-sig-of obj)))
           (if (if (null? sig) #f (Str8 =? name "__name__"))

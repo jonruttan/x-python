@@ -634,12 +634,15 @@
   (fn (_ o n0)
     (def n (%py-attr-name! n0))
     (if (%py-class-is o)
-      ; `del C.x`: the row leaves the class's own table
-      (if (null? (%py-alist-find n (%py-class-methods o)))
-        (Err raise (lit attribute)
-          (Str8 append (Str8 append "type object '" (%py-class-name o))
-            (Str8 append "' has no attribute '" (Str8 append n "'"))) ())
-        (%seq (%py-class-methods-set! o (%py-attr-drop (%py-class-methods o) n)) ()))
+      ; `del C.x`: the row leaves the class's own table; a builtin type
+      ; refuses, as in Python
+      (match
+        ((%py-class-builtin? o) (%py-immutable-type! "delete" o n))
+        ((null? (%py-alist-find n (%py-class-methods o)))
+          (Err raise (lit attribute)
+            (Str8 append (Str8 append "type object '" (%py-class-name o))
+              (Str8 append "' has no attribute '" (Str8 append n "'"))) ()))
+        (#t (%seq (%py-class-methods-set! o (%py-attr-drop (%py-class-methods o) n)) ())))
     (if (not (%py-obj-is o))
       (Err raise (lit attribute) "object has no deletable attributes" ())
       ; __delattr__ is the same hook on `del obj.x`, and it is PYTHON code: it

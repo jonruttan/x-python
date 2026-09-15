@@ -113,7 +113,7 @@ would print `[1]`.
 (python-run "x = 1\nprint(x.bit_length())")
 ```
 ---
-    Error: #<err:attribute object has no attribute 'bit_length'>
+    Error: #<err:attribute 'int' object has no attribute 'bit_length'>
 
 ### a name is required after the dot
 

@@ -650,6 +650,7 @@
     (pair (lit name)          %py-exc-NameError)
     (pair (lit attribute)     %py-exc-AttributeError)
     (pair (lit zero-division) %py-exc-ZeroDivisionError)
+    (pair (lit overflow)      %py-exc-OverflowError)
     (pair (lit syntax)        %py-exc-SyntaxError)
     (pair (lit state)         %py-exc-RuntimeError)
     (pair (lit import)        %py-exc-ImportError)))
@@ -906,6 +907,20 @@
           ())
         (%seq (%py-obj-set-attrs! obj (%py-attr-drop as name)) ())))))
 
+; A builtin type's qualname is its bare name; a class the program wrote is
+; qualified by its module, `__main__.Foo`.  Python refuses a store or a
+; delete on a builtin type, and this is the test for one.
+(def %py-class-builtin?
+  (fn (_ c) (Str8 =? (%py-class-qualname c) (%py-class-name c))))
+(def %py-immutable-type!
+  (fn (_ verb cls name)
+    (Err raise (lit type)
+      (Str8 append (Str8 append "cannot " verb)
+        (Str8 append (Str8 append " '" name)
+          (Str8 append "' attribute of immutable type '"
+            (Str8 append (%py-class-name cls) "'"))))
+      ())))
+
 (def %py-setattr
   (fn (_ obj name v)
     ; A CLASS TAKES A STORE TOO.  `C.x = 2` puts the row in the same alist the
@@ -913,7 +928,9 @@
     ; walks the class chain, and an instance attribute of the same name still
     ; shadows it -- %py-obj-attr reads the instance first.
     (if (%py-class-is obj)
-      (%py-class-methods-set! obj (%py-attr-put (%py-class-methods obj) name v))
+      (if (%py-class-builtin? obj)
+        (%py-immutable-type! "set" obj name)
+        (%py-class-methods-set! obj (%py-attr-put (%py-class-methods obj) name v)))
       (if (not (%py-obj-is obj))
         (Err raise (lit attribute) "object does not support attribute assignment" ())
         ; __setattr__ INTERCEPTS EVERY STORE, which is the point of it: a class
