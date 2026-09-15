@@ -13,13 +13,16 @@ keywords, the builtins and the names defined at the prompt.
 ---
     #t
 
+The completer reads the buffer through one method, `before`, the text to the
+left of the cursor; a stand-in with that method is enough to test it, and
+lets these cases run on a platform that has no editor to build a buffer with.
+
 ### the identifier being completed ends at the cursor
 
 ```python
 (do (import python/line)
-    (let ((ed (Edit make)))
-      (ed insert! "x = pri")
-      (%py-word-at ed)))
+    (def-class %spec-buf () text (method before (self) (member (lit text))))
+    (%py-word-at (new %spec-buf text "x = pri")))
 ```
 ---
     "pri"
@@ -28,10 +31,8 @@ keywords, the builtins and the names defined at the prompt.
 
 ```python
 (do (import python/line)
-    (let ((ed (Edit make)))
-      (ed insert! "pr")
-      (let ((r (%py-complete ed)))
-        (list (first r) (List includes? "print" (rest r))))))
+    (let ((r (%py-complete (new %spec-buf text "pr"))))
+      (list (first r) (List includes? "print" (rest r)))))
 ```
 ---
     ("pr" #t)
@@ -41,9 +42,7 @@ keywords, the builtins and the names defined at the prompt.
 ```python
 (do (import python/line)
     (set! %py-session-names (pair "frobnicate" %py-session-names))
-    (let ((ed (Edit make)))
-      (ed insert! "frob")
-      (rest (%py-complete ed))))
+    (rest (%py-complete (new %spec-buf text "frob"))))
 ```
 ---
     ("frobnicate")
