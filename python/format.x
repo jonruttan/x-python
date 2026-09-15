@@ -401,7 +401,11 @@
 
 (def %py-format
   (fn (_ fmt arg)
-    (def args (if (%py-tuple-is arg) (%py-tuple-elems arg) (list arg)))
+    ; a tuple SUBCLASS spreads too: "%d %d" % namedtuple_instance takes its
+    ; fields as the arguments, which is what makes a namedtuple a tuple here
+    (def args
+      (let ((n (%py-native-of arg)))
+        (if (%py-tuple-is n) (%py-tuple-elems n) (list arg))))
     (def cell (pair args ()))
     ; A DICT IS A MAPPING: %(key)s looks the key up, and the looked-up value
     ; becomes the ONE positional argument left (CPython's own rule -- a %s

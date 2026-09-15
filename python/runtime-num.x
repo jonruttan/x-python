@@ -301,6 +301,14 @@
             (if (not (eq? (%py-num-kind (%py-boolnorm k)) (lit int)))
               (Err raise (lit type) "can't multiply sequence by non-int" ())
               (%py-list-new (%py-els-repeat (%py-list-elems l) (%py-boolnorm k) ()))))))
+      ; a tuple repeats like every other sequence, and a namedtuple's own
+      ; __mul__ answers through this arm
+      ((if (%py-tuple-is a) #t (%py-tuple-is b))
+        (let ((t (if (%py-tuple-is a) a b)))
+          (let ((k (if (%py-tuple-is a) b a)))
+            (if (not (eq? (%py-num-kind (%py-boolnorm k)) (lit int)))
+              (Err raise (lit type) "can't multiply sequence by non-int" ())
+              (%py-tuple-new (%py-els-repeat (%py-tuple-elems t) (%py-boolnorm k) ()))))))
       ((%py-bytes-is a)
         ((if (%py-barr-is a) %py-barr-new %py-bytes-new) (%pb-repeat (%py-bytes-list a) b ())))
       ((%py-bytes-is b)

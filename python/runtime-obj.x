@@ -545,6 +545,17 @@
 ; the way () did, `isinstance(x, object)` is the walk it already does, and
 ; the guard in %py-mkclass turns any other non-class base into the TypeError
 ; Python raises instead of a crash.
+; The default store and drop, reachable from a class's own __setattr__ and
+; __delattr__ hooks -- the only way such a hook can finish its work without
+; recursing into itself.  They are named because they are also the test: a
+; class supplies a hook when what the walk finds is not one of these two.
+(def %py-object-setattr
+  (fn (_ self n v)
+    (let ((name (%py-attr-name! n)))
+      (%seq (%py-obj-set-attrs! self (%py-attr-put (%py-obj-attrs self) name v)) ()))))
+(def %py-object-delattr
+  (fn (_ self n) (%py-obj-drop-attr! self (%py-attr-name! n))))
+
 (def %py-cls-object
   ; object.__new__ ALLOCATES, and having it here is what makes a user
   ; __new__ able to call super().__new__(cls) -- the bound self is the class,
@@ -558,15 +569,8 @@
     (list
       (pair "__new__" (fn (_ cls . args) (%py-obj-new cls)))
       (pair "__init__" (fn (_ self . args) ()))
-      ; the default store and drop, reachable from a class's own __setattr__
-      ; and __delattr__ hooks -- which is the only way such a hook can
-      ; finish its work without recursing into itself
-      (pair "__setattr__"
-        (fn (_ self n v)
-          (let ((name (%py-attr-name! n)))
-            (%seq (%py-obj-set-attrs! self (%py-attr-put (%py-obj-attrs self) name v)) ()))))
-      (pair "__delattr__"
-        (fn (_ self n) (%py-obj-drop-attr! self (%py-attr-name! n)))))
+      (pair "__setattr__" %py-object-setattr)
+      (pair "__delattr__" %py-object-delattr))
     "object"))
 
 (def %py-exc-BaseException
@@ -937,11 +941,11 @@
         ; that defines one decides what `self.x = v` means, and gets no default
         ; store unless it makes one itself.  __getattr__ was already a hook on
         ; the read; this is the same rule on the write.  object carries a
-        ; built-in __setattr__ as well, so the lookup always finds one: only
-        ; a hook written in Python is a hook, and the built-in default is the
-        ; plain store below.
+        ; __setattr__ as well, so the lookup always finds one: a class
+        ; supplies a hook when what the walk finds is not object's default,
+        ; and the default is the plain store below.
         (let ((h (%py-method-find (%py-obj-class obj) "__setattr__")))
-          (if (%py-user-fn? h)
+          (if (if (null? h) #f (not (same? h %py-object-setattr)))
             ; the hook is PYTHON code and takes the name as a str, not as the
             ; platform string the attribute tables below are keyed by -- the
             ; same crossing __getattr__ needs

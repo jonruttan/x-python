@@ -355,6 +355,7 @@
                       (%py-raise (%py-instantiate %py-exc-SystemExit
                         (if (null? a) () (list (first a))))))))))
       ((Str8 =? name "math") (%py-math-module))
+      ((Str8 =? name "collections") (%py-collections-module))
       ((Str8 =? name "builtins") (%py-module-new "builtins" ()))
       (#t ()))))
 

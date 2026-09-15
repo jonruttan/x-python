@@ -97,3 +97,5 @@
 (include-once "./runtime-flow.x")
 (include-once "./runtime-call.x")
 (include-once "./runtime-type.x")
+; the class objects it builds on are in runtime-type.x, so it comes after
+(include-once "./collections.x")
