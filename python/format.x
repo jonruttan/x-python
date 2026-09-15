@@ -68,9 +68,33 @@
       (#t ""))))
 
 ; --- Integer magnitudes ------------------------------------------------------
-; The decimal spelling of the integer part of any numeric operand: ints and
-; bigints by their own printer, bools as 1/0, floats TRUNCATED through the
-; exact digits (never through a lossy int64 door).
+; The decimal spelling of the integer part of any numeric operand: ints by
+; their own printer, a value past the machine word fourteen digits per
+; division, bools as 1/0, floats TRUNCATED through the exact digits (never
+; through a lossy int64 door).
+
+; 10^14 is the largest power of ten under 2^48, so a chunk is a fixnum and
+; its digits are the platform's own; a division of a value past the machine
+; word costs tens of thousands of objects, one per digit did too.
+(def %py-dec-chunk 100000000000000)
+(def %py-fmt-lead0
+  (fn (_ s k)
+    (if (>= (Str8 length s) k) s (Str8 append (%py-fmt-zeros (- k (Str8 length s))) s))))
+(def %py-fmt-big-dec
+  (fn (_ v)
+    ; the chunks of a non-negative v, most significant first
+    (def chunks
+      (fn (self n acc)
+        (if (= n 0) acc
+          (let ((q (Num quotient n %py-dec-chunk)))
+            (self q (pair (- n (* q %py-dec-chunk)) acc))))))
+    (def join
+      (fn (self cs acc)
+        (if (null? cs) acc
+          (self (rest cs) (Str8 append acc (%py-fmt-lead0 (%py-str (first cs)) 14))))))
+    (let ((cs (chunks v ())))
+      (if (null? cs) "0" (join (rest cs) (%py-str (first cs)))))))
+
 (def %py-fmt-int-mag
   (fn (_ v)
     ; -> (pair neg? magnitude-string)
@@ -99,28 +123,49 @@
                       (Str8 sub 0 keep D)
                       (Str8 append D (%py-fmt-zeros (- keep got)))))
                   (pair (if (Str8 =? mag "0") #f neg) mag)))))))
+      ((eq? (%py-typeof-prim v) %py-th-big)
+        (pair (< v 0) (%py-fmt-big-dec (if (< v 0) (- 0 v) v))))
       (#t
         (let ((s (%py-str v)))
           (if (Str8 =? (Str8 sub 0 1 s) "-")
             (pair #t (Str8 sub 1 (- (Str8 length s) 1) s))
             (pair #f s)))))))
 
-; Base conversion for %o %x %X, bigint-capable through the tower ops.
+; Base conversion for %o %x %X and bin/hex/oct.  The digits come off the
+; value a chunk at a time: the largest base^k under 2^48 per division, so a
+; value past the machine word pays a few divisions rather than one a digit.
+(def %py-fmt-chunk-of
+  (fn (_ base)
+    ; (pow . k)
+    (def go
+      (fn (self p k)
+        (if (> (* p base) 281474976710656) (pair p k) (self (* p base) (+ k 1)))))
+    (go base 1)))
 (def %py-fmt-base
-  (fn (_ v base tbl)
-    (def m (%py-fmt-int-mag v))
-    (def dig ())
-    (set! dig
-      (fn (_ n acc)
-        ; `=`, NOT eq?: a bigint zero is not eq? to the literal 0, and this
-        ; loop then never ends
-        (if (= n 0)
-          acc
-          (dig (%py-floordiv n base)
-            (Str8 append (Str8 sub (%py-mod n base) 1 tbl) acc)))))
-    ; back through the decimal spelling so bigints work without a cell walk
-    (def n (%py-int-of-str (rest m)))
-    (pair (first m) (if (= n 0) "0" (dig n "")))))
+  (fn (_ v0 base tbl)
+    (def v (%py-boolnorm v0))
+    (def ck (%py-fmt-chunk-of base))
+    ; k digits of the fixnum r, zero-padded, in front of acc
+    (def padded
+      (fn (self r k acc)
+        (if (eq? k 0) acc
+          (self (Num quotient r base) (- k 1) (Str8 append (Str8 sub (% r base) 1 tbl) acc)))))
+    ; the digits of the top chunk, without leading zeros
+    (def top
+      (fn (self r acc)
+        (if (= r 0) acc
+          (self (Num quotient r base) (Str8 append (Str8 sub (% r base) 1 tbl) acc)))))
+    (def go
+      (fn (self n acc)
+        (let ((q (Num quotient n (first ck))))
+          (let ((r (- n (* q (first ck)))))
+            (if (= q 0)
+              (Str8 append (top r "") acc)
+              (self q (Str8 append (padded r (rest ck) "") acc)))))))
+    (if (%py-float-is v)
+      (Err raise (lit type) "%x format: an integer is required, not float" ())
+      (let ((n (if (< v 0) (- 0 v) v)))
+        (pair (< v 0) (if (= n 0) "0" (go n "")))))))
 
 ; --- Float digit machinery ---------------------------------------------------
 ; Everything below speaks (D x10): every digit, and the power of ten of the

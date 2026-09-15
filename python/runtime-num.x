@@ -575,7 +575,21 @@
               "0.0 cannot be raised to a negative power" ())
             (Float pow fa fb))))
       ((< b 0) (/ 1.0 (Num expt a (- 0 b))))
+      ; a base of 0, 1 or -1 is answered without raising it to anything,
+      ; which is what lets 0 ** (1 << 65) finish
+      ((%py-pow-unit? a)
+        (let ((x (%py-boolnorm a)) (e (%py-boolnorm b)))
+          (match
+            ((= x 1) 1)
+            ((= x 0) (if (= e 0) 1 0))
+            (#t (if (= (Num modulo e 2) 0) 1 (- 0 1))))))
       (#t (Num expt a b)))))
+(def %py-pow-unit?
+  (fn (_ v)
+    (let ((x (%py-boolnorm v)))
+      (if (eq? (%py-num-kind x) (lit int))
+        (if (= x 0) #t (if (= x 1) #t (= x (- 0 1))))
+        #f))))
 (def %py-neg
   (fn (_ a)
     (if (%py-obj-is a)
@@ -612,30 +626,82 @@
   (fn (_ v) (if (eq? v #t) 1 (if (eq? v #f) 0 v))))
 
 ; --- Bitwise, exact two's complement -----------------------------------------
-; The loop walks both operands a bit at a time with FLOOR halving, so a
-; negative integer presents its two's-complement bits naturally and
-; terminates at the all-zeros or all-ones tail; the tail's contribution is
-; -2^k when its bit is set, which is exactly what two's complement says.
-; Bigints ride the tower ops.
-(def %py-half
-  (fn (_ v) (Num quotient (if (< v 0) (- v 1) v) 2)))
+; Forty-eight bits at a time.  An operand's low chunk is its floor remainder
+; by 2^48 -- for a negative operand, its two's complement low bits -- and the
+; operand then shifts down by an exact division, so a negative one settles
+; on -1 and a non-negative one on 0.  The walk stops when both have; the
+; infinite tail of ones a -1 stands for contributes -2^k when the operator
+; keeps its bit.  Two chunks combine a nibble at a time through a 256-entry
+; table built once, with fixnum arithmetic throughout; a bit at a time on
+; the bigints themselves cost some 200,000 objects per bit.
+(def %py-chunk 281474976710656)
+
+; The four bits of each nibble value, least significant first.
+(def %py-nib-bits
+  (fn (_ v)
+    (list (= (% v 2) 1) (= (% (Num quotient v 2) 2) 1)
+          (= (% (Num quotient v 4) 2) 1) (= (% (Num quotient v 8) 2) 1))))
+(def %py-nib-bit-lists
+  (fn (self i acc) (if (< i 0) acc (self (- i 1) (pair (%py-nib-bits i) acc)))))
+(def %py-nibs (%py-nib-bit-lists 15 ()))
+
+; The 256-entry table of an operator over two nibbles, entry a*16+b.
+(def %py-nib-table
+  (fn (_ fbit)
+    (def entry
+      (fn (_ ba bb)
+        (+ (if (fbit (List ref 0 ba) (List ref 0 bb)) 1 0)
+          (+ (if (fbit (List ref 1 ba) (List ref 1 bb)) 2 0)
+            (+ (if (fbit (List ref 2 ba) (List ref 2 bb)) 4 0)
+              (if (fbit (List ref 3 ba) (List ref 3 bb)) 8 0))))))
+    (def go
+      (fn (self i acc)
+        (if (< i 0) acc
+          (self (- i 1)
+            (pair (entry (List ref (Num quotient i 16) %py-nibs) (List ref (% i 16) %py-nibs))
+              acc)))))
+    (go 255 ())))
+(def %py-nib-and (%py-nib-table (fn (_ x y) (if x y #f))))
+(def %py-nib-or  (%py-nib-table (fn (_ x y) (if x #t y))))
+(def %py-nib-xor (%py-nib-table (fn (_ x y) (if x (not y) y))))
+
+; Two 48-bit chunks through the table, a nibble at a time.
+(def %py-nib-combine
+  (fn (_ tbl x y)
+    (def go
+      (fn (self x y k pow acc)
+        (if (eq? k 0) acc
+          (self (Num quotient x 16) (Num quotient y 16) (- k 1) (* pow 16)
+            (+ acc (* pow (List ref (+ (* (% x 16) 16) (% y 16)) tbl)))))))
+    (go x y 12 1 0)))
+
+; The low chunk and the rest of v: (low . rest), through the truncating
+; quotient and a sign fix, so a negative v never reaches a modulo.
+(def %py-bit-split
+  (fn (_ v)
+    (let ((q (Num quotient v %py-chunk)))
+      (let ((r (- v (* q %py-chunk))))
+        (if (< r 0) (pair (+ r %py-chunk) (- q 1)) (pair r q))))))
 
 (def %py-bit2
-  (fn (_ a0 b0 opname fbit)
+  (fn (_ a0 b0 opname tbl fbit)
     (def a (%py-boolnorm a0))
     (def b (%py-boolnorm b0))
     (if (if (eq? (%py-num-kind a) (lit int)) (eq? (%py-num-kind b) (lit int)) #f)
       (do
+        (def tail? (fn (_ v) (if (= v 0) #t (= v (- 0 1)))))
         (def go
           (fn (self a b pow acc)
-            (if (if (if (= a 0) #t (= a (- 0 1))) (if (= b 0) #t (= b (- 0 1))) #f)
-              (if (fbit (= a (- 0 1)) (= b (- 0 1))) (- acc pow) acc)
-              (self (%py-half a) (%py-half b) (* pow 2)
-                (if (fbit (= (- a (* 2 (%py-half a))) 1)
-                          (= (- b (* 2 (%py-half b))) 1))
-                  (+ acc pow)
-                  acc)))))
-        (go a b 1 0))
+            (if (if (tail? a) (tail? b) #f)
+              (if (fbit (< a 0) (< b 0)) (- acc pow) acc)
+              (let ((sa (%py-bit-split a)) (sb (%py-bit-split b)))
+                (self (rest sa) (rest sb) (* pow %py-chunk)
+                  (+ acc (* pow (%py-nib-combine tbl (first sa) (first sb)))))))))
+        ; two bools answer a bool, as in Python
+        (let ((r (go a b 1 0)))
+          (if (if (if (eq? a0 #t) #t (eq? a0 #f)) (if (eq? b0 #t) #t (eq? b0 #f)) #f)
+            (= r 1)
+            r)))
       (Err raise (lit type)
         (Str8 append "unsupported operand type(s) for " opname) ()))))
 
@@ -648,21 +714,21 @@
       ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-or a b))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__or__" "__ror__" "|"))
-      (#t (%py-bit2 a b "|" (fn (_ x y) (if x #t y)))))))
+      (#t (%py-bit2 a b "|" %py-nib-or (fn (_ x y) (if x #t y)))))))
 (def %py-bitxor
   (fn (_ a b)
     (if (if (%py-set-is a) #t (%py-set-is b))
       (%py-set-xor a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (%py-binop a b "__xor__" "__rxor__" "^")
-      (%py-bit2 a b "^" (fn (_ x y) (if x (not y) y)))))))
+      (%py-bit2 a b "^" %py-nib-xor (fn (_ x y) (if x (not y) y)))))))
 (def %py-bitand
   (fn (_ a b)
     (if (if (%py-set-is a) #t (%py-set-is b))
       (%py-set-and a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (%py-binop a b "__and__" "__rand__" "&")
-      (%py-bit2 a b "&" (fn (_ x y) (if x y #f)))))))
+      (%py-bit2 a b "&" %py-nib-and (fn (_ x y) (if x y #f)))))))
 
 ; --- Membership --------------------------------------------------------------
 ; `a in b`: substring for strings, element walk with Python's equality for
