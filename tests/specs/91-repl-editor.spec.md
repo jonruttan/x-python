@@ -112,17 +112,19 @@ either way.
 
 ## completion
 
+The completer reads the buffer through one method, `before`, the text to the
+left of the cursor, so a stand-in with that method serves here as it does in
+`09-line.spec.md`, and the case runs on a platform without the editor.
+
 ### Tab offers keywords and builtins by prefix, and nothing for an empty word
 
 ```python
 (%seq
   (do
     (import python/line)
-    (import x/repl/edit)
-    (let ((a (Edit make)) (b (Edit make)))
-      (a set-text! "x = pri" 7)
-      (b set-text! "x = " 4)
-      (write (list (%py-complete a) (%py-complete b)))))
+    (def-class %spec-edit () text (method before (self) (member (lit text))))
+    (write (list (%py-complete (new %spec-edit text "x = pri"))
+                 (%py-complete (new %spec-edit text "x = ")))))
   (newline))
 ```
 ---
