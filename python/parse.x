@@ -212,6 +212,7 @@
 (def %py-aug-ops
   (list (list "+=" (lit %py-iadd)) (list "-=" (lit %py-isub))
         (list "*=" (lit %py-imul)) (list "/=" (lit %py-idiv))
+        (list "@=" (lit %py-imatmul))
         (list "%=" (lit %py-imod))
         (list "|=" (lit %py-ibitor)) (list "&=" (lit %py-ibitand))
         (list "^=" (lit %py-ibitxor))
@@ -236,7 +237,8 @@
   (list (list "<<" (lit %py-lshift)) (list ">>" (lit %py-rshift))))
 (def %py-product-ops
   (list (list "*" (lit %py-mul)) (list "/" (lit %py-div))
-        (list "//" (lit %py-floordiv)) (list "%" (lit %py-mod))))
+        (list "//" (lit %py-floordiv)) (list "%" (lit %py-mod))
+        (list "@" (lit %py-matmul))))
 
 ; --- The ladder --------------------------------------------------------------
 (def %py-comparison ())
@@ -630,7 +632,7 @@
         (def sig-form
           (list (lit %py-sig!) (list (lit fn) (pair (lit _) (lit %py-more)) body)
             "<lambda>" (pair (lit list) names) nreq (not (null? rest-sym)) ()
-            (pair (lit list) (%py-kwo-names kwonly ()))))
+            (pair (lit list) (%py-kwo-names kwonly ())) #t))
         (def all-dflts (%py-append dflts (%py-kwo-dflts kwonly ())))
         (pair (if (null? all-dflts) sig-form (list (lit let) (%py-dflt-lets all-dflts 0) sig-form))
           (rest b))))))
@@ -1068,8 +1070,10 @@
                   (rest toks)))
           ((%py-super-call? toks)
             (match
+              ; super(type, obj): the arguments go through to the runtime
               ((not (null? (%py-group-of (first (rest toks)))))
-                (pair (list (lit %py-super-args)) (rest (rest toks))))
+                (pair (pair (lit %py-super-args) (%py-group-exprs (%py-group-of (first (rest toks)))))
+                  (rest (rest toks))))
               ((null? (first %py-current-class))
                 (Err raise (lit syntax) "super() outside a class" ()))
               ((null? (first %py-current-self))
@@ -1431,6 +1435,7 @@
         (list "NameError"         (lit %py-exc-NameError))
         (list "TypeError"         (lit %py-exc-TypeError))
         (list "ValueError"        (lit %py-exc-ValueError))
+        (list "AssertionError"    (lit %py-exc-AssertionError))
         (list "RuntimeError"      (lit %py-exc-RuntimeError))
         (list "SyntaxError"       (lit %py-exc-SyntaxError))))
 
@@ -1786,6 +1791,7 @@
                 (#t (Err raise (lit syntax) "cannot delete this target" ()))))))
         ((%py-kw? t "try") (%py-try (rest toks)))
         ((%py-kw? t "raise") (%py-raise-stmt (rest toks)))
+        ((%py-kw? t "assert") (%py-assert-stmt (rest toks)))
         ; THE CONDITION IS PYTHON'S TRUTH, NOT x's.  `if []:` must not run its
         ; body: an empty list is falsy in Python and a PY-LIST instance is a
         ; non-nil value to x, so the bare value in an x `if` was silently wrong.
@@ -2421,6 +2427,23 @@
                             (list (lit %py-fin-th))))))))
                 (rest f))))))))))
 
+; `assert EXPR` and `assert EXPR, MSG`: an AssertionError, with the message,
+; when the expression is not true.
+(def %py-assert-stmt
+  (fn (_ toks)
+    (let ((c (%py-test toks)))
+      (let ((m (if (%py-op-is? (if (null? (rest c)) () (first (rest c))) ",")
+                 (%py-test (rest (rest c)))
+                 (pair () (rest c)))))
+        (pair
+          (list (lit if) (list (lit %py-truthy) (first c))
+            ()
+            (list (lit %py-raise)
+              (if (null? (first m))
+                (list (lit %py-exc-AssertionError))
+                (list (lit %py-exc-AssertionError) (first m)))))
+          (rest m))))))
+
 (def %py-raise-stmt
   (fn (_ toks)
     ; positioned just after the `raise` keyword
@@ -2759,7 +2782,8 @@
                     (list (lit %py-sig!) fn-form (%py-val name)
                       (pair (lit list) names) nreq (not (null? rest-sym))
                       (if (null? kw-name) () kw-name)
-                      (pair (lit list) (%py-kwo-names kwonly ()))))
+                      (pair (lit list) (%py-kwo-names kwonly ()))
+                      #t))
                   (%set-first! %py-current-self outer-self)
                   (pair
                     (list (lit def) (%py-name->sym (%py-val name))

@@ -457,8 +457,9 @@
       (let ((v (rest (first rows))))
         (%seq
           (if (%py-obj-is v)
+            ; __set_name__ is Python code and takes the name as a str
             (let ((m (%py-dunder v "__set_name__")))
-              (if (null? m) () (m cls (first (first rows)))))
+              (if (null? m) () (m cls (%py-str-of-x (first (first rows))))))
             ())
           (self cls (rest rows)))))))
 

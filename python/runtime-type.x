@@ -487,7 +487,11 @@
             (%py-bytes-new (%py-bytes-of-codes (%py-tuple-elems v) ())))
           ((%py-str-is v)
             (Err raise (lit type) "string argument without an encoding" ()))
-          (#t (%py-bytes-new (%py-bytes-zeros v ()))))))))
+          ((%py-num? v) (%py-bytes-new (%py-bytes-zeros v ())))
+          (#t
+            (Err raise (lit type)
+              (Str8 append "cannot convert '"
+                (Str8 append (%py-class-name (%py-type-of v)) "' object to bytes")) ())))))))
 
 ; A NUL BYTE CANNOT BE CARRIED HERE, and saying so is better than answering a
 ; short bytes.  A string on this platform is a C STRING BY AN ENGINE GUARANTEE
