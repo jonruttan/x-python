@@ -216,30 +216,91 @@
         ((eq? h %py-th-complex) (lit complex))
         (#t ())))))
 
+; --- int(text, base) ---------------------------------------------------------
+; Surrounding whitespace, a sign, the 0x/0o/0b prefix the base allows (any of
+; them when the base is 0), then digits with underscores between; a bytes-like
+; argument is its text.  Python's message names the base and the whole text.
+(def %py-int-ws?
+  (fn (_ c)
+    (match ((= c 32) #t) ((= c 9) #t) ((= c 10) #t) ((= c 13) #t) ((= c 11) #t) ((= c 12) #t) (#t #f))))
+
+(def %py-int-text-bad
+  (fn (_ s base)
+    (Err raise (lit value)
+      (Str8 append "invalid literal for int() with base "
+        (Str8 append (%py-str base) (Str8 append ": '" (Str8 append s "'"))))
+      ())))
+
+; (base . start): where the digits begin past a prefix the base allows, and
+; the base a prefix decides when it was 0
+(def %py-int-prefix
+  (fn (_ code i j base)
+    (let ((c (if (< (+ i 1) j) (if (= (code i) 48) (code (+ i 1)) 0) 0)))
+      (match
+        ((if (if (= c 120) #t (= c 88)) (if (= base 0) #t (= base 16)) #f) (pair 16 (+ i 2)))
+        ((if (if (= c 111) #t (= c 79)) (if (= base 0) #t (= base 8)) #f) (pair 8 (+ i 2)))
+        ((if (if (= c 98) #t (= c 66)) (if (= base 0) #t (= base 2)) #f) (pair 2 (+ i 2)))
+        (#t (pair (if (= base 0) 10 base) i))))))
+
+(def %py-int-of-text
+  (fn (_ s base)
+    (def n (%py-byte-len s))
+    (def code (fn (_ i) (%py-char-code (%str-ref s i))))
+    (def skip (fn (self i) (if (if (< i n) (%py-int-ws? (code i)) #f) (self (+ i 1)) i)))
+    (def back (fn (self j) (if (if (> j 0) (%py-int-ws? (code (- j 1))) #f) (self (- j 1)) j)))
+    (let ((i (skip 0)) (j (back n)))
+      (if (>= i j)
+        (%py-int-text-bad s base)
+        (let ((c0 (code i)))
+          (let ((p (%py-int-prefix code (if (if (= c0 45) #t (= c0 43)) (+ i 1) i) j base)))
+            (if (>= (rest p) j)
+              (%py-int-text-bad s base)
+              (let ((v (guard (e (%py-int-text-bad s base))
+                         (%py-int-of-based (Str8 sub (rest p) (- j (rest p)) s) (first p)))))
+                ; with base 0 and no prefix, a leading zero may only spell zero
+                (if (if (= base 0) (if (= (first p) 10) (if (= (code (rest p)) 48) (not (= v 0)) #f) #f) #f)
+                  (%py-int-text-bad s base)
+                  (if (= c0 45) (- 0 v) v))))))))))
+
 (def %py-int-ctor
-  (fn (_ . a)
-    (if (null? a)
-      0
-      (let ((v (first a)))
-        (match
-          ((eq? v #t) 1)
-          ((eq? v #f) 0)
-          ((%py-str-is v) (%py-int-of-str (%ps->x (%py-str-cps v))))
-          ((%py-obj-is v)
-            (let ((m (%py-dunder v "__int__")))
-              (if (null? m)
-                (Err raise (lit type) "int() argument must be a number or string" ())
-                (m))))
-          (#t
-            (let ((k (%py-num-kind v)))
-              (if (eq? k (lit int)) v
-              (if (eq? k (lit float))
-                ; toward zero through the EXACT DIGITS, so int(1e19) and
-                ; int(2.0 ** 100) answer bigints instead of a wrapped int64
-                (let ((m (%py-fmt-int-mag v)))
-                  (let ((n (%py-int-of-str (rest m))))
-                    (if (first m) (- 0 n) n)))
-                (Err raise (lit type) "int() argument must be a number or string" ()))))))))))
+  (%py-sig!
+    (fn (_ . a)
+      (match
+        ((null? a) 0)
+        ; an explicit base takes text only
+        ((not (null? (rest a)))
+          (let ((v (first a)) (base (%py-boolnorm (first (rest a)))))
+            (match
+              ((not (eq? (%py-num-kind base) (lit int)))
+                (Err raise (lit type) "'base' must be an integer" ()))
+              ((if (= base 0) #f (if (< base 2) #t (> base 36)))
+                (Err raise (lit value) "int() base must be >= 2 and <= 36, or 0" ()))
+              ((%py-str-is v) (%py-int-of-text (%ps->x (%py-str-cps v)) base))
+              ((%py-bytes-is v) (%py-int-of-text (%py-bytes-str v) base))
+              (#t (Err raise (lit type) "int() can't convert non-string with explicit base" ())))))
+        (#t
+          (let ((v (first a)))
+            (match
+              ((eq? v #t) 1)
+              ((eq? v #f) 0)
+              ((%py-str-is v) (%py-int-of-text (%ps->x (%py-str-cps v)) 10))
+              ((%py-bytes-is v) (%py-int-of-text (%py-bytes-str v) 10))
+              ((%py-obj-is v)
+                (let ((m (%py-dunder v "__int__")))
+                  (if (null? m)
+                    (Err raise (lit type) "int() argument must be a number or string" ())
+                    (m))))
+              (#t
+                (let ((k (%py-num-kind v)))
+                  (if (eq? k (lit int)) v
+                  (if (eq? k (lit float))
+                    ; toward zero through the EXACT DIGITS, so int(1e19) and
+                    ; int(2.0 ** 100) answer bigints instead of a wrapped int64
+                    (let ((m (%py-fmt-int-mag v)))
+                      (let ((n (%py-int-of-str (rest m))))
+                        (if (first m) (- 0 n) n)))
+                    (Err raise (lit type) "int() argument must be a number or string" ()))))))))))
+    "int" (list "x" "base") 0 #f))
 
 (def %py-float-ctor
   (fn (_ . a)
@@ -679,11 +740,18 @@
 ; answer rather than a share of zero's.  Measured, CPython 3.14.7: bytes(0) is
 ; b'', bytes(-1) is ValueError("negative count").  A positive count asks for
 ; that many NUL bytes, and now gets them.
+; A count past the machine word is Python's OverflowError, said before a
+; single zero is built.
+(def %py-index-max (- (Num expt 2 63) 1))
 (def %py-bytes-zeros
-  (fn (self n acc)
-    (if (< n 0)
-      (Err raise (lit value) "negative count" ())
-      (if (= n 0) acc (self (- n 1) (pair 0 acc))))))
+  (fn (_ n0 acc)
+    (def go (fn (self k acc) (if (= k 0) acc (self (- k 1) (pair 0 acc)))))
+    (let ((n (%py-boolnorm n0)))
+      (match
+        ((< n 0) (Err raise (lit value) "negative count" ()))
+        ((> n %py-index-max)
+          (Err raise (lit overflow) "cannot fit 'int' into an index-sized integer" ()))
+        (#t (go n acc))))))
 
 (def %py-bytes-methods
   (list
@@ -742,6 +810,9 @@
       ((%py-tuple-is v) %py-cls-tuple)
       ((%py-obj-is v) (%py-obj-class v))
       ((%py-class-is v) %py-cls-type)
+      ; an error the runtime raised by tag is an instance of the class the
+      ; tag names, as far as type() can tell
+      ((Err err? v) (%py-exc-class-of v))
       (#t
         (let ((k (%py-num-kind v)))
           (match
