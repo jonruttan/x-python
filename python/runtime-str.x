@@ -742,10 +742,11 @@
 (def %py-fmtfield
   (fn (_ v conv spec)
     (let ((cv (match
+                ; no conversion is the common field, so it is asked first
+                ((Str8 =? conv "") v)
                 ((Str8 =? conv "r") (%py-repr-of v))
                 ((Str8 =? conv "s") (%py-str v))
                 ((Str8 =? conv "a") (%py-repr-of v))
-                ((Str8 =? conv "") v)
                 (#t
                   (Err raise (lit value) "Unknown conversion specifier" ())))))
       (%py-format-spec cv spec))))
@@ -754,6 +755,21 @@
   (fn (_ parts)
     (def go (fn (self ps acc) (if (null? ps) acc (self (rest ps) (Str8 append acc (first ps))))))
     (go parts "")))
+
+; The end of the run of ordinary characters starting at j: the index of the
+; next brace, or the end of the template.  The walkers below append a run in
+; one piece.  A character at a time cost two guarded string-class calls each
+; and recopied the accumulator, which made a template's literal text by far
+; the largest part of a format: ~43,000 objects per character against ~2,000
+; for the same text crossing the str boundary.
+; The byte comes through the primitives rather than %py-spec-code: that is
+; an interpreted call, and this scan would pay one per character.
+(def %py-fmt-run
+  (fn (self tpl n j)
+    (if (>= j n)
+      j
+      (let ((c (%py-char-code (%str-ref tpl j))))
+        (if (if (= c 123) #t (= c 125)) j (self tpl n (+ j 1)))))))
 
 ; str.format: the same template grammar as an f-string, walked at RUNTIME
 ; against positional arguments -- {} auto-numbers, {2} indexes, and a field's
@@ -782,24 +798,26 @@
               (let ((c (%py-spec-code name j)))
                 (if (if (= c 46) #t (= c 91)) j (self (+ j 1)))))))
         (def he (head-end 0))
-        (def head (Str8 sub 0 he name))
+        ; an empty head is the auto-numbered field, and no head to cut: the
+        ; string comes out only when there is one
         (def base
-          (if (Str8 =? head "")
+          (if (= he 0)
             (do
               (if (eq? (first mode) (lit manual))
                 (Err raise (lit value) "cannot switch from manual field specification to automatic field numbering" ())
                 (%set-first! mode (lit auto)))
               (let ((i (first auto))) (%set-first! auto (+ i 1)) (arg-at i)))
-            (if (%py-fmt-digit? (%py-spec-code head 0))
-              (do
-                (if (eq? (first mode) (lit auto))
-                  (Err raise (lit value) "cannot switch from automatic field numbering to manual field specification" ())
-                  (%set-first! mode (lit manual)))
-                (arg-at (%py-int-of-str head)))
-              (let ((kw (%py-alist-find head kws)))
-                (if (null? kw)
-                  (Err raise (lit key) (Str8 append (Str8 append "'" head) "'") ())
-                  (rest kw))))))
+            (let ((head (Str8 sub 0 he name)))
+              (if (%py-fmt-digit? (%py-spec-code head 0))
+                (do
+                  (if (eq? (first mode) (lit auto))
+                    (Err raise (lit value) "cannot switch from automatic field numbering to manual field specification" ())
+                    (%set-first! mode (lit manual)))
+                  (arg-at (%py-int-of-str head)))
+                (let ((kw (%py-alist-find head kws)))
+                  (if (null? kw)
+                    (Err raise (lit key) (Str8 append (Str8 append "'" head) "'") ())
+                    (rest kw)))))))
         (def head-end-from
           (fn (_ j)
             (def go (fn (self k) (if (>= k nn) k (let ((c (%py-spec-code name k))) (if (if (= c 46) #t (= c 91)) k (self (+ k 1)))))))
@@ -838,31 +856,37 @@
                 (self (+ i 2) (Str8 append acc "{"))
                 (let ((close (guard (_ (Err raise (lit value) "Single '{' encountered in format string" ()))
                                (%py-fs-close tpl (+ i 1) 0))))
-                  (let ((field (Str8 sub (+ i 1) (- close (+ i 1)) tpl)))
-                    (def fn0 (Str8 length field))
-                    (def at (%py-fs-split field 0 0))
-                    (def name (if (null? at) field (Str8 sub 0 at field)))
-                    (def tl (if (null? at) "" (Str8 sub at (- fn0 at) field)))
-                    (def conv
-                      (if (if (> (Str8 length tl) 1) (= (%py-spec-code tl 0) 33) #f)
-                        (Str8 sub 1 1 tl) ""))
-                    (def after (if (Str8 =? conv "") tl (Str8 sub 2 (- (Str8 length tl) 2) tl)))
-                    (if (if (> (Str8 length after) 0) (not (= (%py-spec-code after 0) 58)) #f)
-                      (Err raise (lit value) "expected ':' after conversion specifier" ())
-                      ())
-                    (def spec0
-                      (if (if (> (Str8 length after) 0) (= (%py-spec-code after 0) 58) #f)
-                        (Str8 sub 1 (- (Str8 length after) 1) after) ""))
-                    ; the VALUE takes its auto-number before a nested spec
-                    ; draws width or precision from the args that follow it
-                    (def v (resolve name))
-                    (def spec (if (null? (Str8 index-of "{" spec0)) spec0 (%py-strformat-sub spec0 args auto kws)))
-                    (self (+ close 1) (Str8 append acc (%py-fmtfield v conv spec))))))
+                  ; {} has nothing to split: no name, no conversion, no spec.
+                  ; It is the commonest field there is, and parsing it anyway
+                  ; cost eleven guarded string calls.
+                  (if (= close (+ i 1))
+                    (self (+ close 1) (Str8 append acc (%py-fmtfield (resolve "") "" "")))
+                    (let ((field (Str8 sub (+ i 1) (- close (+ i 1)) tpl)))
+                      (def fn0 (Str8 length field))
+                      (def at (%py-fs-split field 0 0))
+                      (def name (if (null? at) field (Str8 sub 0 at field)))
+                      (def tl (if (null? at) "" (Str8 sub at (- fn0 at) field)))
+                      (def conv
+                        (if (if (> (Str8 length tl) 1) (= (%py-spec-code tl 0) 33) #f)
+                          (Str8 sub 1 1 tl) ""))
+                      (def after (if (Str8 =? conv "") tl (Str8 sub 2 (- (Str8 length tl) 2) tl)))
+                      (if (if (> (Str8 length after) 0) (not (= (%py-spec-code after 0) 58)) #f)
+                        (Err raise (lit value) "expected ':' after conversion specifier" ())
+                        ())
+                      (def spec0
+                        (if (if (> (Str8 length after) 0) (= (%py-spec-code after 0) 58) #f)
+                          (Str8 sub 1 (- (Str8 length after) 1) after) ""))
+                      ; the VALUE takes its auto-number before a nested spec
+                      ; draws width or precision from the args that follow it
+                      (def v (resolve name))
+                      (def spec (if (null? (Str8 index-of "{" spec0)) spec0 (%py-strformat-sub spec0 args auto kws)))
+                      (self (+ close 1) (Str8 append acc (%py-fmtfield v conv spec)))))))
               (if (= c 125)
                 (if (if (< (+ i 1) n) (= (%py-spec-code tpl (+ i 1)) 125) #f)
                   (self (+ i 2) (Str8 append acc "}"))
                   (Err raise (lit value) "Single '}' encountered in format string" ()))
-                (self (+ i 1) (Str8 append acc (Str8 sub i 1 tpl)))))))))
+                (let ((e (%py-fmt-run tpl n (+ i 1))))
+                  (self e (Str8 append acc (Str8 sub i (- e i) tpl))))))))))
     (go 0 "")))
 
 (def %py-strformat (fn (_ tpl args) (%py-strformat-kw tpl args ())))
@@ -891,7 +915,8 @@
                                    (Err raise (lit key) (Str8 append (Str8 append "'" name) "'") ())
                                    (rest kw)))))))
                     (self (+ close 1) (Str8 append acc (%py-str v))))))
-              (self (+ i 1) (Str8 append acc (Str8 sub i 1 tpl))))))))
+              (let ((e (%py-fmt-run tpl n (+ i 1))))
+                (self e (Str8 append acc (Str8 sub i (- e i) tpl)))))))))
     (go 0 "")))
 
 
