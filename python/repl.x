@@ -16,9 +16,19 @@
 ; THE PLATFORM REPL READS SEXPS, AND NO PROMPT BANNER CHANGES THAT.  Its loop
 ; customizes prompt and print only; the read is the ambient reader.  So with
 ; run.x setting nothing but those, `print('hi')` answered "Unbound SYMBOL
-; 'print" and `1 + 2` evaluated as three forms across three prompts.  This file
-; replaces the LOOP: read a line (a block, when it opens one), python-parse,
+; 'print" and `1 + 2` evaluated as three forms across three prompts.  What
+; reads Python is here: a line (a block, when it opens one), python-parse,
 ; eval, echo.
+;
+; Two ways in.  With a terminal, the platform's line editor reads the line
+; and hands it to %repl-eval-line; %py-eval-line is that seam's Python
+; answer, and with the painter, the marks and the completer of python/line
+; it is registered as the lang "python" (x/repl/lang), so the editor's
+; history, keys and colour are Python's for free and a session can switch
+; between this prompt and x-lang's.  Otherwise %python-repl replaces the
+; loop and reads for itself, through the editor when there is one to drive
+; and the byte reader when there is not.  On a platform older than
+; x/repl/lang only the second way exists.
 ;
 ; WHAT ECHOES.  CPython echoes the repr of an EXPRESSION statement's value and
 ; nothing else -- an assignment is silent even though our emitted set! has a
@@ -33,6 +43,7 @@
 
 (import python/util)
 (import python/base)
+(import python/line)
 (import x/sys/posix)
 ; Catalog fetches, once at load.
 (def %py-repl-cvt (prim-ref (lit convert) (lit to)))
@@ -156,21 +167,31 @@
     (let ((n (Str8 length line)))
       (if (= n 0) #f (Str8 =? (Str8 sub (- n 1) 1 line) ":")))))
 
+; The whole entry, given its first line and a way to read the next: `more`
+; answers a string, 'eof to close the block with what there is, or 'cancel to
+; abandon the entry, which is then this function's answer too.  The byte
+; loop's `more` prints its own "... " and reads stdin; the editor's reads an
+; edited line under %repl-prompt-more.
 (def %py-read-entry
-  (fn (_ first-line)
-    (def more
+  (fn (_ first-line more)
+    (def go
       (fn (self acc)
-        (let ((line (%py-read "... ")))
+        (let ((line (more)))
           (match
-            ((eq? line (lit eof)) (%py-reverse acc))
             ; ctrl-c mid-block abandons the whole entry.
             ((eq? line (lit cancel)) (lit cancel))
+            ((eq? line (lit eof)) (%py-reverse acc))
             ((= (Str8 length line) 0) (%py-reverse acc))
             (#t (self (pair line acc)))))))
     (if (%py-opens-block? first-line)
-      (let ((lines (more (list first-line))))
-        (if (eq? lines (lit cancel)) (lit cancel) (Str8 join "\n" lines)))
+      (let ((lines (go (list first-line))))
+        (if (eq? lines (lit cancel)) lines (Str8 join "\n" lines)))
       first-line)))
+
+; The loop's own way to the next line: the editor when there is a terminal,
+; the byte reader otherwise (python/line.x), the prompt drawn either way.
+(def %py-more-from-loop
+  (fn (_) (%py-read "... ")))
 
 ; --- the loop ----------------------------------------------------------------
 (def %python-repl ())
@@ -205,8 +226,79 @@
                   (%seq
                     (display (if (str? %py-err) %py-err (Io write-to-str %py-err)))
                     (newline))))
-              (let ((entry (%py-read-entry line)))
+              (let ((entry (%py-read-entry line %py-more-from-loop)))
                 (unless (eq? entry (lit cancel)) (%py-repl-eval entry))))
             (%python-repl-loop)))))))
 
-(provide python/repl %python-repl %python-banner)
+; --- the editor's way in -----------------------------------------------------
+;
+; %repl-eval-line's Python answer: the editor has read one line and asks what
+; it means.  A block reads its remaining lines the same way, under the "... "
+; prompt; ctrl-d there closes the block with what there is and ctrl-c
+; abandons the entry, the two answers they give on the first line.  Errors
+; print as the byte loop prints them, so a session reads the same either way
+; in.  quit() and exit() are the two spellings of ctrl-d.
+(def %py-more-from-editor
+  (fn (_) (Line read %repl-prompt-more)))
+
+(def %py-eval-line
+  (fn (_ line)
+    (match
+      ((= (Str8 length line) 0) ())
+      ((if (Str8 =? line "quit()") #t (Str8 =? line "exit()")) (Sys exit 0))
+      (#t
+        (let ((entry (%py-read-entry line %py-more-from-editor)))
+          (unless (eq? entry (lit cancel))
+            (guard (%py-err
+                (%seq
+                  (display "Error: ")
+                  (%seq
+                    (display (if (str? %py-err) %py-err (Io write-to-str %py-err)))
+                    (newline))))
+              (%py-repl-eval entry))))))))
+
+; Whether the platform has x/repl/lang -- the registry and the seams behind
+; it arrived together, after v0.14.0.  Older platforms get the byte loop.
+(def %py-lang?
+  (fn (_) (guard (_ #f) (do Lang #t))))
+
+; Python's own spelling of the switch: lang("x").  The name arrives as a
+; Python str, code points, and Lang wants bytes.
+(def py-lang
+  (fn (_ name)
+    (Lang use! (if (%py-str-is name) (%ps->x (%py-str-cps name)) name))
+    ()))
+
+; Register "python" and make it the session's lang.  Registration is the
+; whole of what the editor needs; the seams it sets are read on the next
+; line the editor reads, and nothing reads them in a batch.
+(def %py-repl-install!
+  (fn (_)
+    (when (%py-lang?)
+      (Lang register! "python"
+        (list (pair (lit %repl-prompt) ">>> ")
+              (pair (lit %repl-prompt-more) "... ")
+              (pair (lit %repl-print) %python-repl-print)
+              (pair (lit %repl-paint) %py-paint)
+              (pair (lit %repl-marks) %py-marks)
+              (pair (lit %repl-complete) %py-complete)
+              (pair (lit %repl-eval-line) %py-eval-line)))
+      (Lang use! "python"))))
+
+; Which loop the session gets is a fact of the process -- whether there is a
+; terminal -- and a state image is written by a child with a pipe for stdin,
+; so a choice made in the writer would be the wrong one for a session at a
+; tty and would sit in the image.  The choice is therefore a function, made
+; at boot and again by the recache hook once an image has loaded, and not
+; made at all while the image is being written: the writer's child leaves
+; the platform loop in place, the loaded session decides for itself.  The
+; terminal is on fd 3 while the boot stream occupies fd 0, which is why both
+; are asked; the editor's own install asks the same two.
+(def %py-repl-choose!
+  (fn (_)
+    (unless (guard (_ #f) %image-writing)
+      (unless (if (%py-lang?) (if (Sys isatty 0) #t (Sys isatty 3)) #f)
+        (set! repl %python-repl)))))
+(set! %image-recache-hooks (pair (fn (_) (%py-repl-choose!)) %image-recache-hooks))
+
+(provide python/repl %python-repl %python-banner %py-eval-line %py-repl-install! %py-repl-choose! %py-lang?)

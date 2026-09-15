@@ -27,8 +27,17 @@
 (import python/repl)
 (import python/line)
 
-; The launcher runs (%banner) then (repl).  Both are platform globals, and both
-; are REPLACED: the platform loop reads sexps through the ambient reader, and
-; no prompt string changes what a reader is.  python/repl.x reads Python.
+; The launcher runs (%banner) then (repl).  The banner is replaced.  The loop
+; is kept where there is a terminal: the platform's line editor reads the
+; line, and python/repl.x registers what the line means, how it is coloured
+; and what Tab offers as the lang "python" (x/repl/lang), so the session
+; has editing and history, and can switch to x-lang's prompt and back.
+; Without a terminal the platform loop would read sexps through the ambient
+; reader -- no prompt string changes what a reader is -- so python/repl.x's
+; own loop replaces it.  On a platform older than x/repl/lang that loop is
+; the only loop, and reads through the editor itself when there is one.
+; Which of the two is a fact of the process, so the choice is remade after
+; a state image loads; see %py-repl-choose! in python/repl.x.
 (set! %banner %python-banner)
-(set! repl %python-repl)
+(%py-repl-install!)
+(%py-repl-choose!)
