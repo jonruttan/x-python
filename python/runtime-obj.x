@@ -411,6 +411,9 @@
           (Err raise (lit type) "unhashable type: 'set'" ())))
       ; a function, generator or class hashes by identity, as in Python
       ((%py-fn-is v) (%py-id v))
+      ; a bound method hashes by its function and its receiver, so the two
+      ; records `a.f` makes on two reads hash alike, as in Python
+      ((%py-bound-is v) (+ (%py-id (%py-bound-fn v)) (%py-hash (%py-bound-self v))))
       ((%py-gen-is v) (%py-id v))
       ((%py-class-is v) (%py-id v))
       ((%py-view-is v)
@@ -434,6 +437,7 @@
       ((%py-complex-is v) (display (%py-crepr v)))
       ((%py-str-is v) (display (%py-str-repr v)))
       ((%py-fn-is v) (display (%py-fn-repr v)))
+      ((%py-bound-is v) (display (%py-bound-repr v)))
       ((eq? v #t) (display "True"))
       ((eq? v #f) (display "False"))
       ((null? v) (display "None"))
@@ -827,7 +831,7 @@
                   (if (eq? k (lit static))
                     f
                     (if (eq? k (lit classmethod))
-                      (%py-bind-method f (%py-obj-class obj))
+                      (%py-bound-new f (%py-obj-class obj))
                       (f obj)))))
               ; A USER DESCRIPTOR answers through its own __get__, which takes
               ; the instance and the class -- the same protocol property is a
@@ -852,7 +856,7 @@
                         ; __getattr__ is Python code and takes a str, not the
                         ; platform string the attribute tables are keyed by.
                         (ga obj (%py-str-of-x name)))))))
-              (#t (%py-bind-method m obj)))))))))
+              (#t (%py-bound-new m obj)))))))))
 
 ; obj(...) is __call__, through the PY-OBJ type's call handler.
 (set! %py-obj-call

@@ -817,12 +817,14 @@
 ; map(tuple, ...) and sorted(key=SomeClass) work like any other callable.
 (def %py-apply-any
   (fn (_ f args)
-    (if (%py-class-is f)
-      (%py-instantiate f args)
-      (if (%py-obj-is f)
+    (match
+      ((%py-class-is f) (%py-instantiate f args))
+      ((%py-obj-is f)
         (let ((m (%py-dunder f "__call__")))
-          (if (null? m) (Err raise (lit type) "object is not callable" ()) (apply m args)))
-        (apply f args)))))
+          (if (null? m) (Err raise (lit type) "object is not callable" ()) (apply m args))))
+      ; a bound method: the receiver goes first, then the arguments
+      ((%py-bound-is f) (apply (%py-bound-fn f) (pair (%py-bound-self f) args)))
+      (#t (apply f args)))))
 
 ; map(f, a, b, ...) walks the sources in step and stops with the shortest
 (def %py-pull-all
