@@ -158,6 +158,39 @@ source.
 eight runtime `cc` compilations for the numeric analysers, bought so that
 `2 ** 200` is right. See [Why xenon](#why-xenon).
 
+## The prompt
+
+With a terminal, the prompt is x-lang's line editor reading Python: arrow
+keys and the readline chords, history that outlives the session, Tab over the
+keywords and builtins, and colour applied as you type — keywords, literals,
+comments, decorators, and brackets by nesting depth with the pair beside the
+cursor marked. A line ending in `:` opens a block that continues under `...`
+until a blank line, as CPython's own prompt does.
+
+The bundle registers all of that as the lang `"python"` with x-lang's
+`x/repl/lang`, which is what lets one session hold both prompts:
+
+```
+>>> def sq(n):
+...     return n * n
+...
+>>> lang("x")
+> (py-sq 12)
+144
+> (lang python)
+>>> sq(12)
+144
+```
+
+Python's names live in the shared base under a `py-` prefix, so a value or a
+function made at one prompt is there at the other. `lang("x")` is Python's
+spelling of the switch and `(lang python)` is x-lang's; both are calls to the
+same registry.
+
+Without a terminal — a pipe — there is no editor, and the bundle's own loop
+reads Python from stdin, block by block, as before. On a platform older than
+`x/repl/lang` that loop is the only one.
+
 ## Development
 
 ```bash
