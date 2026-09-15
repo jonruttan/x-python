@@ -623,24 +623,16 @@
         (def dflts (first (rest sig)))
         (def rest-name (first (rest (rest sig))))
         (def rest-sym (if (null? rest-name) () (%py-name->sym rest-name)))
+        (def kwonly (List ref 4 sig))
         (def nreq (- (%py-length names) (%py-length dflts)))
         (def body
-          (if (null? dflts)
-            (if (null? rest-sym) (first b)
-              (list (lit let) (list (list rest-sym (list (lit %py-tuple-of-list) rest-sym))) (first b)))
-            (if (null? rest-sym)
-              (list (lit %seq)
-                (list (lit %py-arity!) "<lambda>" (lit %py-more) nreq (%py-length dflts))
-                (list (lit let) (%py-opt-lets dflts 0 ()) (first b)))
-              (list (lit let) (%py-opt-lets dflts 0 rest-sym) (first b)))))
-        (def params
-          (if (null? dflts)
-            (if (null? rest-sym) syms (%py-dotted-params syms rest-sym))
-            (%py-dotted-params (%py-take nreq syms) (lit %py-more))))
+          ((%py-fn-prelude "<lambda>" names dflts rest-sym () kwonly nreq) (first b)))
         (def sig-form
-          (list (lit %py-sig!) (list (lit fn) (pair (lit _) params) body)
-            "<lambda>" (pair (lit list) names) nreq (not (null? rest-sym))))
-        (pair (if (null? dflts) sig-form (list (lit let) (%py-dflt-lets dflts 0) sig-form))
+          (list (lit %py-sig!) (list (lit fn) (pair (lit _) (lit %py-more)) body)
+            "<lambda>" (pair (lit list) names) nreq (not (null? rest-sym)) ()
+            (pair (lit list) (%py-kwo-names kwonly ()))))
+        (def all-dflts (%py-append dflts (%py-kwo-dflts kwonly ())))
+        (pair (if (null? all-dflts) sig-form (list (lit let) (%py-dflt-lets all-dflts 0) sig-form))
           (rest b))))))
 
 (def %py-test
@@ -772,6 +764,16 @@
           ((%py-kw-part? (first ps)) (self (rest ps)))
           ((%py-kwspread-part? (first ps)) (self (rest ps)))
           (#t (pair (first ps) (self (rest ps)))))))
+    (def order-ok!
+      (fn (self ps seen-dstar)
+        (match
+          ((null? ps) ())
+          ((%py-kwspread-part? (first ps)) (self (rest ps) #t))
+          ((if seen-dstar (%py-spread-part? (first ps)) #f)
+            (Err raise (lit syntax)
+              "iterable argument unpacking follows keyword argument unpacking" ()))
+          (#t (self (rest ps) seen-dstar)))))
+    (order-ok! parts #f)
     (def kw-forms (kws parts))
     (def kw-spreads (spreads parts))
     ; the keyword list, with every spread dict merged onto the written ones
@@ -2103,15 +2105,21 @@
 ; (names defaults rest-name): names are strings in declaration order, required
 ; first; defaults is ((sym . EXPR) ...) for the optional tail; rest-name is the
 ; *name string or nil.
-; (names defaults rest-name kw-name): names are strings in declaration order,
-; required first; defaults is ((sym . EXPR) ...) for the optional tail;
-; rest-name is the *name string or nil; kw-name is the **name or nil.
+; (names defaults rest-name kw-name kwonly): names are strings in declaration
+; order, required first; defaults is ((sym . EXPR) ...) for the optional tail;
+; rest-name is the *name string or nil; kw-name is the **name or nil; kwonly is
+; ((name . EXPR-or-nil) ...) for the parameters after a bare `*` or a `*rest`,
+; which a call can only pass by keyword.
+;
+; An annotation (`x: int`, `-> dict` on the def) is parsed and dropped; it has
+; no effect on a call in Python either.
 (def %py-params-of
   (fn (_ toks)
     (def go
-      (fn (self parts names dflts rest-name kw-name)
+      (fn (self parts names dflts rest-name kw-name kwonly kw?)
         (if (null? parts)
-          (list (%py-reverse names) (%py-reverse dflts) rest-name kw-name)
+          (list (%py-reverse names) (%py-reverse dflts) rest-name kw-name
+            (%py-reverse kwonly))
           (let ((p (first parts)))
             (let ((t (first p)))
               (match
@@ -2119,25 +2127,45 @@
                   (let ((n (if (null? (rest p)) () (first (rest p)))))
                     (if (not (eq? (%py-tag n) (lit tok-name)))
                       (Err raise (lit syntax) "expected a name after **" t)
-                      (self (rest parts) names dflts rest-name (%py-val n)))))
+                      (self (rest parts) names dflts rest-name (%py-val n) kwonly kw?))))
                 ((%py-op-is? t "*")
-                  (let ((n (if (null? (rest p)) () (first (rest p)))))
-                    (if (not (eq? (%py-tag n) (lit tok-name)))
-                      (Err raise (lit syntax) "expected a name after *" t)
-                      (self (rest parts) names dflts (%py-val n) kw-name))))
+                  (if (null? (rest p))
+                    (self (rest parts) names dflts rest-name kw-name kwonly #t)
+                    (let ((n (first (rest p))))
+                      (if (not (eq? (%py-tag n) (lit tok-name)))
+                        (Err raise (lit syntax) "expected a name after *" t)
+                        (self (rest parts) names dflts (%py-val n) kw-name kwonly #t)))))
                 ((not (eq? (%py-tag t) (lit tok-name)))
                   (Err raise (lit syntax) "expected a parameter name" t))
-                ((null? (rest p))
-                  (if (null? dflts)
-                    (self (rest parts) (pair (%py-val t) names) dflts rest-name kw-name)
-                    (Err raise (lit syntax) "non-default argument follows default argument" t)))
-                ((not (%py-op-is? (first (rest p)) "="))
-                  (Err raise (lit syntax) "expected , or = after a parameter name" t))
+                (kw?
+                  (self (rest parts) names dflts rest-name kw-name
+                    (pair (pair (%py-val t) (%py-param-default (rest p) t)) kwonly) kw?))
                 (#t
-                  (self (rest parts) (pair (%py-val t) names)
-                    (pair (pair (%py-name->sym (%py-val t)) (%py-expr-of (rest (rest p)))) dflts)
-                    rest-name kw-name))))))))
-    (go (%py-comma-split toks () ()) () () () ())))
+                  (let ((d (%py-param-default (rest p) t)))
+                    (if (null? d)
+                      (if (null? dflts)
+                        (self (rest parts) (pair (%py-val t) names) dflts rest-name kw-name kwonly kw?)
+                        (Err raise (lit syntax) "non-default argument follows default argument" t))
+                      (self (rest parts) (pair (%py-val t) names)
+                        (pair (pair (%py-name->sym (%py-val t)) (first d)) dflts)
+                        rest-name kw-name kwonly kw?))))))))))
+    (go (%py-comma-split toks () ()) () () () () () #f)))
+
+; The default after a parameter name as a one-element list, or nil when there
+; is none -- a list, because a default of None is the form () and would
+; otherwise read as no default.  An annotation sits between the name and any
+; `=` and holds no `=` of its own at this level, so it ends at the first one.
+(def %py-param-default
+  (fn (_ toks t)
+    (match
+      ((null? toks) ())
+      ((%py-op-is? (first toks) "=") (list (%py-expr-of (rest toks))))
+      ((%py-op-is? (first toks) ":") (%py-param-default (%py-skip-to-eq (rest toks)) t))
+      (#t (Err raise (lit syntax) "expected , or = after a parameter name" t)))))
+(def %py-skip-to-eq
+  (fn (self toks)
+    (if (null? toks) ()
+      (if (%py-op-is? (first toks) "=") toks (self (rest toks))))))
 
 ; A DEFAULT IS EVALUATED ONCE, AT def TIME, into a let around the fn --
 ; Python's rule, and the one the mutable-default idiom depends on.  The fn
@@ -2159,14 +2187,115 @@
     (if (null? dflts) ()
       (pair (list (%py-dflt-sym i) (rest (first dflts)))
         (self (rest dflts) (+ i 1))))))
+
+; The kw-only entries that carry a default, as (sym . EXPR) rows like dflts;
+; they take the %py-dN symbols after the positional defaults.
+(def %py-kwo-dflts
+  (fn (self kwonly acc)
+    (if (null? kwonly) (%py-reverse acc)
+      (self (rest kwonly)
+        (if (null? (rest (first kwonly))) acc
+          (pair (pair (%py-name->sym (first (first kwonly))) (first (rest (first kwonly)))) acc))))))
+(def %py-kwo-names
+  (fn (self kwonly acc)
+    (if (null? kwonly) (%py-reverse acc)
+      (self (rest kwonly) (pair (first (first kwonly)) acc)))))
+; the kw-only names a call must supply: the entries without a default
+(def %py-kwo-required
+  (fn (self kwonly acc)
+    (if (null? kwonly) (%py-reverse acc)
+      (self (rest kwonly)
+        (if (null? (rest (first kwonly))) (pair (first (first kwonly)) acc) acc)))))
+
+; `-> EXPR` between a def's parameter list and its colon is dropped.  The
+; annotation is an expression, so the first `:` at this level ends it.
+(def %py-skip-annotation
+  (fn (self toks)
+    (if (if (null? toks) #f (%py-op-is? (first toks) "->"))
+      (%py-skip-to-colon (rest toks))
+      toks)))
+(def %py-skip-to-colon
+  (fn (self toks)
+    (if (null? toks) ()
+      (if (%py-op-is? (first toks) ":") toks (self (rest toks))))))
+
+; The prelude a def or a lambda binds its parameters with, as a function of
+; the innermost form.  The arguments are the %py-more list.  Keyword-only
+; names and **kwargs are read from the box at its end first; the box is then
+; dropped and the positional names bind from what is left.  A missing required
+; name and an extra positional argument are TypeErrors raised here, because x
+; binds a missing fixed parameter to nil and ignores an extra argument.
+(def %py-fn-prelude
+  (fn (_ fname names dflts rest-sym kw-sym kwonly nreq)
+    (def kwo-req (%py-kwo-required kwonly ()))
+    (def kwo-lets (%py-kwo-lets kwonly (%py-length dflts) ()))
+    (def req-lets (%py-req-lets names 0 nreq ()))
+    (def opt-lets (%py-opt-lets dflts nreq 0 rest-sym))
+    (def checks
+      (fn (_ inner)
+        (list (lit %seq)
+          (list (lit %py-need!) fname (lit %py-more) (pair (lit list) (%py-take nreq names)))
+          (if (null? rest-sym)
+            (list (lit %seq)
+              (list (lit %py-arity!) fname (lit %py-more) nreq (%py-length dflts))
+              inner)
+            inner))))
+    (def positional
+      (fn (_ inner) (list (lit let) (%py-append req-lets opt-lets) inner)))
+    (def unboxed
+      (fn (_ inner)
+        (if (if (null? kw-sym) (null? kwonly) #f)
+          inner
+          (list (lit let)
+            (list (list (lit %py-more) (list (lit %py-args-strip-kw) (lit %py-more))))
+            inner))))
+    (def with-kw
+      (fn (_ inner)
+        (if (null? kw-sym)
+          inner
+          (list (lit let)
+            (list (list kw-sym
+                    (list (lit %py-kwargs-minus) (list (lit %py-kwargs-of) (lit %py-more))
+                      (pair (lit list) (%py-kwo-names kwonly ())))))
+            inner))))
+    (def with-kwo
+      (fn (_ inner)
+        (if (null? kwonly)
+          inner
+          (list (lit %seq)
+            (list (lit %py-kw-req!) fname (lit %py-more) (pair (lit list) kwo-req))
+            (list (lit let) kwo-lets inner)))))
+    (fn (_ inner) (checks (with-kwo (with-kw (unboxed (positional inner))))))))
+
+; (p0 (List ref 0 %py-more)) ... for the required names
+(def %py-req-lets
+  (fn (self names i n acc)
+    (if (>= i n) (%py-reverse acc)
+      (self (rest names) (+ i 1) n
+        (pair (list (%py-name->sym (first names)) (list (lit List) (lit ref) i (lit %py-more))) acc)))))
+; (b (%py-kwonly %py-more "b" DEFAULT)) for each kw-only name; a required one
+; has been checked already, so its default is never read.
+(def %py-kwo-lets
+  (fn (self kwonly i acc)
+    (if (null? kwonly) (%py-reverse acc)
+      (let ((e (first kwonly)))
+        (if (null? (rest e))
+          (self (rest kwonly) i
+            (pair (list (%py-name->sym (first e)) (list (lit %py-kwonly) (lit %py-more) (first e) ())) acc))
+          (self (rest kwonly) (+ i 1)
+            (pair (list (%py-name->sym (first e))
+                    (list (lit %py-kwonly) (lit %py-more) (first e) (%py-dflt-sym i)))
+              acc)))))))
+; i is the argument's position in the tail; j is the default's index among
+; the defaults, which names its %py-dN symbol.
 (def %py-opt-lets
-  (fn (self dflts i rest-sym)
+  (fn (self dflts i j rest-sym)
     (if (null? dflts)
       (if (null? rest-sym) ()
         (list (list rest-sym
                 (list (lit %py-tuple-of-list) (list (lit %py-drop) (lit %py-more) i)))))
-      (pair (list (first (first dflts)) (list (lit %py-opt) (lit %py-more) i (%py-dflt-sym i)))
-        (self (rest dflts) (+ i 1) rest-sym)))))
+      (pair (list (first (first dflts)) (list (lit %py-opt) (lit %py-more) i (%py-dflt-sym j)))
+        (self (rest dflts) (+ i 1) (+ j 1) rest-sym)))))
 (def %py-strs->syms
   (fn (self names)
     (if (null? names) () (pair (%py-name->sym (first names)) (self (rest names))))))
@@ -2567,11 +2696,14 @@
             (def rest-sym (if (null? rest-name) () (%py-name->sym rest-name)))
             (def kw-name (List ref 3 sig))
             (def kw-sym (if (null? kw-name) () (%py-name->sym kw-name)))
+            (def kwonly (List ref 4 sig))
+            (def kwo-syms (%py-strs->syms (%py-kwo-names kwonly ())))
             (def nreq (- (%py-length names) (%py-length dflts)))
             (def all-syms
               (let ((withrest (if (null? rest-sym) syms (%py-append syms (list rest-sym)))))
-                (if (null? kw-sym) withrest (%py-append withrest (list kw-sym)))))
-            (def after (rest (rest toks)))
+                (%py-append (if (null? kw-sym) withrest (%py-append withrest (list kw-sym)))
+                  kwo-syms)))
+            (def after (%py-skip-annotation (rest (rest toks))))
             (let ((outer-self (first %py-current-self)))
               (%set-first! %py-current-self (if (null? syms) () (first syms)))
               (let ((b (%py-block after)))
@@ -2586,54 +2718,12 @@
                                 (%py-append (%py-global-names (%py-block-contents after) ()) all-syms))))
                   (def body0
                     (if (null? locals) (first b) (list (lit let) (%py-lets locals ()) (first b))))
-                  ; the rest arrives as an x list; Python hands the function a
-                  ; TUPLE.  With defaults the prelude is the %py-opt let.
-                  ; **kwargs IS BOUND FROM THE BOX at the end of the tail, and
-                  ; the tail is then read WITHOUT it, so the optional binders
-                  ; and *rest see only real positional arguments.  A plain call
-                  ; carries no box, and %py-kwargs-of answers an empty dict --
-                  ; which is exactly what Python gives such a call.
-                  (def body-kw
-                    (fn (_ inner)
-                      (if (null? kw-sym)
-                        inner
-                        (list (lit let)
-                          (list (list kw-sym (list (lit %py-kwargs-of) (lit %py-more))))
-                          (list (lit let)
-                            (list (list (lit %py-more)
-                                    (list (lit %py-args-strip-kw) (lit %py-more))))
-                            inner)))))
-                  (def body
-                    (body-kw
-                      (if (null? dflts)
-                        (if (null? rest-sym)
-                          body0
-                          ; with **kwargs the fn is variadic for the box, so
-                          ; *rest is bound from the tail rather than being the
-                          ; dotted parameter itself
-                          (if (null? kw-sym)
-                            (list (lit %seq)
-                              (list (lit set!) rest-sym (list (lit %py-tuple-of-list) rest-sym))
-                              body0)
-                            (list (lit let)
-                              (list (list rest-sym
-                                      (list (lit %py-tuple-of-list) (lit %py-more))))
-                              body0)))
-                        ; without a *rest, more optionals than declared is a
-                        ; TypeError -- the dotted tail would swallow them
-                        (if (null? rest-sym)
-                          (list (lit %seq)
-                            (list (lit %py-arity!) (%py-val name) (lit %py-more)
-                              nreq (%py-length dflts))
-                            (list (lit let) (%py-opt-lets dflts 0 ()) body0))
-                          (list (lit let) (%py-opt-lets dflts 0 rest-sym) body0)))))
-                  (def params
-                    (if (not (null? kw-sym))
-                      ; the box arrives in the tail, so the fn must have one
-                      (%py-dotted-params (%py-take nreq syms) (lit %py-more))
-                      (if (null? dflts)
-                        (if (null? rest-sym) syms (%py-dotted-params syms rest-sym))
-                        (%py-dotted-params (%py-take nreq syms) (lit %py-more)))))
+                  ; Every argument arrives in the %py-more tail and the prelude
+                  ; binds the parameters from it, so a call with too few or too
+                  ; many is refused here rather than bound to nil by x.
+                  (def prelude
+                    (%py-fn-prelude (%py-val name) names dflts rest-sym kw-sym kwonly nreq))
+                  (def params (lit %py-more))
                   ; The body runs inside call/cc so `return` has somewhere to
                   ; jump to, and ends in () so a function that falls off the
                   ; end answers None.  %seq TAKES TWO FORMS -- a third arm is
@@ -2642,32 +2732,39 @@
                   ; binds the parameters and answers a generator whose body
                   ; closure -- taking the generator as %py-gen, the object
                   ; its yields talk to -- runs on the first next().
+                  ; A generator binds its parameters when it is called, not
+                  ; when it is first advanced, so the prelude wraps the
+                  ; %py-gen-new form rather than sitting inside it.
                   (def fn-form
                     (if (%py-has-yield? (%py-block-contents after) #f)
                       (list (lit fn) (pair (lit _) params)
-                        (list (lit %py-gen-new)
-                          (list (lit fn) (list (lit _) (lit %py-gen))
-                            (list (lit %py-escape)
-                              (list (lit fn) (list (lit _) (lit %py-return))
-                                (list (lit %seq) (%py-check-escapes body) ()))))
-                          (%py-val name)))
+                        (prelude
+                          (list (lit %py-gen-new)
+                            (list (lit fn) (list (lit _) (lit %py-gen))
+                              (list (lit %py-escape)
+                                (list (lit fn) (list (lit _) (lit %py-return))
+                                  (list (lit %seq) (%py-check-escapes body0) ()))))
+                            (%py-val name))))
                       (list (lit fn) (pair (lit _) params)
-                        (list (lit %py-escape)
-                          (list (lit fn) (list (lit _) (lit %py-return))
-                            (list (lit %seq) (%py-check-escapes body) ()))))))
+                        (prelude
+                          (list (lit %py-escape)
+                            (list (lit fn) (list (lit _) (lit %py-return))
+                              (list (lit %seq) (%py-check-escapes body0) ())))))))
                   ; %py-sig! records the parameter names for keyword calls and
                   ; answers the closure, so this is still the def's value form
                   ; -- a class body reads it as the method.
                   (def sig-form
                     (list (lit %py-sig!) fn-form (%py-val name)
                       (pair (lit list) names) nreq (not (null? rest-sym))
-                      (if (null? kw-name) () kw-name)))
+                      (if (null? kw-name) () kw-name)
+                      (pair (lit list) (%py-kwo-names kwonly ()))))
                   (%set-first! %py-current-self outer-self)
                   (pair
                     (list (lit def) (%py-name->sym (%py-val name))
-                      (if (null? dflts)
-                        sig-form
-                        (list (lit let) (%py-dflt-lets dflts 0) sig-form)))
+                      (let ((all-dflts (%py-append dflts (%py-kwo-dflts kwonly ()))))
+                        (if (null? all-dflts)
+                          sig-form
+                          (list (lit let) (%py-dflt-lets all-dflts 0) sig-form))))
                     (rest b)))))))))))
 
 ; Is there a `yield` in this body?  Groups and blocks are searched, except

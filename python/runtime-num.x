@@ -332,12 +332,14 @@
 ; defined above the first of them, not with the rest of the keyword
 ; machinery further down.
 (def %py-sigs (pair () ()))
+; The record is (name names nreq has-rest kwname kwonly); the last two are
+; optional so the builtins that register by hand pass only what they have.
 (def %py-sig!
-  ; The kw name is OPTIONAL so that every existing caller -- the builtins that
-  ; register signatures by hand -- keeps working unchanged.
   (fn (_ f name names nreq has-rest . kw)
     (%set-first! %py-sigs
-      (pair (pair f (list name names nreq has-rest (if (null? kw) () (first kw))))
+      (pair (pair f (list name names nreq has-rest
+                      (if (null? kw) () (first kw))
+                      (if (if (null? kw) #t (null? (rest kw))) () (first (rest kw)))))
         (first %py-sigs)))
     f))
 
@@ -373,6 +375,66 @@
   (fn (_ more i dflt)
     (if (>= i (%py-length more)) dflt
       (let ((v (List ref i more))) (if (same? v %py-dflt) dflt v)))))
+
+; f() missing N required positional argument(s): 'a' and 'b' -- raised when
+; the tail is shorter than the required names, naming the ones not given.
+(def %py-need!
+  (fn (_ fname more names)
+    (let ((given (%py-length (%py-args-strip-kw more))))
+      (if (>= given (%py-length names))
+        ()
+        (%py-missing! fname "positional" (%py-drop-n names given))))))
+; f() missing N required keyword-only argument(s): 'b' and 'c'
+(def %py-kw-req!
+  (fn (_ fname more names)
+    (let ((absent (%py-absent-keys names (%py-kwargs-of more) ())))
+      (if (null? absent) () (%py-missing! fname "keyword-only" absent)))))
+(def %py-missing!
+  (fn (_ fname kind names)
+    (let ((n (%py-length names)))
+      (Err raise (lit type)
+        (Str8 append fname
+          (Str8 append "() missing "
+            (Str8 append (%py-str n)
+              (Str8 append (if (= n 1) " required " " required ")
+                (Str8 append kind
+                  (Str8 append (if (= n 1) " argument: " " arguments: ")
+                    (%py-quoted-names names)))))))
+        ()))))
+; 'a', 'b' and 'c' -- the last joined with "and", as CPython writes them
+(def %py-quoted-names
+  (fn (self names)
+    (let ((q (Str8 append "'" (Str8 append (first names) "'"))))
+      (match
+        ((null? (rest names)) q)
+        ((null? (rest (rest names))) (Str8 append q (Str8 append " and " (self (rest names)))))
+        (#t (Str8 append q (Str8 append ", " (self (rest names)))))))))
+(def %py-drop-n
+  (fn (self l k) (if (= k 0) l (if (null? l) () (self (rest l) (- k 1))))))
+(def %py-absent-keys
+  (fn (self names d acc)
+    (if (null? names) (%py-reverse acc)
+      (self (rest names) d
+        (if (null? (%py-dfind (%py-str-of-x (first names)) (%py-dict-entries d))) (pair (first names) acc) acc)))))
+; A keyword-only parameter's value, from the box, or its default when the
+; call did not name it.
+(def %py-kwonly
+  (fn (_ more name dflt)
+    (let ((row (%py-dfind (%py-str-of-x name) (%py-dict-entries (%py-kwargs-of more)))))
+      (if (null? row) dflt (rest row)))))
+; The **kwargs dict without the keyword-only names, which were bound by name.
+(def %py-kwargs-minus
+  (fn (_ d names)
+    (%py-dict-new (%py-rows-minus (%py-dict-entries d) names ()))))
+(def %py-rows-minus
+  (fn (self rows names acc)
+    (if (null? rows) (%py-reverse acc)
+      (self (rest rows) names
+        (if (%py-name-in? (first (first rows)) names) acc (pair (first rows) acc))))))
+(def %py-name-in?
+  (fn (self k names)
+    (if (null? names) #f
+      (if (%pb-eq? (%py-str-cps k) (%ps-of-x (first names))) #t (self k (rest names))))))
 (def %py-floordiv
   (fn (_ a b)
     (match
@@ -636,6 +698,14 @@
 
 (def %py-round
   (fn (_ . a)
+    (if (null? a)
+      (Err raise (lit type) "round() missing required argument 'number' (pos 1)" ())
+      ())
+    (if (> (%py-length a) 2)
+      (Err raise (lit type)
+        (Str8 append "round() takes at most 2 arguments ("
+          (Str8 append (%py-str (%py-length a)) " given)")) ())
+      ())
     (def v (%py-boolnorm (first a)))
     (def nd (if (null? (rest a)) () (first (rest a))))
     (if (not (%py-float-is v))

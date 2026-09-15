@@ -433,6 +433,7 @@
       ((%py-float-is v) (display (%py-frepr v)))
       ((%py-complex-is v) (display (%py-crepr v)))
       ((%py-str-is v) (display (%py-str-repr v)))
+      ((%py-fn-is v) (display (%py-fn-repr v)))
       ((eq? v #t) (display "True"))
       ((eq? v #f) (display "False"))
       ((null? v) (display "None"))

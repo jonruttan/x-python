@@ -603,13 +603,24 @@
       (let ((n (%py-length els)))
         (match
           ((Str8 =? name "append")
-            (fn (_ v) (%py-list-set! obj (%py-append-elem (%py-list-elems obj) v))))
+            (fn (_ . a)
+              (if (not (= (%py-length a) 1))
+                (Err raise (lit type)
+                  (Str8 append "list.append() takes exactly one argument ("
+                    (Str8 append (%py-str (%py-length a)) " given)")) ())
+                (%py-list-set! obj (%py-append-elem (%py-list-elems obj) (first a))))))
           ((Str8 =? name "extend")
             (fn (_ it) (%py-list-set! obj (%py-list-cat (%py-list-elems obj) (%py-iter-elems it)))))
           ((Str8 =? name "insert")
             (fn (_ i v) (%py-list-set! obj (%py-els-insert-at (%py-list-elems obj) (%py-list-clamp n i 0) v))))
+          ; The keyword door hands sort exactly two slots (key, reverse); a
+          ; call that arrives with any other count gave positional arguments,
+          ; which sort does not take.
           ((Str8 =? name "sort")
             (fn (_ . a)
+              (if (if (null? a) #f (not (= (%py-length a) 2)))
+                (Err raise (lit type) "sort() takes no positional arguments" ())
+                ())
               (let ((key (%py-opt a 0 ())))
                 (let ((rev (%py-opt a 1 #f)))
                   (let ((l (%py-msort-by (%py-list-elems obj) (if (null? key) %py-ident key))))
