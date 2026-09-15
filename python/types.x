@@ -47,6 +47,7 @@
 
 (provide python/types
   %py-text %py-str-new %py-str-is %py-str-cps %py-str-of-x
+  %py-bound %py-bound-new %py-bound-is %py-bound-fn %py-bound-self
   %py-bytes %py-bytes-new %py-bytes-of-str %py-bytes-is %py-bytes-str
   %py-bytes-list %py-bytes-only?
   %py-barr %py-barr-new %py-barr-of-str %py-barr-is %py-barr-set!
@@ -574,6 +575,29 @@
       (pair (lit write)
         (fn (_ self) (%py-str-display (first self))))
       (pair (lit length) (fn (_ self) (List length (first self)))))))
+
+; --- PY-BOUND ----------------------------------------------------------------
+; A bound method as a program sees it: the function and the receiver, called
+; as one.  The payload is (fn . self).  A direct call reaches the handler
+; below; `apply` does not dispatch through a type, so a place that applies a
+; program's callable goes through %py-apply-any, which reads the pair.
+;
+; The runtime's own binding of a dunder stays a closure (%py-bind-method):
+; that path is taken on every operator and its result is never a value the
+; program holds.
+(def %py-bound ())
+(def %py-bound-new (fn (_ m obj) (%make-instance %py-bound (pair m obj))))
+(def %py-bound-is (fn (_ v) (%type? v %py-bound)))
+(def %py-bound-fn (fn (_ v) (first (first v))))
+(def %py-bound-self (fn (_ v) (rest (first v))))
+(set! %py-bound
+  (%make-type
+    "PY-BOUND"
+    (list
+      (pair (lit call)
+        (fn (_ self . args) (apply (first (first self)) (pair (rest (first self)) args))))
+      (pair (lit write)
+        (fn (_ self) (display (%py-bound-repr self)))))))
 
 (def %py-bytes ())
 (def %py-bytes-new (fn (_ l) (%make-instance %py-bytes l)))

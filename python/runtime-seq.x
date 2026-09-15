@@ -66,6 +66,15 @@
         (if (%py-bytes-is b) (%pb-eq? (%py-bytes-list a) (%py-bytes-list b)) #f))
       ((%py-bytes-is b) #f)
       ((if (%py-fn-is a) #t (%py-fn-is b)) (same? a b))
+      ; two bound methods are equal when they bind the same function to equal
+      ; receivers, which is Python's rule
+      ((%py-bound-is a)
+        (if (%py-bound-is b)
+          (if (same? (%py-bound-fn a) (%py-bound-fn b))
+            (%py-truthy (%py-eq (%py-bound-self a) (%py-bound-self b)))
+            #f)
+          #f))
+      ((%py-bound-is b) #f)
       ((%py-dict? a)
         (if (%py-dict? b) (%py-dict-eq? (%py-dict-entries a) (%py-dict-entries b)) #f))
       ((%py-dict? b) #f)

@@ -206,6 +206,13 @@
                       (Str8 append (%py-class-name f) "() takes no keyword arguments") ())
                     ; the class's own call door, not apply: apply wants a closure
                     (%py-instantiate f (%py-kw-args (%py-sig-shift sig) pos kws)))))))))
+      ; a bound method: its function's signature, with self already supplied
+      ((%py-bound-is f)
+        (let ((sig (%py-sig-of (%py-bound-fn f))))
+          (if (null? sig)
+            (Err raise (lit type) "this callable takes no keyword arguments" ())
+            (apply (%py-bound-fn f)
+              (pair (%py-bound-self f) (%py-kw-args (%py-sig-shift sig) pos kws))))))
       (#t
         (let ((sig (%py-sig-of f)))
           (if (null? sig)
@@ -344,13 +351,13 @@
                 (if (eq? k (lit static))
                   f
                   (if (eq? k (lit classmethod))
-                    (%py-bind-method f (%py-obj-class (%py-super-self sup)))
+                    (%py-bound-new f (%py-obj-class (%py-super-self sup)))
                     (f (%py-super-self sup))))))
             ((%py-desc-get? m)
               ((%py-dunder m "__get__")
                 (%py-super-self sup) (%py-obj-class (%py-super-self sup))))
             ((not (%py-fn-is m)) m)
-            (#t (%py-bind-method m (%py-super-self sup)))))))))
+            (#t (%py-bound-new m (%py-super-self sup)))))))))
 
 ; --- Builtins that render ----------------------------------------------------
 ;
@@ -384,6 +391,7 @@
     (match
       ((%py-str-is v) (%ps->x (%py-str-cps v)))
       ((%py-fn-is v) (%py-fn-repr v))
+      ((%py-bound-is v) (%py-bound-repr v))
       ; ALREADY TEXT, AND ALREADY THE PLATFORM'S.  A conversion has run ahead
       ; of this in the format path -- %py-fmtfield's !r and !s hand their
       ; answer on as a platform string -- and the last branch would `write` it,
@@ -447,6 +455,36 @@
           (Str8 append " at "
             (Str8 append (%py-str (%py-hex (%py-id v))) ">")))))))
 
+; <bound method CLASS.NAME of REPR>: the class is the receiver's, or the
+; receiver itself when a classmethod was bound to a class.
+(def %py-bound-repr
+  (fn (_ v)
+    (let ((m (%py-bound-fn v)) (self (%py-bound-self v)))
+      (let ((sig (%py-sig-of m)))
+        (Str8 append "<bound method "
+          (Str8 append
+            (if (%py-class-is self) (%py-class-name self)
+              (if (%py-obj-is self) (%py-class-name (%py-obj-class self)) "?"))
+            (Str8 append "."
+              (Str8 append (if (null? sig) "?" (first sig))
+                (Str8 append " of " (Str8 append (%py-repr-of self) ">"))))))))))
+
+; The attributes a bound method answers for: its name, its receiver, and the
+; function underneath.
+(def %py-bound-attr
+  (fn (_ v name)
+    (match
+      ((Str8 =? name "__self__") (%py-bound-self v))
+      ((Str8 =? name "__func__") (%py-bound-fn v))
+      ((Str8 =? name "__name__")
+        (let ((sig (%py-sig-of (%py-bound-fn v))))
+          (if (null? sig)
+            (Err raise (lit attribute) "'method' object has no attribute '__name__'" ())
+            (%py-str-of-x (first sig)))))
+      (#t
+        (Err raise (lit attribute)
+          (Str8 append (Str8 append "'method' object has no attribute '" name) "'") ())))))
+
 (def %py-repr-of
   (fn (_ v)
     (match
@@ -455,6 +493,7 @@
       ((eq? v #f) "False")
       ((%py-str-is v) (%py-str-repr v))
       ((%py-fn-is v) (%py-fn-repr v))
+      ((%py-bound-is v) (%py-bound-repr v))
       ((%py-float-is v) (%py-frepr v))
       ((%py-complex-is v) (%py-crepr v))
       ((%py-obj-is v) (%py-text->x (%py-obj-repr v)))
@@ -534,6 +573,7 @@
   (fn (_ v)
     (match
       ((%py-fn-is v) #t)
+      ((%py-bound-is v) #t)
       ((%py-class-is v) #t)
       ((%py-obj-is v) (not (null? (%py-dunder v "__call__"))))
       (#t #f))))

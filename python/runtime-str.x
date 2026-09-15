@@ -52,6 +52,7 @@
       ((%py-bytes-is obj) (%py-bytes-attr obj name))
       ((%py-set-is obj) (%py-set-attr obj name))
       ((%py-gen-is obj) (%py-gen-attr obj name))
+      ((%py-bound-is obj) (%py-bound-attr obj name))
       ((%py-super-is obj) (%py-super-attr obj name))
       ((%py-class-is obj) (%py-class-attr obj name))
       ((%py-complex-is obj)
@@ -152,7 +153,7 @@
                 (if (eq? k (lit static))
                   f
                   (if (eq? k (lit classmethod))
-                    (%py-bind-method f cls)
+                    (%py-bound-new f cls)
                     m)))
               m)))))
 

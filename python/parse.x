@@ -784,7 +784,9 @@
           (pair (lit list) kw-spreads))))
     (if (if (null? kw-forms) (null? kw-spreads) #f)
       (let ((a (%py-args-form parts)))
-        (if (eq? (first a) (lit list)) (pair f (rest a)) (list (lit apply) f a)))
+        ; a spread call applies a program's callable, which may be a class, a
+        ; callable object or a bound method as well as a function
+        (if (eq? (first a) (lit list)) (pair f (rest a)) (list (lit %py-apply-any) f a)))
       (let ((pos (%py-args-form (poss parts))))
         (if (if (pair? f) (eq? (first f) (lit %py-getattr)) #f)
           (list (lit %py-kwcall-attr) (first (rest f)) (first (rest (rest f)))
