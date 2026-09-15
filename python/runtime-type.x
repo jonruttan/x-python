@@ -349,8 +349,165 @@
 ; --- the class objects -------------------------------------------------------
 ; int before bool, because bool derives from it.
 
+; --- int.to_bytes and int.from_bytes ------------------------------------------
+; Both take byteorder as "big" or "little" and a keyword-only signed flag;
+; since 3.11 to_bytes defaults to one big-endian byte and from_bytes to big.
+; The arithmetic is the tower's, so a value past the machine word is an
+; ordinary int here as it is in Python.
+
+; The two byteorder spellings as code points, built once.  The argument is
+; compared as code points rather than converted to a platform string: the
+; conversion costs more objects than the whole conversion below does.
+(def %py-int-cps-little (%ps-of-x "little"))
+(def %py-int-cps-big (%ps-of-x "big"))
+
+; The platform string "big" or "little", or the ValueError Python raises.
+(def %py-int-byteorder
+  (fn (_ v)
+    (match
+      ((str? v) v)
+      ((not (%py-str-is v)) (Err raise (lit type) "byteorder must be str" ()))
+      ((%pb-eq? (%py-str-cps v) %py-int-cps-little) "little")
+      ((%pb-eq? (%py-str-cps v) %py-int-cps-big) "big")
+      (#t (Err raise (lit value) "byteorder must be either 'little' or 'big'" ())))))
+
+(def %py-int-overflow
+  (fn (_ msg) (Err raise (lit overflow) msg ())))
+
+; Six bytes per division.  A division of a value past the machine word runs
+; in the tower's bigint code and allocates tens of thousands of objects, so
+; the value is divided by 2^48 at a time and the remainder, a fixnum, gives
+; up its bytes with fixnum arithmetic; nothing here raises 2 to a power.
+(def %py-int-pow256
+  (list 1 256 65536 16777216 4294967296 1099511627776 281474976710656))
+
+; w bytes of the fixnum r, in front of acc: big-endian, since each byte
+; peeled is less significant than the one placed before it.
+(def %py-int-fix-bytes
+  (fn (self r w acc)
+    (if (eq? w 0) acc
+      (self (Num quotient r 256) (- w 1) (pair (% r 256) acc)))))
+
+; (leftover . bytes): the nb low bytes of a non-negative v, big-endian, and
+; what remains of v above them -- zero when they hold it.
+(def %py-int-split
+  (fn (_ v nb)
+    (def go
+      (fn (self v k acc)
+        (if (eq? k 0)
+          (pair v acc)
+          (let ((w (if (< k 6) k 6)))
+            (let ((d (List ref w %py-int-pow256)))
+              (self (Num quotient v d) (- k w) (%py-int-fix-bytes (% v d) w acc)))))))
+    (go v nb ())))
+
+(def %py-int-invert
+  (fn (self bs acc)
+    (if (null? bs) (List reverse acc) (self (rest bs) (pair (- 255 (first bs)) acc)))))
+
+; The nb bytes of n in the given order, or the OverflowError Python raises
+; when they cannot hold it.  A negative value goes through its one's
+; complement: -n - 1 is non-negative, and inverting every byte of it gives
+; the two's complement bytes without a power of two to compute.
+(def %py-int-encode
+  (fn (_ n nb order signed)
+    (match
+      ((if signed #f (< n 0))
+        (%py-int-overflow "can't convert negative int to unsigned"))
+      ((if (= nb 0) (not (= n 0)) #f)
+        (%py-int-overflow "int too big to convert"))
+      (#t
+        (let ((neg (< n 0)))
+          (let ((sp (%py-int-split (if neg (- (- 0 n) 1) n) nb)))
+            ; a signed value also keeps its top bit clear
+            (if (if (not (= (first sp) 0)) #t
+                  (if (if signed (> nb 0) #f) (>= (first (rest sp)) 128) #f))
+              (%py-int-overflow "int too big to convert")
+              (let ((big (if neg (%py-int-invert (rest sp) ()) (rest sp))))
+                (if (Str8 =? order "little") (List reverse big) big)))))))))
+
+(def %py-int-length
+  (fn (_ v)
+    (let ((n (%py-boolnorm v)))
+      (if (not (eq? (%py-num-kind n) (lit int)))
+        (Err raise (lit type) "'length' must be an integer" ())
+        (if (< n 0)
+          (Err raise (lit value) "length argument must be non-negative" ())
+          n)))))
+
+(def %py-int-to-bytes
+  (%py-sig!
+    (fn (_ self . more)
+      (let ((n (%py-boolnorm self))
+            (nb (%py-int-length (%py-opt more 0 1)))
+            (order (%py-int-byteorder (%py-opt more 1 "big")))
+            (signed (%py-truthy (%py-kwonly more "signed" #f))))
+        (%py-bytes-new (%py-int-encode n nb order signed))))
+    "to_bytes" (list "self" "length" "byteorder") 1 #f () (list "signed")))
+
+; A bytes-like value's bytes, or any iterable of ints in range, as
+; from_bytes takes them.
+(def %py-int-bytes-arg
+  (fn (_ v)
+    (if (%py-bytes-is v)
+      (%py-bytes-list v)
+      (%py-bytes-of-codes (%py-iter-elems v) ()))))
+
+(def %py-int-mod6 (fn (self k) (if (< k 6) k (self (- k 6)))))
+
+; k big-endian bytes into the fixnum v.
+(def %py-int-fix-join
+  (fn (self bs k v)
+    (if (eq? k 0) v (self (rest bs) (- k 1) (+ (* v 256) (first bs))))))
+
+; The value of big-endian bytes: a first chunk of the odd few, then one
+; multiply and one add per six.
+(def %py-int-join
+  (fn (_ bs)
+    (def go
+      (fn (self bs acc)
+        (if (null? bs) acc
+          (self (%py-drop bs 6) (+ (* acc 281474976710656) (%py-int-fix-join bs 6 0))))))
+    (let ((w (%py-int-mod6 (List length bs))))
+      (if (eq? w 0) (go bs 0) (go (%py-drop bs w) (%py-int-fix-join bs w 0))))))
+
+(def %py-int-from-bytes
+  (%py-sig!
+    (fn (_ cls bs . more)
+      (let ((codes (%py-int-bytes-arg bs))
+            (order (%py-int-byteorder (%py-opt more 0 "big")))
+            (signed (%py-truthy (%py-kwonly more "signed" #f))))
+        (let ((big (if (Str8 =? order "little") (List reverse codes) codes)))
+          (if (if signed (if (null? big) #f (>= (first big) 128)) #f)
+            ; a set top bit is a negative: the inverted bytes are its one's
+            ; complement, and the value is one less than that, negated
+            (- (- 0 (%py-int-join (%py-int-invert big ()))) 1)
+            (%py-int-join big)))))
+    "from_bytes" (list "cls" "bytes" "byteorder") 2 #f () (list "signed")))
+
 (def %py-cls-int
-  (%py-class-new "int" %py-cls-object (list (pair "%ctor" %py-int-ctor)) "int"))
+  (%py-class-new "int" %py-cls-object
+    (list (pair "%ctor" %py-int-ctor)
+          (pair "to_bytes" %py-int-to-bytes)
+          ; a classmethod, as in Python: int.from_bytes and (5).from_bytes
+          ; both bind the class
+          (pair "from_bytes" (%py-desc-new (lit classmethod) %py-int-from-bytes)))
+    "int"))
+
+; An int's attribute is a method of the int class bound to the value -- a
+; classmethod binds the class -- or Python's AttributeError.
+(def %py-int-attr
+  (fn (_ v name)
+    (let ((m (%py-method-find %py-cls-int name)))
+      (match
+        ((null? m)
+          (Err raise (lit attribute)
+            (Str8 append "'int' object has no attribute '" (Str8 append name "'")) ()))
+        ((%py-desc-is m)
+          (if (eq? (%py-desc-kind m) (lit classmethod))
+            (%py-bound-new (%py-desc-fn m) %py-cls-int)
+            (%py-desc-fn m)))
+        (#t (%py-bound-new m v))))))
 (def %py-cls-bool
   (%py-class-new "bool" %py-cls-int
     (list (pair "%final" #t) (pair "%ctor" %py-bool-ctor)) "bool"))

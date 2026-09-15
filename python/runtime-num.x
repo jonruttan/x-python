@@ -439,12 +439,32 @@
     (if (null? names) (%py-reverse acc)
       (self (rest names) d
         (if (null? (%py-dfind (%py-str-of-x (first names)) (%py-dict-entries d))) (pair (first names) acc) acc)))))
+; A kw-only name's code points, converted once.  The name is read on every
+; call of its function, and converting it to a str each time cost more
+; objects than the lookup it served.
+(def %py-kw-cps-memo (pair () ()))
+(def %py-kw-cps
+  (fn (_ name)
+    (let ((e (%py-alist-find name (first %py-kw-cps-memo))))
+      (if (null? e)
+        (let ((cps (%ps-of-x name)))
+          (%seq (%set-first! %py-kw-cps-memo (pair (pair name cps) (first %py-kw-cps-memo)))
+            cps))
+        (rest e)))))
 ; A keyword-only parameter's value, from the box, or its default when the
-; call did not name it.
+; call did not name it.  The box's keys are strs; a call that sent no
+; keywords is answered before the name is looked at.
 (def %py-kwonly
   (fn (_ more name dflt)
-    (let ((row (%py-dfind (%py-str-of-x name) (%py-dict-entries (%py-kwargs-of more)))))
-      (if (null? row) dflt (rest row)))))
+    (def go
+      (fn (self es cps)
+        (if (null? es) dflt
+          (if (if (%py-str-is (first (first es)))
+                (%pb-eq? (%py-str-cps (first (first es))) cps) #f)
+            (rest (first es))
+            (self (rest es) cps)))))
+    (let ((es (%py-dict-entries (%py-kwargs-of more))))
+      (if (null? es) dflt (go es (%py-kw-cps name))))))
 ; The **kwargs dict without the keyword-only names, which were bound by name.
 (def %py-kwargs-minus
   (fn (_ d names)
