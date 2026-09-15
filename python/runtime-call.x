@@ -44,25 +44,37 @@
   (fn (_ sig)
     (list (first sig) (rest (List ref 1 sig)) (- (List ref 2 sig) 1)
       (List ref 3 sig)
-      (if (> (%py-length sig) 4) (List ref 4 sig) ()))))
+      (if (> (%py-length sig) 4) (List ref 4 sig) ())
+      (if (> (%py-length sig) 5) (List ref 5 sig) ()))))
 (def %py-drop
   (fn (self l k) (if (= k 0) l (if (null? l) () (self (rest l) (- k 1))))))
 (def %py-list-cat
   (fn (self a b) (if (null? a) b (pair (first a) (self (rest a) b)))))
-; f() takes from NREQ to N positional arguments but M were given
+; f() takes from NREQ to N positional arguments but M were given -- or, with
+; no defaults, f() takes N positional arguments but M were given.  `more` is
+; the tail past the required names, without the keyword box.
 (def %py-arity!
-  (fn (_ fname more nreq ndflts)
-    (if (> (%py-length more) ndflts)
-      (Err raise (lit type)
-        (Str8 append
-          (Str8 append
-            (Str8 append (Str8 append fname "() takes from ") (%py-str nreq))
-            (Str8 append " to " (%py-str (+ nreq ndflts))))
-          (Str8 append
-            (Str8 append " positional arguments but " (%py-str (+ nreq (%py-length more))))
-            " were given"))
-        ())
-      ())))
+  (fn (_ fname more0 nreq ndflts)
+    (let ((more (%py-args-strip-kw (%py-drop more0 nreq))))
+      (if (> (%py-length more) ndflts)
+        (Err raise (lit type)
+          (Str8 append fname
+            (Str8 append (%py-takes-text nreq ndflts)
+              (%py-given-text (+ nreq (%py-length more)))))
+          ())
+        ()))))
+(def %py-takes-text
+  (fn (_ nreq ndflts)
+    (if (= ndflts 0)
+      (Str8 append "() takes "
+        (Str8 append (%py-str nreq)
+          (if (= nreq 1) " positional argument but " " positional arguments but ")))
+      (Str8 append "() takes from "
+        (Str8 append (%py-str nreq)
+          (Str8 append " to "
+            (Str8 append (%py-str (+ nreq ndflts)) " positional arguments but ")))))))
+(def %py-given-text
+  (fn (_ n) (Str8 append (%py-str n) (if (= n 1) " was given" " were given"))))
 (def %py-kw-error
   (fn (_ fname msg)
     (Err raise (lit type) (Str8 append (Str8 append fname "() ") msg) ())))
@@ -74,6 +86,9 @@
     (def has-rest (List ref 3 sig))
     ; the **name this function declares, if it declares one
     (def kwname (if (> (%py-length sig) 4) (List ref 4 sig) ()))
+    ; the keyword-only names: never filled by position, and read from the
+    ; box by the callee's prelude
+    (def kwonly (if (> (%py-length sig) 5) (List ref 5 sig) ()))
     (def n (%py-length names))
     (def npos (%py-length pos))
     (def known?
@@ -84,6 +99,7 @@
         (match
           ((null? ks) ())
           ((known? (first (first ks)) names) (self (rest ks)))
+          ((known? (first (first ks)) kwonly) (self (rest ks)))
           ; A FUNCTION THAT DECLARES **kwargs TAKES THE REST rather than
           ; refusing them, which is the whole point of declaring it.
           ((null? kwname)
@@ -121,14 +137,14 @@
         (if (>= i n) (%py-reverse acc) (self (+ i 1) (pair (slot i) acc)))))
     (check kws)
     (if (if (> npos n) (not has-rest) #f)
-      (%py-kw-error fname
-        (Str8 append
-          (Str8 append (Str8 append "takes " (%py-str n)) " positional arguments but ")
-          (Str8 append (%py-str npos) " were given")))
+      (Err raise (lit type)
+        (Str8 append fname
+          (Str8 append (%py-takes-text n 0) (%py-given-text npos)))
+        ())
       (let ((base (%py-list-cat (build 0 ()) (%py-drop pos n))))
-        (if (null? kwname)
+        (if (if (null? kwname) (null? kwonly) #f)
           base
-          ; the box goes LAST, where the binder reads it
+          ; the box goes last, where the prelude reads it
           (%py-list-cat base (list (%py-kwbox (%py-dict-new (spare kws ()))))))))))
 ; The keyword list a call sends, with every `**d` merged onto what was written
 ; by name.  A later spelling wins, which is what Python does when a name is
@@ -140,19 +156,34 @@
   (fn (self acc dicts)
     (if (null? dicts)
       acc
-      (self (%py-kw-put-rows acc (%py-dict-entries (first dicts))) (rest dicts)))))
+      (self (%py-kw-put-rows acc (%py-mapping-rows (first dicts))) (rest dicts)))))
+; The rows of a `**` argument: a dict's entries, or for any other object the
+; mapping protocol -- each key from keys(), its value by subscript.
+(def %py-mapping-rows
+  (fn (_ d)
+    (if (%py-dict? d)
+      (%py-dict-entries d)
+      (%py-rows-by-key d (%py-iter-elems ((%py-getattr d "keys"))) ()))))
+(def %py-rows-by-key
+  (fn (self d keys acc)
+    (if (null? keys) (%py-reverse acc)
+      (self d (rest keys) (pair (pair (first keys) (%py-index d (first keys))) acc)))))
+; A `**dict` key is a str and a keyword name is the platform's string, so the
+; key crosses over on the way in.  A name already given -- by an earlier `**`
+; or written out -- is a TypeError, as in Python.
 (def %py-kw-put-rows
   (fn (self acc rows)
     (if (null? rows)
       acc
-      ; A `**dict` KEY IS A str AND A KEYWORD NAME IS THE PLATFORM'S STRING:
-      ; the row comes out of a Python dict, the keyword table is keyed the way
-      ; every other name here is, so the key crosses over on the way in.
       (let ((k (first (first rows))))
         (if (not (%py-str-is k))
           (Err raise (lit type) "keywords must be strings" ())
-          (self (%py-attr-put acc (%ps->x (%py-str-cps k)) (rest (first rows)))
-                (rest rows)))))))
+          (let ((name (%ps->x (%py-str-cps k))))
+            (if (not (null? (%py-alist-find name acc)))
+              (Err raise (lit type)
+                (Str8 append "got multiple values for keyword argument '"
+                  (Str8 append name "'")) ())
+              (self (%py-attr-put acc name (rest (first rows))) (rest rows)))))))))
 
 (def %py-kwcall
   (fn (_ f pos kws)
@@ -204,7 +235,7 @@
             (Err raise (lit type)
               (Str8 append (Str8 append "list." name) "() takes no keyword arguments") ())
             (apply (%py-list-attr obj name)
-              (%py-none-holes (%py-kw-args (list (Str8 append "list." name) names 0 #f) pos kws))))))
+              (%py-none-holes (%py-kw-args (list name names 0 #f) pos kws))))))
       ((%py-str-is obj)
         (if (Str8 =? name "format")
           ; the template crosses over and the result crosses back -- the brace
@@ -352,6 +383,7 @@
   (fn (_ v)
     (match
       ((%py-str-is v) (%ps->x (%py-str-cps v)))
+      ((%py-fn-is v) (%py-fn-repr v))
       ; ALREADY TEXT, AND ALREADY THE PLATFORM'S.  A conversion has run ahead
       ; of this in the format path -- %py-fmtfield's !r and !s hand their
       ; answer on as a platform string -- and the last branch would `write` it,
@@ -405,6 +437,16 @@
               ((if (< c 32) #t (= c 127)) (Str8 append "\\x" (%py-hex2 c)))
               (#t (%pb->str (%ps-enc1 c))))))))))
 
+; <function NAME at 0xADDR>: the name is the signature's, the address is the
+; identity every function already has for hashing.
+(def %py-fn-repr
+  (fn (_ v)
+    (let ((sig (%py-sig-of v)))
+      (Str8 append "<function "
+        (Str8 append (if (null? sig) "?" (first sig))
+          (Str8 append " at "
+            (Str8 append (%py-str (%py-hex (%py-id v))) ">")))))))
+
 (def %py-repr-of
   (fn (_ v)
     (match
@@ -412,6 +454,7 @@
       ((eq? v #t) "True")
       ((eq? v #f) "False")
       ((%py-str-is v) (%py-str-repr v))
+      ((%py-fn-is v) (%py-fn-repr v))
       ((%py-float-is v) (%py-frepr v))
       ((%py-complex-is v) (%py-crepr v))
       ((%py-obj-is v) (%py-text->x (%py-obj-repr v)))
@@ -603,6 +646,9 @@
 (def %py-enumerate
   (%py-sig!
     (fn (_ . a)
+      (if (null? a)
+        (Err raise (lit type) "enumerate() missing required argument 'iterable'" ())
+        ())
       (let ((it (%py-opt a 0 ())) (st (%py-opt a 1 0)))
         (%py-gen-new
           (fn (_ g)
