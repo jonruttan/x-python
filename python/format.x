@@ -388,6 +388,17 @@
                 body width left (if left #f zero))))))
       (#t (bad)))))
 
+; The end of the run of ordinary characters starting at j: the next percent
+; sign, or the end of the template.  The walk below appends a run in one
+; piece, for the reason %py-fmt-run gives in python/runtime-str.x.
+; The byte comes through the primitives rather than %py-fmt-code: that is
+; an interpreted call, and this scan would pay one per character.
+(def %py-fmt-pct-run
+  (fn (self fmt n j)
+    (if (>= j n)
+      j
+      (if (= (%py-char-code (%str-ref fmt j)) 37) j (self fmt n (+ j 1))))))
+
 (def %py-format
   (fn (_ fmt arg)
     (def args (if (%py-tuple-is arg) (%py-tuple-elems arg) (list arg)))
@@ -492,7 +503,8 @@
           acc
           (let ((c (%py-fmt-code fmt i)))
             (if (not (= c 37))
-              (go (+ i 1) (Str8 append acc (Str8 sub i 1 fmt)))
+              (let ((e (%py-fmt-pct-run fmt n (+ i 1))))
+                (go e (Str8 append acc (Str8 sub i (- e i) fmt))))
               (if (>= (+ i 1) n)
                 (Err raise (lit value) "incomplete format" ())
                 (self-spec (+ i 1) acc)))))))
