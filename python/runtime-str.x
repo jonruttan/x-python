@@ -106,10 +106,30 @@
 ; question without needing one of the caller's.  It is also what a `try:
 ; bytes.count / except AttributeError` guard is asking, and five conformance
 ; programs open with exactly that.
+;
+; The receiver is checked before a %py-*-attr reads it, since each one reads its
+; receiver as a value of its own class.  The check is isinstance, as in Python: a
+; missing receiver or one of another type is a TypeError, and a subclass instance
+; is asked through the value it carries.
 (def %py-unbound
-  (fn (_ attr empty name)
+  (fn (_ cls attr empty name)
     (do (attr empty name)
-        (fn (_ recv . args) (apply (attr recv name) args)))))
+        (fn (_ . args)
+          (match
+            ((null? args)
+              (Err raise (lit type)
+                (Str8 append (Str8 append "unbound method " (%py-class-name cls))
+                  (Str8 append "." (Str8 append name "() needs an argument"))) ()))
+            ((%py-isinstance (first args) cls)
+              (apply (attr (%py-native-of (first args)) name) (rest args)))
+            (#t
+              (Err raise (lit type)
+                (Str8 append (Str8 append "descriptor '" name)
+                  (Str8 append (Str8 append "' for '" (%py-class-name cls))
+                    (Str8 append "' objects doesn't apply to a '"
+                      (Str8 append (%py-class-name (%py-type-of (first args)))
+                        "' object"))))
+                ())))))))
 
 (def %py-class-attr
   (fn (_ cls name)
@@ -169,12 +189,12 @@
 (def %py-class-unbound
   (fn (_ cls name)
     (match
-      ((eq? cls %py-cls-str)       (%py-unbound %py-str-attr "" name))
-      ((eq? cls %py-cls-bytes)     (%py-unbound %py-bytes-attr (%py-bytes-new ()) name))
-      ((eq? cls %py-cls-bytearray) (%py-unbound %py-barr-attr (%py-barr-new ()) name))
-      ((eq? cls %py-cls-list)      (%py-unbound %py-list-attr (%py-list-new ()) name))
-      ((eq? cls %py-cls-dict)      (%py-unbound %py-dict-attr (%py-dict-new ()) name))
-      ((eq? cls %py-cls-set)       (%py-unbound %py-set-attr (%py-set-new #f ()) name))
+      ((eq? cls %py-cls-str)       (%py-unbound cls %py-str-attr (%py-str-new ()) name))
+      ((eq? cls %py-cls-bytes)     (%py-unbound cls %py-bytes-attr (%py-bytes-new ()) name))
+      ((eq? cls %py-cls-bytearray) (%py-unbound cls %py-barr-attr (%py-barr-new ()) name))
+      ((eq? cls %py-cls-list)      (%py-unbound cls %py-list-attr (%py-list-new ()) name))
+      ((eq? cls %py-cls-dict)      (%py-unbound cls %py-dict-attr (%py-dict-new ()) name))
+      ((eq? cls %py-cls-set)       (%py-unbound cls %py-set-attr (%py-set-new #f ()) name))
       (#t
         (Err raise (lit attribute)
           (Str8 append (Str8 append "type object '" (%py-class-name cls))

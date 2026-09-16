@@ -139,3 +139,36 @@ AttributeError nosuch
 AttributeError list
 AttributeError bytearray
 ```
+
+### a missing receiver, or one of another type, is a TypeError
+
+```python
+(python-run "try:\n    list.append()\nexcept TypeError as e:\n    print(e)\ntry:\n    list.append(1, 2)\nexcept TypeError as e:\n    print(e)\ntry:\n    getattr(list, \"append\")(None, 2)\nexcept TypeError as e:\n    print(e)\ntry:\n    str.upper(1)\nexcept TypeError as e:\n    print(e)\ntry:\n    bytes.count(bytearray(b\"aa\"), b\"a\")\nexcept TypeError as e:\n    print(e)\ntry:\n    bytearray.append(b\"x\", 1)\nexcept TypeError as e:\n    print(e)\ntry:\n    dict.keys([])\nexcept TypeError as e:\n    print(e)\ntry:\n    set.add(frozenset(), 1)\nexcept TypeError as e:\n    print(e)\nl = []\nlist.append(l, 2)\nprint(l)")
+```
+---
+```output
+unbound method list.append() needs an argument
+descriptor 'append' for 'list' objects doesn't apply to a 'int' object
+descriptor 'append' for 'list' objects doesn't apply to a 'NoneType' object
+descriptor 'upper' for 'str' objects doesn't apply to a 'int' object
+descriptor 'count' for 'bytes' objects doesn't apply to a 'bytearray' object
+descriptor 'append' for 'bytearray' objects doesn't apply to a 'bytes' object
+descriptor 'keys' for 'dict' objects doesn't apply to a 'list' object
+descriptor 'add' for 'set' objects doesn't apply to a 'frozenset' object
+[2]
+```
+
+### a subclass instance is a receiver for its base class's methods
+
+```python
+(python-run "class L(list):\n    pass\nclass S(str):\n    pass\nclass D(dict):\n    pass\nclass T(set):\n    pass\nclass B(bytes):\n    pass\nclass BA(bytearray):\n    pass\nl = L()\nlist.append(l, 3)\nprint(l)\nprint(str.upper(S(\"ab\")))\nprint(list(dict.keys(D({\"a\": 1}))))\nt = T([1])\nset.add(t, 2)\nprint(set.copy(t))\nprint(bytes.count(B(b\"aa\"), b\"a\"))\nba = BA(b\"x\")\nbytearray.append(ba, 121)\nprint(bytearray.count(ba, b\"y\"))")
+```
+---
+```output
+[3]
+AB
+['a']
+{1, 2}
+2
+1
+```
