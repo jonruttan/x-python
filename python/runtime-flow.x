@@ -377,6 +377,7 @@
       ((Str8 =? name "math") (%py-math-module))
       ((Str8 =? name "collections") (%py-collections-module))
       ((Str8 =? name "array") (%py-array-module))
+      ((Str8 =? name "struct") (%py-struct-module))
       ((Str8 =? name "builtins") (%py-module-new "builtins" ()))
       (#t ()))))
 
