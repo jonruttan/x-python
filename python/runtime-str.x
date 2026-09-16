@@ -134,11 +134,9 @@
 
 (def %py-class-attr
   (fn (_ cls name)
-    ; THE THREE A CLASS ANSWERS ABOUT ITSELF COME FIRST, and they have to:
-    ; the dict and str branches below answer for their INSTANCES' surface, so
-    ; asking either for __name__ used to reach `str.nosuch` and report that a
-    ; 'str' object has no attribute __name__ -- when what was asked was the
-    ; name of the class itself, which `type(x).__name__` asks constantly.
+    ; The three a class answers about itself come first: the class walk ends at
+    ; a builtin's instance surface, which has no __name__, __bases__ or
+    ; __dict__ to give.
     (match
       ; __name__ IS A str, like every other text a program can get at.  It
       ; is the platform's string in the class record, and `type(x).__name__ ==
@@ -148,12 +146,6 @@
       ((Str8 =? name "__name__") (%py-str-of-x (%py-class-name cls)))
       ((Str8 =? name "__bases__") (%py-tuple-of-list (%py-class-bases cls)))
       ((Str8 =? name "__dict__") (%py-dict-new (%py-class-rows cls)))
-      ; dict.fromkeys is a CLASSMETHOD: it answers a new dict, so it hangs
-      ; off the class rather than an instance
-      ((eq? cls %py-cls-dict)
-        (if (Str8 =? name "fromkeys")
-          %py-dict-fromkeys
-          (%py-class-walk cls name)))
       (#t (%py-class-walk cls name)))))
 
 ; THE CLASS'S OWN METHODS ARE ASKED FIRST, and the builtin instance surface
@@ -206,6 +198,8 @@
                    (%py-unbound %py-cls-dict %py-dict-attr (%py-dict-new ()) name))
                  ((%py-subclass? cls %py-cls-set)
                    (%py-unbound %py-cls-set %py-set-attr (%py-set-new #f ()) name))
+                 ((%py-subclass? cls %py-cls-frozenset)
+                   (%py-unbound %py-cls-frozenset %py-set-attr (%py-set-new #t ()) name))
                  (#t ())))))
       (if (null? m)
         (Err raise (lit attribute)

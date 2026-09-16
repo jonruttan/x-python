@@ -788,21 +788,35 @@
                       (%py-str (%py-length kv)))
                     "; 2 is required"))))
           (self (rest vs) (pair (pair (first kv) (first (rest kv))) acc)))))))
+; A mapping argument as the dict constructors read it: a dict subclass instance
+; stands for the dict it carries, and anything else is itself.
+(def %py-dict-arg
+  (fn (_ v)
+    (let ((n (%py-native-of v))) (if (%py-dict-is n) n v))))
 (def %py-dict-merge!
-  (fn (_ d o)
-    (let ((rows (if (%py-dict? o) (%py-dict-copy (%py-dict-entries o)) (%py-pairs-of (%py-iter-elems o) ()))))
-      (let ((put (fn (self l) (if (null? l) () (%seq (%py-dset d (first (first l)) (rest (first l))) (self (rest l)))))))
-        (put rows)))))
+  (fn (_ d o0)
+    (let ((o (%py-dict-arg o0)))
+      (let ((rows (if (%py-dict? o) (%py-dict-copy (%py-dict-entries o)) (%py-pairs-of (%py-iter-elems o) ()))))
+        (let ((put (fn (self l) (if (null? l) () (%seq (%py-dset d (first (first l)) (rest (first l))) (self (rest l)))))))
+          (put rows))))))
 (def %py-ddel
   (fn (_ d k)
     (if (null? (%py-dfind k (%py-dict-entries d)))
       (error (%py-instantiate %py-exc-KeyError (list k)))
       (%py-dict-set! d (%py-dict-drop (%py-dict-entries d) k)))))
+; dict.fromkeys, a classmethod: dict answers a new dict, and a subclass is
+; called with no arguments and each key stored through its __setitem__, as in
+; Python.
 (def %py-dict-fromkeys
-  (fn (_ it . v)
+  (fn (_ cls it . v)
     (let ((val (if (null? v) () (first v))))
-      (let ((go (fn (self ks acc) (if (null? ks) (%py-reverse acc) (self (rest ks) (pair (pair (first ks) val) acc))))))
-        (%py-dict-new (go (%py-iter-elems it) ()))))))
+      (if (same? cls %py-cls-dict)
+        (let ((go (fn (self ks acc) (if (null? ks) (%py-reverse acc) (self (rest ks) (pair (pair (first ks) val) acc))))))
+          (%py-dict-new (go (%py-iter-elems it) ())))
+        (%py-fromkeys-put! (%py-instantiate cls ()) (%py-iter-elems it) val)))))
+(def %py-fromkeys-put!
+  (fn (self o ks val)
+    (if (null? ks) o (%seq (%py-setindex o (first ks) val) (self o (rest ks) val)))))
 
 (def %py-dict-attr
   (fn (_ d name)

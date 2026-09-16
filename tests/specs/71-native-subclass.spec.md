@@ -106,3 +106,44 @@ frozenset [1, 2]
 frozenset [1, 3]
 [4, 5]
 ```
+
+### dict.__init__ and set.__init__ fill an instance, through super() or read off the class
+
+```python
+(python-run "class D(dict):\n    def __init__(self, *args, **kwargs):\n        super().__init__(*args, **kwargs)\nprint(D(), D([('a', 1)]), D([('a', 1)], a=2, b=3), D(a=2, b=3))\nclass E(dict):\n    def __init__(self):\n        super().__init__([], a=1)\nprint(E())\nd = {}\ndict.__init__(d, [('x', 1)], y=2)\nprint(d)\nclass T(set):\n    def __init__(self, a, b):\n        super().__init__([a, b])\nprint(T(1, 2))\ns = {9}\nset.__init__(s, [1])\nprint(s)\ntry:\n    dict.__init__([], a=1)\nexcept TypeError as e:\n    print(e)\ntry:\n    set.__init__(frozenset(), [1])\nexcept TypeError as e:\n    print(e)")
+```
+---
+```output
+{} {'a': 1} {'a': 2, 'b': 3} {'a': 2, 'b': 3}
+{'a': 1}
+{'x': 1, 'y': 2}
+T({1, 2})
+{1}
+descriptor '__init__' requires a 'dict' object but received a 'list'
+descriptor '__init__' requires a 'set' object but received a 'frozenset'
+```
+
+### frozenset methods read off a class, and a frozenset has no mutating methods
+
+```python
+(python-run "class F(frozenset):\n    pass\nprint(frozenset.union(frozenset([1]), [2]), F.union(F([1]), [3]))\nprint(hasattr(frozenset, \"add\"), hasattr(frozenset(), \"add\"), hasattr(F([1]), \"discard\"), hasattr(frozenset, \"union\"))\ntry:\n    frozenset().add(1)\nexcept AttributeError as e:\n    print(e)\ntry:\n    frozenset.add\nexcept AttributeError as e:\n    print(e)\ntry:\n    frozenset.union({1}, [2])\nexcept TypeError as e:\n    print(e)")
+```
+---
+```output
+frozenset({1, 2}) frozenset({1, 3})
+False False False True
+'frozenset' object has no attribute 'add'
+type object 'frozenset' has no attribute 'add'
+descriptor 'union' for 'frozenset' objects doesn't apply to a 'set' object
+```
+
+### a list subclass built from a generator reads it once
+
+```python
+(python-run "class L(list):\n    pass\nprint(L(x for x in range(3)), L(iter([4, 5])))\ntry:\n    L(5)\nexcept TypeError:\n    print(\"TypeError\")")
+```
+---
+```output
+[0, 1, 2] [4, 5]
+TypeError
+```

@@ -400,12 +400,13 @@
   (fn (_ . a)
     (if (null? a)
       (%py-dict-new ())
-      (if (%py-dict-is (first a))
-        ; a COPY, with fresh entry pairs: dict(d) in Python is a new dict, and
-        ; sharing the pairs would make a store into one visible in the other
-        (%py-dict-new (%py-dict-copy (%py-dict-entries (first a))))
-        ; any other iterable is a sequence of (key, value) pairs
-        (%py-dict-new (%py-pairs-of (%py-iter-elems (first a)) ()))))))
+      (let ((m (%py-dict-arg (first a))))
+        (if (%py-dict-is m)
+          ; a COPY, with fresh entry pairs: dict(d) in Python is a new dict, and
+          ; sharing the pairs would make a store into one visible in the other
+          (%py-dict-new (%py-dict-copy (%py-dict-entries m)))
+          ; any other iterable is a sequence of (key, value) pairs
+          (%py-dict-new (%py-pairs-of (%py-iter-elems m) ())))))))
 ; dict(a=1) and d.update(a=1): the keywords ARE the entries
 ; dict(a=1) MAKES A str KEY.  A keyword name is the platform's string -- it
 ; came off the call syntax -- and a dict's keys are Python values, so it
@@ -704,13 +705,21 @@
       (pair "__rxor__"     (fn (_ self o) (%py-bitxor (%py-native-of o) (%py-native-of self))))
       (pair "__repr__"     %py-set-class-repr))))
 
-; set's in-place operators store the result in the carried set and answer the
-; instance, so `t |= s` keeps a subclass instance.  frozenset has none, and its
-; `|=` answers a new frozenset, as in Python.
+; The rows only set carries, since they change the carried set.  __init__
+; replaces its contents with an iterable's, as in Python, and the in-place
+; operators store their result into it and answer the instance, so `t |= s`
+; keeps a subclass instance.  frozenset has none: its `|=` answers a new
+; frozenset, as in Python.
 (def %py-set-update!
   (fn (_ self s) (%seq (%py-set-set! (%py-native-of self) (%py-set-elems s)) self)))
-(def %py-set-inplace-methods
+(def %py-set-mutating-methods
   (list
+    (pair "__init__"
+      (fn (_ self . args)
+        (let ((s (%py-native-of self)))
+          (if (if (%py-set-is s) (%py-set-frozen? s) #t)
+            (%py-init-receiver! "set" self)
+            (%seq (%py-set-set! s (%py-set-elems (apply %py-set-ctor args))) ())))))
     (pair "__ior__"  (fn (_ self o) (%py-set-update! self (%py-bitor (%py-native-of self) (%py-native-of o)))))
     (pair "__iand__" (fn (_ self o) (%py-set-update! self (%py-bitand (%py-native-of self) (%py-native-of o)))))
     (pair "__isub__" (fn (_ self o) (%py-set-update! self (%py-sub (%py-native-of self) (%py-native-of o)))))
@@ -718,12 +727,38 @@
 
 (def %py-cls-set
   (%py-class-new "set" %py-cls-object
-    (%py-list-cat (%py-set-methods %py-set-ctor) %py-set-inplace-methods) "set"))
+    (%py-list-cat (%py-set-methods %py-set-ctor) %py-set-mutating-methods) "set"))
 (def %py-cls-frozenset
   (%py-class-new "frozenset" %py-cls-object (%py-set-methods %py-frozenset-ctor) "frozenset"))
+; The TypeError an __init__ read off a builtin class raises for a receiver of
+; another type, in CPython's words.
+(def %py-init-receiver!
+  (fn (_ cname self)
+    (Err raise (lit type)
+      (Str8 append (Str8 append "descriptor '__init__' requires a '" cname)
+        (Str8 append "' object but received a '"
+          (Str8 append (%py-class-name (%py-type-of self)) "'")))
+      ())))
+
+; dict.__init__ merges a mapping or an iterable of pairs, then the keywords, into
+; the dict an instance carries, as in Python; what is there already stays.  It
+; carries a signature so a keyword call through super() reaches it.
+(def %py-dict-init
+  (%py-sig!
+    (fn (_ self . more)
+      (let ((d (%py-native-of self)) (pos (%py-args-strip-kw more)))
+        (if (not (%py-dict-is d))
+          (%py-init-receiver! "dict" self)
+          (%seq
+            (if (null? pos) () (%py-dict-merge! d (first pos)))
+            (%seq (%py-dict-merge! d (%py-kwargs-of more)) ())))))
+    "__init__" (list "self") 1 #t "kwargs" () #t))
+
 (def %py-dict-methods
   (list
     (pair "%ctor" %py-dict-ctor)
+    (pair "__init__"     %py-dict-init)
+    (pair "fromkeys"     (%py-desc-new (lit classmethod) %py-dict-fromkeys))
     (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
     (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
     (pair "__iter__"     (fn (_ self) (%py-native-of self)))
@@ -930,6 +965,17 @@
 (def %py-cls-bytes
   (%py-class-new "bytes" %py-cls-object %py-bytes-methods "bytes"))
 
+; A subclass prints under its own name, BA(b'xy'), as CPython's bytearray repr
+; does; bytearray itself prints as the value does.
+(def %py-bytearray-class-repr
+  (fn (_ self)
+    (let ((cls (%py-type-of self)))
+      (if (same? cls %py-cls-bytearray)
+        (%py-repr-of (%py-native-of self))
+        (Str8 append (%py-class-name cls)
+          (Str8 append "("
+            (Str8 append (%py-bytes-repr (%py-bytes-list (%py-native-of self))) ")")))))))
+
 (def %py-bytearray-methods
   (list
     (pair "%ctor" %py-bytearray-ctor)
@@ -942,8 +988,8 @@
     (pair "__gt__"       (fn (_ self o) (%py-gt (%py-native-of self) (%py-native-of o))))
     (pair "__le__"       (fn (_ self o) (%py-le (%py-native-of self) (%py-native-of o))))
     (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
-    (pair "__str__"      (fn (_ self) (%py-str (%py-native-of self))))
-    (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
+    (pair "__str__"      %py-bytearray-class-repr)
+    (pair "__repr__"     %py-bytearray-class-repr)
     (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))))
 
 (def %py-cls-bytearray
