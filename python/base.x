@@ -63,7 +63,8 @@
 (provide python/base python-version python-run python-tokenize python-lex python-parse python-parse-expr %python-repl-print
   %py-eval %py-exec %py-compile)
 
-(def python-version "0.0.1")
+; the one number sys.implementation.version is read from too
+(def python-version %py-implementation-version)
 
 ; (python-run SRC) -- run a Python program held in a string.
 ;

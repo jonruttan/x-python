@@ -697,6 +697,64 @@
 (def %py-cls-NoneType
   (%py-class-new "NoneType" %py-cls-object () "NoneType"))
 
+; types.SimpleNamespace: an object that is only its attributes.  A mapping
+; given first sets them, then the keywords do; it prints them in the order they
+; were set, as namespace(a=1, b=2) -- a subclass under its own name -- and two
+; are equal when they hold the same names with equal values, in any order.
+(def %py-cls-SimpleNamespace ())
+
+(def %py-ns-fill
+  (fn (self o rows)
+    (if (null? rows)
+      ()
+      (if (%py-str-is (first (first rows)))
+        (%seq
+          (%py-obj-set-attrs! o
+            (%py-attr-put (%py-obj-attrs o) (%py-text->x (first (first rows)))
+              (rest (first rows))))
+          (self o (rest rows)))
+        (Err raise (lit type) "keywords must be strings" ())))))
+
+(def %py-ns-init
+  (fn (_ o . more)
+    (let ((pos (%py-args-strip-kw more)))
+      (%seq
+        (if (null? pos) () (%py-ns-fill o (%py-dict-entries (%py-dict-ctor (first pos)))))
+        (%seq (%py-ns-fill o (%py-dict-entries (%py-kwargs-of more))) ())))))
+
+(def %py-ns-body
+  (fn (self rows lead acc)
+    (if (null? rows)
+      acc
+      (self (rest rows) ", "
+        (Str8 append acc
+          (Str8 append lead
+            (Str8 append (%py-text->x (first (first rows)))
+              (Str8 append "=" (%py-repr-of (rest (first rows)))))))))))
+
+(def %py-ns-repr
+  (fn (_ o)
+    (let ((cls (%py-obj-class o)))
+      (Str8 append (if (same? cls %py-cls-SimpleNamespace) "namespace" (%py-class-name cls))
+        (Str8 append "("
+          (Str8 append (%py-ns-body (%py-attr-entries (%py-obj-attrs o)) "" "") ")"))))))
+
+(def %py-ns-eq
+  (fn (_ o other)
+    (if (if (%py-obj-is other) (%py-subclass? (%py-obj-class other) %py-cls-SimpleNamespace) #f)
+      (%py-eq (%py-dict-new (%py-attr-entries (%py-obj-attrs o)))
+              (%py-dict-new (%py-attr-entries (%py-obj-attrs other))))
+      #f)))
+
+(set! %py-cls-SimpleNamespace
+  (%py-class-new "SimpleNamespace" %py-cls-object
+    (list
+      (pair "__init__" (%py-sig! %py-ns-init "__init__" (list "self") 1 #t "kwargs" () #t))
+      (pair "__repr__" %py-ns-repr)
+      (pair "__str__" %py-ns-repr)
+      (pair "__eq__" %py-ns-eq))
+    "types.SimpleNamespace"))
+
 ; bytes(...) -- from a list of ints, from a count (that many zero bytes), or
 ; from something already bytes.  The type object makes `bytes` a name and
 ; gives type(b'a') something to answer.
@@ -931,6 +989,15 @@
           (%py-tuple-new
             (%py-sl-pick (%py-tuple-elems obj)
               (%py-slice-idxs (%py-length (%py-tuple-elems obj)) start stop st) ())))
+        ; A builtin's subclass slices the value it carries and answers the
+        ; builtin's type -- sys.version_info[:2] is a plain tuple -- unless its
+        ; class writes a __getitem__ of its own.
+        ((if (%py-obj-is obj)
+           (if (null? (%py-obj-native obj))
+             #f
+             (not (%py-user-fn? (%py-method-find (%py-obj-class obj) "__getitem__"))))
+           #f)
+          (%py-slice (%py-obj-native obj) start stop step))
         ; a dict gets Python's own complaint: a slice is not a key
         (#t (Err raise (lit type) "unhashable type: 'slice'" ()))))))
 

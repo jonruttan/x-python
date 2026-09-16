@@ -135,13 +135,19 @@
             "__setattr__" (list "self" "name" "value") 3 #f () () #t)))
       (%py-nt-fields names 0 ()))))
 
+; The class itself.  A qualified name is what it prints as; sys.version_info
+; is one, named version_info and printed as sys.version_info(major=3, ...).
+(def %py-namedtuple-class
+  (fn (_ name qualname names)
+    (let ((cls (%py-class-new name %py-cls-tuple () qualname)))
+      (%seq
+        (%py-class-methods-set! cls (%py-nt-methods cls qualname names (%py-length names)))
+        cls))))
+
 (def %py-namedtuple
   (fn (_ nm fields)
-    (let ((name (%py-text->x nm)) (names (%py-nt-names fields)))
-      (let ((cls (%py-class-new name %py-cls-tuple () name)))
-        (%seq
-          (%py-class-methods-set! cls (%py-nt-methods cls name names (%py-length names)))
-          cls)))))
+    (let ((name (%py-text->x nm)))
+      (%py-namedtuple-class name name (%py-nt-names fields)))))
 
 ; --- OrderedDict -------------------------------------------------------------
 
