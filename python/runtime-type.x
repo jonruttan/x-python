@@ -641,10 +641,63 @@
 
 (def %py-cls-list
   (%py-class-new "list" %py-cls-object %py-list-methods "list"))
+
+; A subclass prints under its own name, T({1, 2}) or T() when empty; set and
+; frozenset themselves print as the value does.
+(def %py-set-class-repr
+  (fn (_ self)
+    (let ((s (%py-native-of self)) (cls (%py-type-of self)))
+      (match
+        ((if (same? cls %py-cls-set) #t (same? cls %py-cls-frozenset)) (%py-repr-of s))
+        ((null? (%py-set-elems s)) (Str8 append (%py-class-name cls) "()"))
+        (#t
+          (Str8 append (%py-class-name cls)
+            (Str8 append "("
+              (Str8 append (%py-repr-of (%py-set-new #f (%py-set-elems s))) ")"))))))))
+
+; The rows set and frozenset share, read through %py-native-of as the list and
+; dict rows are.  An operator answers a plain set or frozenset, as in Python.
+; There is no __str__, so print reaches __repr__, a subclass's own included.
+(def %py-set-methods
+  (fn (_ ctor)
+    (list
+      (pair "%ctor" ctor)
+      (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
+      (pair "__iter__"     (fn (_ self) (%py-native-of self)))
+      (pair "__contains__" (fn (_ self x) (%py-in x (%py-native-of self))))
+      (pair "__hash__"     (fn (_ self) (%py-hash (%py-native-of self))))
+      (pair "__eq__"       (fn (_ self o) (%py-eq (%py-native-of self) (%py-native-of o))))
+      (pair "__lt__"       (fn (_ self o) (%py-lt (%py-native-of self) (%py-native-of o))))
+      (pair "__gt__"       (fn (_ self o) (%py-gt (%py-native-of self) (%py-native-of o))))
+      (pair "__le__"       (fn (_ self o) (%py-le (%py-native-of self) (%py-native-of o))))
+      (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
+      (pair "__or__"       (fn (_ self o) (%py-bitor (%py-native-of self) (%py-native-of o))))
+      (pair "__ror__"      (fn (_ self o) (%py-bitor (%py-native-of o) (%py-native-of self))))
+      (pair "__and__"      (fn (_ self o) (%py-bitand (%py-native-of self) (%py-native-of o))))
+      (pair "__rand__"     (fn (_ self o) (%py-bitand (%py-native-of o) (%py-native-of self))))
+      (pair "__sub__"      (fn (_ self o) (%py-sub (%py-native-of self) (%py-native-of o))))
+      (pair "__rsub__"     (fn (_ self o) (%py-sub (%py-native-of o) (%py-native-of self))))
+      (pair "__xor__"      (fn (_ self o) (%py-bitxor (%py-native-of self) (%py-native-of o))))
+      (pair "__rxor__"     (fn (_ self o) (%py-bitxor (%py-native-of o) (%py-native-of self))))
+      (pair "__repr__"     %py-set-class-repr))))
+
+; set's in-place operators store the result in the carried set and answer the
+; instance, so `t |= s` keeps a subclass instance.  frozenset has none, and its
+; `|=` answers a new frozenset, as in Python.
+(def %py-set-update!
+  (fn (_ self s) (%seq (%py-set-set! (%py-native-of self) (%py-set-elems s)) self)))
+(def %py-set-inplace-methods
+  (list
+    (pair "__ior__"  (fn (_ self o) (%py-set-update! self (%py-bitor (%py-native-of self) (%py-native-of o)))))
+    (pair "__iand__" (fn (_ self o) (%py-set-update! self (%py-bitand (%py-native-of self) (%py-native-of o)))))
+    (pair "__isub__" (fn (_ self o) (%py-set-update! self (%py-sub (%py-native-of self) (%py-native-of o)))))
+    (pair "__ixor__" (fn (_ self o) (%py-set-update! self (%py-bitxor (%py-native-of self) (%py-native-of o)))))))
+
 (def %py-cls-set
-  (%py-class-new "set" %py-cls-object (list (pair "%ctor" %py-set-ctor)) "set"))
+  (%py-class-new "set" %py-cls-object
+    (%py-list-cat (%py-set-methods %py-set-ctor) %py-set-inplace-methods) "set"))
 (def %py-cls-frozenset
-  (%py-class-new "frozenset" %py-cls-object (list (pair "%ctor" %py-frozenset-ctor)) "frozenset"))
+  (%py-class-new "frozenset" %py-cls-object (%py-set-methods %py-frozenset-ctor) "frozenset"))
 (def %py-dict-methods
   (list
     (pair "%ctor" %py-dict-ctor)
@@ -777,6 +830,9 @@
           ; an array hands over its buffer, which is what it is
           ((%py-arr-is (%py-native-of v)) (%py-bytes-new (%py-arr-buffer (%py-native-of v))))
           ((%py-num? v) (%py-bytes-new (%py-bytes-zeros v ())))
+          ; a subclass instance converts as the value it carries
+          ((if (%py-obj-is v) (not (null? (%py-obj-native v))) #f)
+            (%py-bytes-ctor (%py-obj-native v)))
           (#t
             (Err raise (lit type)
               (Str8 append "cannot convert '"
