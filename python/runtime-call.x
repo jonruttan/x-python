@@ -650,11 +650,11 @@
       ; keyed by.  Built from the CROSSED name rather than from the argument,
       ; because the argument is a str from delattr() and a platform string from
       ; the parser -- only one of those is a value to hand to a Python method.
-      ; object carries a built-in __delattr__ as well, so the lookup always
-      ; finds one: only a hook written in Python is a hook, and the built-in
-      ; default is the drop below.
+      ; object carries a __delattr__ as well, so the lookup always finds one:
+      ; a class supplies a hook when what the walk finds is not object's
+      ; default, and the default is the drop below.
       (let ((h (%py-method-find (%py-obj-class o) "__delattr__")))
-        (if (%py-user-fn? h)
+        (if (if (null? h) #f (not (same? h %py-object-delattr)))
           (%seq ((%py-bind-method h o) (%py-str-of-x n)) ())
           (let ((d (%py-method-find (%py-obj-class o) n)))
             (if (%py-desc-delete? d)
