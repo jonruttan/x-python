@@ -535,7 +535,7 @@
                 (let ((cc (%py-ctor-class cls)))
                   (if (null? cc)
                     ()
-                    (%py-obj-native! o (%py-native-new cls cc args))))
+                    (%py-obj-native! o (%py-native-new cc args))))
                 (let ((init (%py-method-find cls "__init__")))
                   (if (null? init)
                     o
@@ -554,22 +554,21 @@
 ; The value a new instance of a builtin's subclass carries, built by the %ctor
 ; of cc, the class it inherits that constructor from.
 ;
-; When cc's own __init__ is the one that runs -- list, dict and set fill
-; themselves there -- the constructor builds the empty value and __init__ reads
-; the arguments, so a one-shot iterable is read once.
+; A builtin that fills itself in its own __init__ -- list, dict and set -- is
+; built empty, as its __new__ builds it in Python.  Whichever __init__ runs
+; reads the arguments: the builtin's fills the value, and a subclass's own that
+; never calls it leaves the value empty.
 ;
 ; Otherwise the arguments go to the constructor, as __new__ receives them in
 ; Python, and that is the only way an immutable builtin can be built at all.  A
 ; class whose own __init__ takes different arguments makes that call raise, and
-; then the empty value is right: its __init__ fills the instance itself, the way
-; list.__init__(self, xs) does.
+; then the empty value is right.
 (def %py-native-new
-  (fn (_ cls cc args)
-    (let ((bc (rest (%py-alist-find "%ctor" (%py-class-methods cc))))
-          (own (%py-alist-find "__init__" (%py-class-methods cc))))
-      (if (if (null? own) #f (same? (rest own) (%py-method-find cls "__init__")))
-        (bc)
-        (guard (e (bc)) (apply bc args))))))
+  (fn (_ cc args)
+    (let ((bc (rest (%py-alist-find "%ctor" (%py-class-methods cc)))))
+      (if (null? (%py-alist-find "__init__" (%py-class-methods cc)))
+        (guard (e (bc)) (apply bc args))
+        (bc)))))
 
 ; The class a class inherits its %ctor from -- the builtin base, found by the
 ; same base walk everything else uses -- or nil for a class of its own.

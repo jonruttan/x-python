@@ -205,7 +205,9 @@
           (let ((csig (if (null? ctor) () (%py-sig-of (rest ctor)))))
             (if (not (null? csig))
               (apply (rest ctor) (%py-kw-args csig pos kws))
-              (let ((init (%py-method-find f "__init__")))
+              ; a class with a constructor of its own is called through it and
+              ; never runs an __init__, so only one without is asked for one
+              (let ((init (if (null? ctor) (%py-method-find f "__init__") ())))
                 (let ((sig (if (null? init) () (%py-sig-of init))))
                   (if (null? sig)
                     (Err raise (lit type)

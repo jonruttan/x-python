@@ -619,6 +619,58 @@
 
 (def %py-cls-str
   (%py-class-new "str" %py-cls-object %py-str-methods "str"))
+
+; --- the __init__ rows of list, set and dict -----------------------------------
+; Each fills the value an instance carries from the arguments, and each carries
+; a signature, so `super().__init__(*args, **kwargs)` reaches it.
+
+; The TypeError an __init__ read off a builtin class raises for a receiver of
+; another type, in CPython's words.
+(def %py-init-receiver!
+  (fn (_ cname self)
+    (Err raise (lit type)
+      (Str8 append (Str8 append "descriptor '__init__' requires a '" cname)
+        (Str8 append "' object but received a '"
+          (Str8 append (%py-class-name (%py-type-of self)) "'")))
+      ())))
+
+; The positional arguments an __init__ row was given, checked as CPython checks
+; them: keywords are refused unless the builtin takes them, then more than one
+; positional argument is.
+(def %py-init-pos!
+  (fn (_ cname more keywords?)
+    (let ((pos (%py-args-strip-kw more)))
+      (match
+        ((if keywords? #f (not (null? (%py-dict-entries (%py-kwargs-of more)))))
+          (Err raise (lit type) (Str8 append cname "() takes no keyword arguments") ()))
+        ((> (%py-length pos) 1)
+          (Err raise (lit type)
+            (Str8 append cname
+              (Str8 append " expected at most 1 argument, got " (%py-str (%py-length pos))))
+            ()))
+        (#t pos)))))
+
+; list.__init__ replaces the contents with an iterable's, or empties the list.
+(def %py-list-init
+  (%py-sig!
+    (fn (_ self . more)
+      (if (not (%py-list-is (%py-native-of self)))
+        (%py-init-receiver! "list" self)
+        (let ((pos (%py-init-pos! "list" more #f)))
+          (%seq (%py-list-set! self (if (null? pos) () (%py-iter-elems (first pos)))) ()))))
+    "__init__" (list "self") 1 #t "kwargs" () #t))
+
+; set.__init__ replaces the carried set's contents in the same way.
+(def %py-set-init
+  (%py-sig!
+    (fn (_ self . more)
+      (let ((s (%py-native-of self)))
+        (if (if (%py-set-is s) (%py-set-frozen? s) #t)
+          (%py-init-receiver! "set" self)
+          (let ((pos (%py-init-pos! "set" more #f)))
+            (%seq (%py-set-set! s (%py-set-elems (apply %py-set-ctor pos))) ())))))
+    "__init__" (list "self") 1 #t "kwargs" () #t))
+
 ; THE BUILTIN TYPE OBJECT CARRIES THE PROTOCOL, which is what makes
 ; `class mylist(list)` work without teaching seventy dispatch sites about
 ; wrappers: a subclass inherits these through the base walk that was already
@@ -640,15 +692,7 @@
     (pair "__eq__"       (fn (_ self o) (%py-eq (%py-native-of self) (%py-native-of o))))
     (pair "__str__"      (fn (_ self) (%py-repr-of (%py-native-of self))))
     (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
-    ; `list.__init__(self, xs)` FILLS the instance, which is how a subclass
-    ; that writes its own __init__ passes the arguments down.
-    (pair "__init__"
-      (fn (_ self . args)
-        (%seq
-          (if (null? args)
-            ()
-            (%py-list-set! self (%py-iter-elems (first args))))
-          ())))))
+    (pair "__init__"     %py-list-init)))
 
 ; THE LAZY BUILTINS ARE CLASSES IN PYTHON, not functions -- `class mymap(map)`
 ; is ordinary code, and the corpus writes it.  Each keeps the function it
@@ -705,21 +749,15 @@
       (pair "__rxor__"     (fn (_ self o) (%py-bitxor (%py-native-of o) (%py-native-of self))))
       (pair "__repr__"     %py-set-class-repr))))
 
-; The rows only set carries, since they change the carried set.  __init__
-; replaces its contents with an iterable's, as in Python, and the in-place
-; operators store their result into it and answer the instance, so `t |= s`
-; keeps a subclass instance.  frozenset has none: its `|=` answers a new
-; frozenset, as in Python.
+; The rows only set carries, since they change the carried set: __init__, and
+; the in-place operators, which store their result into it and answer the
+; instance, so `t |= s` keeps a subclass instance.  frozenset has none: its `|=`
+; answers a new frozenset, as in Python.
 (def %py-set-update!
   (fn (_ self s) (%seq (%py-set-set! (%py-native-of self) (%py-set-elems s)) self)))
 (def %py-set-mutating-methods
   (list
-    (pair "__init__"
-      (fn (_ self . args)
-        (let ((s (%py-native-of self)))
-          (if (if (%py-set-is s) (%py-set-frozen? s) #t)
-            (%py-init-receiver! "set" self)
-            (%seq (%py-set-set! s (%py-set-elems (apply %py-set-ctor args))) ())))))
+    (pair "__init__" %py-set-init)
     (pair "__ior__"  (fn (_ self o) (%py-set-update! self (%py-bitor (%py-native-of self) (%py-native-of o)))))
     (pair "__iand__" (fn (_ self o) (%py-set-update! self (%py-bitand (%py-native-of self) (%py-native-of o)))))
     (pair "__isub__" (fn (_ self o) (%py-set-update! self (%py-sub (%py-native-of self) (%py-native-of o)))))
@@ -730,28 +768,19 @@
     (%py-list-cat (%py-set-methods %py-set-ctor) %py-set-mutating-methods) "set"))
 (def %py-cls-frozenset
   (%py-class-new "frozenset" %py-cls-object (%py-set-methods %py-frozenset-ctor) "frozenset"))
-; The TypeError an __init__ read off a builtin class raises for a receiver of
-; another type, in CPython's words.
-(def %py-init-receiver!
-  (fn (_ cname self)
-    (Err raise (lit type)
-      (Str8 append (Str8 append "descriptor '__init__' requires a '" cname)
-        (Str8 append "' object but received a '"
-          (Str8 append (%py-class-name (%py-type-of self)) "'")))
-      ())))
 
 ; dict.__init__ merges a mapping or an iterable of pairs, then the keywords, into
-; the dict an instance carries, as in Python; what is there already stays.  It
-; carries a signature so a keyword call through super() reaches it.
+; the dict an instance carries, as in Python; what is there already stays.
 (def %py-dict-init
   (%py-sig!
     (fn (_ self . more)
-      (let ((d (%py-native-of self)) (pos (%py-args-strip-kw more)))
+      (let ((d (%py-native-of self)))
         (if (not (%py-dict-is d))
           (%py-init-receiver! "dict" self)
-          (%seq
-            (if (null? pos) () (%py-dict-merge! d (first pos)))
-            (%seq (%py-dict-merge! d (%py-kwargs-of more)) ())))))
+          (let ((pos (%py-init-pos! "dict" more #t)))
+            (%seq
+              (if (null? pos) () (%py-dict-merge! d (first pos)))
+              (%seq (%py-dict-merge! d (%py-kwargs-of more)) ()))))))
     "__init__" (list "self") 1 #t "kwargs" () #t))
 
 (def %py-dict-methods
