@@ -28,6 +28,21 @@ abc a\nb abc x\ty 2
 ---
     3 255 b
 
+### a character past ASCII prints as its UTF-8
+
+```python
+(python-run "s = \"café \" + chr(0x1F40D)\nprint(s)\nprint(repr(s))\nprint([s], {s: 1})\nprint(f\"<{s}>\", \"%s!\" % s, \"{}?\".format(s))\nprint(b\"caf\\xc3\\xa9\".decode(\"utf-8\"))\nprint(chr(255), chr(256), \"é\" == chr(233), len(s))")
+```
+---
+```output
+café 🐍
+'café 🐍'
+['café 🐍'] {'café 🐍': 1}
+<café 🐍> café 🐍! café 🐍?
+café
+ÿ Ā True 6
+```
+
 ### triple quotes
 
 ```python
