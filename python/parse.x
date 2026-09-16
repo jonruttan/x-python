@@ -381,14 +381,6 @@
       ((%py-op-is? t "~")
         (let ((r (%py-unary (rest toks))))
           (pair (list (lit %py-invert) (first r)) (rest r))))
-      ; `await E` DELEGATES, which is what `yield from` does: the awaited
-      ; coroutine's yields travel out to whoever is driving this one, and its
-      ; return value is the expression's.
-      ((%py-kw? t "await")
-        (if (null? (first %py-in-async))
-          (Err raise (lit syntax) "await outside an async function" ())
-          (let ((r (%py-unary (rest toks))))
-            (pair (list (lit %py-yield-from) (lit %py-gen) (first r)) (rest r)))))
       (#t (%py-power toks)))))
 
 ; RIGHT-ASSOCIATIVE, and it matters: 2**3**2 is 2**(3**2) = 512, not 64.  The
@@ -412,9 +404,19 @@
           r))
       (%py-power-tail toks))))
 
+; `await E` DELEGATES, which is what `yield from` does: the awaited
+; coroutine's yields travel out to whoever is driving this one, and its
+; return value is the expression's.  It takes a PRIMARY, so `await x ** 2`
+; raises what was awaited rather than awaiting a power.
 (def %py-power-tail
   (fn (_ toks)
-    (def %base (%py-postfix toks))
+    (def %base
+      (if (%py-kw? (if (null? toks) () (first toks)) "await")
+        (if (null? (first %py-in-async))
+          (Err raise (lit syntax) "await outside an async function" ())
+          (let ((r (%py-postfix (rest toks))))
+            (pair (list (lit %py-yield-from) (lit %py-gen) (first r)) (rest r))))
+        (%py-postfix toks)))
     (if (%py-op-is? (if (null? (rest %base)) () (first (rest %base))) "**")
       (let ((r (%py-unary (rest (rest %base)))))
         (pair (list (lit %py-pow) (first %base) (first r)) (rest r)))
@@ -1640,13 +1642,24 @@
 ; list that ends where the block ended.
 ; The contents of the block that follows a header, for the scans that need to
 ; look inside one.
+; The body tokens of a compound header: the nested block, or -- when the
+; body is written on the header line, as `def g(): yield 1` -- the rest of
+; that line.  Walking past a one-line body to the next block in the program
+; read a NEIGHBOUR's body as this def's, which is what hid a yield from the
+; generator test: the def compiled as a plain function and calling it ran a
+; yield with no generator to talk to.
 (def %py-block-contents
   (fn (self toks)
-    (if (null? toks)
-      ()
-      (if (%py-block? (first toks))
-        (first (rest (first toks)))
-        (self (rest toks))))))
+    (match
+      ((null? toks) ())
+      ((%py-block? (first toks)) (first (rest (first toks))))
+      ((%py-op-is? (first toks) ":")
+        (let ((nx (if (null? (rest toks)) () (first (rest toks)))))
+          (if (if (null? nx) #f
+                (if (eq? (%py-tag nx) (lit tok-newline)) #f (not (%py-block? nx))))
+            (first (%py-line-of (rest toks) ()))
+            (self (rest toks)))))
+      (#t (self (rest toks))))))
 
 (def %py-block? (fn (_ t) (if (pair? t) (eq? (first t) (lit tok-block)) #f)))
 (def %py-block-toks (fn (_ t) (first (rest t))))
@@ -3073,13 +3086,22 @@
 ; returns to the def's own level ends it.
 ; A def's body is ONE token now, so skipping past it is finding that token
 ; rather than counting INDENT/DEDENT pairs.
+; Past a def's body, for the scans that hoist a module's names and must not
+; hoist a function's.  A body written on the header line ends at the newline;
+; walking on to the next block took the statements after the def with it, so
+; nothing they assigned was hoisted.
 (def %py-skip-def
   (fn (self toks depth)
-    (if (null? toks)
-      toks
-      (if (%py-block? (first toks))
-        (rest toks)
-        (self (rest toks) depth)))))
+    (match
+      ((null? toks) toks)
+      ((%py-block? (first toks)) (rest toks))
+      ((%py-op-is? (first toks) ":")
+        (let ((nx (if (null? (rest toks)) () (first (rest toks)))))
+          (if (if (null? nx) #f
+                (if (eq? (%py-tag nx) (lit tok-newline)) #f (not (%py-block? nx))))
+            (rest (%py-line-of (rest toks) ()))
+            (self (rest toks) depth))))
+      (#t (self (rest toks) depth)))))
 
 ; Names the grammar owns.  They reach the tokenizer as tok-name -- `if` is a
 ; name there and a keyword to the parser -- so the undefined-name scan has to
