@@ -389,6 +389,23 @@
         (pair "log1p"
           (fn (_ x) (Float log (%py-mlog-arg (Float + (%py-mfloat 1) (%py-mfloat x))))))))))
 
+; The types module: the type objects a program names rather than derives,
+; and `coroutine`.  Awaiting here is the delegation `yield from` does, which
+; accepts any generator already, so the decorator marks nothing and answers
+; what it was given.
+(def %py-types-module
+  (fn (_)
+    (%py-module-new "types"
+      (list
+        (pair "FunctionType" %py-cls-function)
+        (pair "LambdaType" %py-cls-function)
+        (pair "BuiltinFunctionType" %py-cls-builtin-function)
+        (pair "BuiltinMethodType" %py-cls-builtin-function)
+        (pair "MethodType" %py-cls-method)
+        (pair "GeneratorType" %py-cls-generator)
+        (pair "ModuleType" %py-cls-module)
+        (pair "coroutine" (%py-sig! (fn (_ f) f) "coroutine" (list "func") 1 #f))))))
+
 (def %py-module-build
   (fn (_ name)
     (match
@@ -417,6 +434,7 @@
       ((Str8 =? name "collections") (%py-collections-module))
       ((Str8 =? name "array") (%py-array-module))
       ((Str8 =? name "struct") (%py-struct-module))
+      ((Str8 =? name "types") (%py-types-module))
       ((Str8 =? name "builtins") (%py-module-new "builtins" ()))
       (#t ()))))
 

@@ -684,6 +684,16 @@
   (%py-class-new "tuple" %py-cls-object %py-tuple-methods "tuple"))
 (def %py-cls-type
   (%py-class-new "type" %py-cls-object (list (pair "%ctor" %py-type-ctor)) "type"))
+
+; The types a callable, a generator and a bound method answer to.  CPython
+; separates a def from a builtin, and the seventh signature field is what
+; tells them apart here: a def or a lambda records one, a builtin does not.
+(def %py-cls-function (%py-class-new "function" %py-cls-object () "function"))
+(def %py-cls-builtin-function
+  (%py-class-new "builtin_function_or_method" %py-cls-object ()
+    "builtin_function_or_method"))
+(def %py-cls-generator (%py-class-new "generator" %py-cls-object () "generator"))
+(def %py-cls-method (%py-class-new "method" %py-cls-object () "method"))
 (def %py-cls-NoneType
   (%py-class-new "NoneType" %py-cls-object () "NoneType"))
 
@@ -814,6 +824,9 @@
       ((%py-arr-is v) %py-cls-array)
       ((%py-obj-is v) (%py-obj-class v))
       ((%py-class-is v) %py-cls-type)
+      ((%py-gen-is v) %py-cls-generator)
+      ((%py-bound-is v) %py-cls-method)
+      ((%py-fn-is v) (if (%py-user-fn? v) %py-cls-function %py-cls-builtin-function))
       ; an error the runtime raised by tag is an instance of the class the
       ; tag names, as far as type() can tell
       ((Err err? v) (%py-exc-class-of v))
