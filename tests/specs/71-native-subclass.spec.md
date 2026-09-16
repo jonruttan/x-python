@@ -193,3 +193,32 @@ list() takes no keyword arguments
 [] [1, 2] {} 1 T() {'a': 2}
 [3, 4] 2
 ```
+
+### a plain value answers its class's rows: __init__, fromkeys and the dunders
+
+```python
+(python-run "from collections import deque\nl = [1]\nl.__init__([2])\nd = {\"a\": 1}\nd.__init__(b=2)\ns = {1}\ns.__init__([5])\nb = bytearray(b\"xy\")\nb.__init__(b\"z\")\nq = deque([1, 2], 3)\nq.__init__([7], 1)\nprint(l, d, s, b, q, q.maxlen)\nprint({}.fromkeys([\"a\"]), [3].__len__(), {1: 2}.__contains__(1), hasattr([], \"__init__\"))\ndef err(f):\n    try:\n        f()\n    except AttributeError as e:\n        print(e)\nerr(lambda: [].nosuch)\nerr(lambda: bytearray().nosuch)\nerr(lambda: frozenset().nosuch)\nerr(lambda: deque().nosuch)\nerr(lambda: frozenset().add)")
+```
+---
+```output
+[2] {'a': 1, 'b': 2} {5} bytearray(b'z') deque([7], maxlen=1) 1
+{'a': None} 1 True True
+'list' object has no attribute 'nosuch'
+'bytearray' object has no attribute 'nosuch'
+'frozenset' object has no attribute 'nosuch'
+'collections.deque' object has no attribute 'nosuch'
+'frozenset' object has no attribute 'add'
+```
+
+### bytearray and deque subclasses start empty and __init__ fills them
+
+```python
+(python-run "from collections import deque\nclass BA(bytearray):\n    def __init__(self, b):\n        pass\nclass BB(bytearray):\n    def __init__(self, *a, **k):\n        super().__init__(*a, **k)\nclass Q(deque):\n    def __init__(self, xs):\n        pass\nclass R(deque):\n    def __init__(self, *a, **k):\n        super().__init__(*a, **k)\nclass P(deque):\n    pass\nprint(BA(b\"xy\"), BB(b\"xy\"), BB(source=b\"s\"), BB())\nprint(Q([1, 2]), R([1, 2], maxlen=1), R([3]), P([4], 2))\ndef err(f):\n    try:\n        f()\n    except TypeError as e:\n        print(e)\nerr(lambda: deque.__init__([], []))\nerr(lambda: bytearray.__init__(b\"x\"))")
+```
+---
+```output
+BA(b'') BB(b'xy') BB(b's') BB(b'')
+Q([]) R([2], maxlen=1) R([3]) P([4], maxlen=2)
+descriptor '__init__' requires a 'collections.deque' object but received a 'list'
+descriptor '__init__' requires a 'bytearray' object but received a 'bytes'
+```

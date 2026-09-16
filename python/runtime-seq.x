@@ -763,9 +763,7 @@
             (fn (_ i v) (%py-list-set! obj (%py-els-set-at (%py-list-elems obj) (%py-list-norm-i n i) v))))
           ((Str8 =? name "__delitem__")
             (fn (_ i) (%py-list-set! obj (%py-els-drop-at (%py-list-elems obj) (%py-list-norm-i n i)))))
-          (#t
-            (Err raise (lit attribute)
-              (Str8 append (Str8 append "'list' object has no attribute '" name) "'") ())))))))
+          (#t (%py-class-row-attr %py-cls-list obj name "list")))))))
 
 ; --- Dict helpers ------------------------------------------------------------
 (def %py-ditems
@@ -862,8 +860,5 @@
       ((Str8 =? name "__getitem__") (fn (_ k) (%py-dget d k)))
       ((Str8 =? name "__setitem__") (fn (_ k v) (%py-dset d k v)))
       ((Str8 =? name "__delitem__") (fn (_ k) (%py-ddel d k)))
-      (#t
-        (Err raise (lit attribute)
-          (Str8 append (Str8 append "'dict' object has no attribute '" name) "'")
-          ())))))
+      (#t (%py-class-row-attr %py-cls-dict d name "dict")))))
 

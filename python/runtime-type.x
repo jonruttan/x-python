@@ -387,8 +387,34 @@
               (Str8 append (%py-class-name (%py-type-of v)) " found"))
             ()))))))
 
+; A constructor or __init__ that takes at most one argument refuses a second, in
+; CPython's words.
+(def %py-at-most-one!
+  (fn (_ cname args)
+    (if (if (null? args) #t (null? (rest args)))
+      ()
+      (Err raise (lit type)
+        (Str8 append cname
+          (Str8 append " expected at most 1 argument, got " (%py-str (%py-length args))))
+        ()))))
+
+; bytearray and deque say it their own way: bytearray() takes at most 3 arguments
+; (4 given).
+(def %py-takes-at-most!
+  (fn (_ cname limit n)
+    (if (> n limit)
+      (Err raise (lit type)
+        (Str8 append cname
+          (Str8 append "() takes at most "
+            (Str8 append (%py-str limit)
+              (Str8 append " arguments (" (Str8 append (%py-str n) " given)")))))
+        ())
+      ())))
+
 (def %py-list-ctor
-  (fn (_ . a) (if (null? a) (%py-list-new ()) (%py-mklist-of (first a)))))
+  (fn (_ . a)
+    (%seq (%py-at-most-one! "list" a)
+      (if (null? a) (%py-list-new ()) (%py-mklist-of (first a))))))
 
 (def %py-dict-copy
   (fn (self es)
@@ -400,7 +426,7 @@
   (fn (_ . a)
     (if (null? a)
       (%py-dict-new ())
-      (let ((m (%py-dict-arg (first a))))
+      (let ((m (%seq (%py-at-most-one! "dict" a) (%py-dict-arg (first a)))))
         (if (%py-dict-is m)
           ; a COPY, with fresh entry pairs: dict(d) in Python is a new dict, and
           ; sharing the pairs would make a store into one visible in the other
@@ -424,7 +450,8 @@
 
 (def %py-tuple-ctor
   (fn (_ . a)
-    (if (null? a) (%py-tuple-new ()) (%py-tuple-new (%py-iter-elems (first a))))))
+    (%seq (%py-at-most-one! "tuple" a)
+      (if (null? a) (%py-tuple-new ()) (%py-tuple-new (%py-iter-elems (first a)))))))
 
 (def %py-type-ctor
   (fn (_ . a)
@@ -640,15 +667,9 @@
 (def %py-init-pos!
   (fn (_ cname more keywords?)
     (let ((pos (%py-args-strip-kw more)))
-      (match
-        ((if keywords? #f (not (null? (%py-dict-entries (%py-kwargs-of more)))))
-          (Err raise (lit type) (Str8 append cname "() takes no keyword arguments") ()))
-        ((> (%py-length pos) 1)
-          (Err raise (lit type)
-            (Str8 append cname
-              (Str8 append " expected at most 1 argument, got " (%py-str (%py-length pos))))
-            ()))
-        (#t pos)))))
+      (if (if keywords? #f (not (null? (%py-dict-entries (%py-kwargs-of more)))))
+        (Err raise (lit type) (Str8 append cname "() takes no keyword arguments") ())
+        (%seq (%py-at-most-one! cname pos) pos)))))
 
 ; list.__init__ replaces the contents with an iterable's, or empties the list.
 (def %py-list-init
@@ -1005,9 +1026,31 @@
           (Str8 append "("
             (Str8 append (%py-bytes-repr (%py-bytes-list (%py-native-of self))) ")")))))))
 
+; bytearray.__init__(source, encoding, errors) replaces the contents with what
+; bytearray() builds from the same arguments.  Its signature names the three, so
+; they can be given by keyword and pass through super().
+(def %py-bytearray-init
+  (%py-sig!
+    (fn (_ self . more)
+      (let ((b (%py-native-of self)))
+        (if (not (%py-barr-is b))
+          (%py-init-receiver! "bytearray" self)
+          (let ((src (%py-opt more 0 %py-dflt)) (enc (%py-opt more 1 %py-dflt)))
+            (%seq (%py-takes-at-most! "bytearray" 3 (%py-length more))
+              (%seq
+                (%py-barr-set! b
+                  (%py-bytes-list
+                    (match
+                      ((same? src %py-dflt) (%py-barr-new ()))
+                      ((same? enc %py-dflt) (%py-bytearray-ctor src))
+                      (#t (%py-bytearray-ctor src enc)))))
+                ()))))))
+    "__init__" (list "self" "source" "encoding" "errors") 1 #f () () #t))
+
 (def %py-bytearray-methods
   (list
     (pair "%ctor" %py-bytearray-ctor)
+    (pair "__init__"     %py-bytearray-init)
     (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
     (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
     (pair "__iter__"     (fn (_ self) (%py-native-of self)))

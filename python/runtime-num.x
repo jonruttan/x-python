@@ -1033,7 +1033,7 @@
 ; AttributeError at the dot -- which is the shape %py-str-attr already had,
 ; and which five conformance programs probe with a bare `bytes.count`.
 (def %py-b-attr
-  (fn (_ l mk name)
+  (fn (_ l mk name v)
     (match
       ((Str8 =? name "decode")   (fn (_ . a) (%pb->str l)))
       ((Str8 =? name "find")     (fn (_ . a) (%py-b-search l a #f)))
@@ -1083,8 +1083,9 @@
       ((Str8 =? name "isupper") (fn (_ . a) (%pb-isupper l)))
       ((Str8 =? name "islower") (fn (_ . a) (%pb-islower l)))
       (#t
-        (Err raise (lit attribute)
-          (Str8 append (Str8 append "'bytes' object has no attribute '" name) "'") ())))))
+        (if (%py-barr-is v)
+          (%py-class-row-attr %py-cls-bytearray v name "bytearray")
+          (%py-class-row-attr %py-cls-bytes v name "bytes"))))))
 
 ; index is find that RAISES, which is the whole difference between them.
 (def %py-b-index
@@ -1130,7 +1131,7 @@
 ; a bytes method answers bytes, a bytearray method answers bytearrays.  Both
 ; read the same payload and run the same algorithms.
 (def %py-bytes-attr
-  (fn (_ b name) (%py-b-attr (%py-bytes-list b) %py-bytes-new name)))
+  (fn (_ b name) (%py-b-attr (%py-bytes-list b) %py-bytes-new name b)))
 
 ; A bytearray also MUTATES, and those two are its own: the payload is
 ; replaced in the cell, so every name bound to this bytearray sees it.
@@ -1144,7 +1145,7 @@
       ((Str8 =? name "extend")
         (fn (_ v)
           (%py-barr-set! b (%pb-cat (%py-bytes-list b) (%py-barr-bytes-of v)))))
-      (#t (%py-b-attr (%py-bytes-list b) %py-barr-new name)))))
+      (#t (%py-b-attr (%py-bytes-list b) %py-barr-new name b)))))
 
 ; The bytes an argument stands for, whichever way it was written.
 ; bytearray(), bytearray(b'..'), bytearray('..', 'utf-8'), bytearray([..]),
@@ -1155,7 +1156,7 @@
   (fn (_ . args)
     (if (null? args)
       (%py-barr-new ())
-      (let ((v (first args)))
+      (let ((v (%seq (%py-takes-at-most! "bytearray" 3 (%py-length args)) (first args))))
         (match
           ((%py-bytes-is v) (%py-barr-new (%py-bytes-list v)))
           ((%py-str-is v)

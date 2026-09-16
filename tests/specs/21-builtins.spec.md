@@ -149,3 +149,25 @@ False
 ```
 ---
     True False
+
+## constructor arguments
+
+A constructor that takes one iterable refuses a second argument; bytearray and
+deque refuse more arguments than they name.
+
+### refuse more arguments than they take
+
+```python
+(python-run "from collections import deque\ndef err(f):\n    try:\n        f()\n    except TypeError as e:\n        print(e)\nerr(lambda: list([1], [2]))\nerr(lambda: tuple([1], [2]))\nerr(lambda: set([1], [2]))\nerr(lambda: frozenset([1], [2]))\nerr(lambda: dict({}, {}))\nerr(lambda: bytearray(b\"a\", \"utf-8\", \"strict\", 4))\nerr(lambda: deque([], 1, 2))\nprint(list([1]), tuple(), set(), dict({\"a\": 1}), bytearray(b\"a\"), deque([1], 2))")
+```
+---
+```output
+list expected at most 1 argument, got 2
+tuple expected at most 1 argument, got 2
+set expected at most 1 argument, got 2
+frozenset expected at most 1 argument, got 2
+dict expected at most 1 argument, got 2
+bytearray() takes at most 3 arguments (4 given)
+deque() takes at most 2 arguments (3 given)
+[1] () set() {'a': 1} bytearray(b'a') deque([1], maxlen=2)
+```

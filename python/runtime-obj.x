@@ -841,6 +841,28 @@
       (let ((m (%py-method-find-below (first bs) name)))
         (if (null? m) (self (rest bs) name) m)))))
 
+; A name a builtin value's own attribute table does not have, answered from its
+; class's rows: a classmethod binds the class, and a method binds the value, so
+; `[1].__init__([2])` and `{}.fromkeys(ks)` work as they do read off the class.
+; object's rows are left out, since they read an instance's attributes and a
+; builtin value has none.  A name no row has is the AttributeError, with tname
+; as the type's name.
+(def %py-class-row-attr
+  (fn (_ cls v name tname)
+    (let ((m (%py-method-find-below cls name)))
+      (match
+        ((null? m)
+          (Err raise (lit attribute)
+            (Str8 append (Str8 append "'" tname)
+              (Str8 append "' object has no attribute '" (Str8 append name "'")))
+            ()))
+        ((%py-desc-is m)
+          (if (eq? (%py-desc-kind m) (lit classmethod))
+            (%py-bound-new (%py-desc-fn m) cls)
+            (%py-desc-fn m)))
+        ((not (%py-fn-is m)) m)
+        (#t (%py-bound-new m v))))))
+
 ; A BOUND METHOD IS JUST A CLOSURE OVER THE OBJECT.  A method compiles to
 ; (fn (_ py-self ...) ...) -- the leading _ absorbs x's self-binding -- so
 ; calling it with the object as the first argument is all "bound" means.

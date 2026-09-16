@@ -20,14 +20,18 @@
 ; reached through the element list, which makes the right-hand end a walk; that
 ; is a cost, not a difference in what a program sees.
 
-; deque([1, 2]), and deque([1, 2], maxlen=3) when there is a bound.
-(def %py-dq-repr
-  (fn (_ v)
-    (Str8 append "deque("
-      (Str8 append (%py-repr-of (%py-list-new (%py-dq-el v)))
-        (if (null? (%py-dq-max v))
-          ")"
-          (Str8 append ", maxlen=" (Str8 append (%py-str (%py-dq-max v)) ")")))))))
+; deque([1, 2]), and deque([1, 2], maxlen=3) when there is a bound; a subclass
+; prints under its own name in place of deque.
+(def %py-dq-named-repr
+  (fn (_ name v)
+    (Str8 append name
+      (Str8 append "("
+        (Str8 append (%py-repr-of (%py-list-new (%py-dq-el v)))
+          (if (null? (%py-dq-max v))
+            ")"
+            (Str8 append ", maxlen=" (Str8 append (%py-str (%py-dq-max v)) ")"))))))))
+
+(def %py-dq-repr (fn (_ v) (%py-dq-named-repr "deque" v)))
 
 ; --- the ends ----------------------------------------------------------------------
 
@@ -192,10 +196,7 @@
       ((Str8 =? name "clear") (fn (_) (%py-dq-set! v ())))
       ((Str8 =? name "copy") (fn (_) (%py-dq-new (%py-dq-max v) (%py-dq-el v))))
       ((Str8 =? name "maxlen") (%py-dq-max v))
-      (#t
-        (Err raise (lit attribute)
-          (Str8 append "'collections.deque' object has no attribute '" (Str8 append name "'"))
-          ())))))
+      (#t (%py-class-row-attr %py-cls-deque v name "collections.deque")))))
 
 ; deque(iterable=(), maxlen=None).  The bound is None or an int no less than 0.
 (def %py-dq-bound
@@ -210,12 +211,32 @@
 
 (def %py-deque-ctor
   (fn (_ . a)
-    (let ((v (%py-dq-new
-               (%py-dq-bound (if (if (null? a) #t (null? (rest a))) () (first (rest a))))
-               ())))
-      (%seq
-        (if (if (null? a) #t (same? (first a) %py-dflt)) () (%py-dq-extend! v (first a)))
-        v))))
+    (%seq (%py-takes-at-most! "deque" 2 (%py-length a))
+      (let ((v (%py-dq-new
+                 (%py-dq-bound (if (if (null? a) #t (null? (rest a))) () (first (rest a))))
+                 ())))
+        (%seq
+          (if (if (null? a) #t (same? (first a) %py-dflt)) () (%py-dq-extend! v (first a)))
+          v)))))
+
+; deque.__init__(iterable, maxlen) sets the bound, empties the deque and extends
+; it from the iterable, as in Python.
+(def %py-deque-init
+  (%py-sig!
+    (fn (_ o . more)
+      (let ((v (%py-native-of o)))
+        (if (not (%py-dq-is v))
+          (%py-init-receiver! "collections.deque" o)
+          (let ((it (%py-opt more 0 %py-dflt)))
+            (%seq (%py-takes-at-most! "deque" 2 (%py-length more))
+              (%seq (%py-dq-set-max! v (%py-dq-bound (%py-opt more 1 ())))
+                (%seq (%py-dq-set! v ())
+                  (%seq (if (same? it %py-dflt) () (%py-dq-extend! v it)) ()))))))))
+    "__init__" (list "self" "iterable" "maxlen") 1 #f () () #t))
+
+; A deque subclass prints under its own name.
+(def %py-dq-class-repr
+  (fn (_ o) (%py-dq-named-repr (%py-class-name (%py-type-of o)) (%py-native-of o))))
 
 ; The class a subclass inherits from.  The named methods reach a subclass
 ; instance through the value it carries; these are the ones a dunder lookup
@@ -223,6 +244,7 @@
 (def %py-dq-methods
   (list
     (pair "%ctor" (%py-sig! %py-deque-ctor "deque" (list "iterable" "maxlen") 0 #f))
+    (pair "__init__" %py-deque-init)
     (pair "__len__" (fn (_ o) (%py-length (%py-dq-el (%py-native-of o)))))
     (pair "__getitem__" (fn (_ o i) (%py-dq-at (%py-native-of o) i)))
     (pair "__setitem__" (fn (_ o i x) (%py-dq-put! (%py-native-of o) i x)))
@@ -230,8 +252,8 @@
     (pair "__iter__" (fn (_ o) (%py-list-new (%py-dq-el (%py-native-of o)))))
     (pair "__contains__" (fn (_ o x) (%py-in-walk x (%py-dq-el (%py-native-of o)))))
     (pair "__eq__" (fn (_ o other) (%py-dq-eq (%py-native-of o) (%py-native-of other))))
-    (pair "__repr__" (fn (_ o) (%py-dq-repr (%py-native-of o))))
-    (pair "__str__" (fn (_ o) (%py-dq-repr (%py-native-of o))))))
+    (pair "__repr__" %py-dq-class-repr)
+    (pair "__str__" %py-dq-class-repr)))
 
 (def %py-cls-deque
   (%py-class-new "deque" %py-cls-object %py-dq-methods "collections.deque"))
