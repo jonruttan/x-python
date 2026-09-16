@@ -1084,7 +1084,7 @@
                     (first %py-current-class) (first %py-current-self))
                   (rest (rest toks))))))
           ((eq? (%py-tag t) (lit tok-name))
-            (pair (%py-name->sym (%py-val t)) (rest toks)))
+            (pair (%py-name-read (%py-val t)) (rest toks)))
           ((%py-group? t "{")
             (let ((g (%py-group-of t)))
               (if (%py-comp? g)
@@ -1465,6 +1465,92 @@
 (def %py-current-class (pair () ()))
 (def %py-current-self (pair () ()))
 
+; THE NAMES A `del` MENTIONS, collected before the body is walked.  A name
+; cannot be unbound here -- the engine defines a global and never removes one
+; -- so a deleted name is REBOUND to %py-deleted and every read of that name
+; is compiled to a check.  Only the names a del names pay for it, and a
+; program that says `del` at all cannot parse at all today, so nothing that
+; works now can be changed by this.
+(def %py-del-names (pair () ()))
+
+(def %py-del-member?
+  (fn (self s names)
+    (if (null? names) #f (if (str=? s (first names)) #t (self s (rest names))))))
+
+; A del line is plain when it holds names, commas and parens and nothing
+; else: anything with a dot or a subscript is a target the runtime deletes
+; from, not a name to unbind.
+(def %py-del-plain?
+  (fn (self ts)
+    (match
+      ((null? ts) #f)
+      ((%py-del-plain-go ts #f) #t)
+      (#t #f))))
+
+(def %py-del-plain-go
+  (fn (self ts seen)
+    (if (null? ts)
+      seen
+      (let ((t (first ts)))
+        (match
+          ((eq? (%py-tag t) (lit tok-name)) (self (rest ts) #t))
+          ((%py-op-is? t ",") (self (rest ts) seen))
+          ((eq? (%py-tag t) (lit tok-newline)) (self (rest ts) seen))
+          ((%py-group? t "(") (if (%py-del-plain-go (%py-group-of t) seen) (self (rest ts) #t) #f))
+          (#t #f))))))
+
+; One rebinding per name, in the order written.
+(def %py-del-forms
+  (fn (self ts acc)
+    (if (null? ts)
+      (%py-reverse acc)
+      (let ((t (first ts)))
+        (match
+          ((eq? (%py-tag t) (lit tok-name))
+            (self (rest ts)
+              (pair
+                (list (lit set!) (%py-name->sym (%py-val t))
+                  (list (lit %py-name-gone) (%py-val t) (%py-name->sym (%py-val t))))
+                acc)))
+          ((%py-group? t "(")
+            (self (rest ts) (%py-reverse (%py-del-forms (%py-group-of t) (%py-reverse acc)))))
+          (#t (self (rest ts) acc)))))))
+
+; Every name a `del` line names, for the read check above.  A body is a
+; nested token, so the walk descends into every block -- including a def's,
+; whose `del` is exactly the one whose reads have to carry the check.
+(def %py-del-targets
+  (fn (self toks acc)
+    (if (null? toks)
+      (%py-reverse acc)
+      (let ((t (first toks)))
+        (match
+          ((%py-block? t)
+            (self (rest toks) (%py-append (%py-reverse (self (%py-block-toks t) ())) acc)))
+          ((%py-kw? t "del")
+            (let ((sp (%py-line-of (rest toks) ())))
+              (self (rest sp)
+                (if (%py-del-plain? (first sp)) (%py-del-line-names (first sp) acc) acc))))
+          (#t (self (rest toks) acc)))))))
+
+(def %py-del-line-names
+  (fn (self ts acc)
+    (if (null? ts)
+      acc
+      (let ((t (first ts)))
+        (match
+          ((eq? (%py-tag t) (lit tok-name)) (self (rest ts) (pair (%py-val t) acc)))
+          ((%py-group? t "(") (self (rest ts) (%py-del-line-names (%py-group-of t) acc)))
+          (#t (self (rest ts) acc)))))))
+
+; A read of a deleted-name candidate goes through the check; every other
+; name is the bare symbol it always was.
+(def %py-name-read
+  (fn (_ s)
+    (if (%py-del-member? s (first %py-del-names))
+      (list (lit %py-name-live) s (%py-name->sym s))
+      (%py-name->sym s))))
+
 (def %py-name->sym
   (fn (_ s)
     (def %look
@@ -1772,6 +1858,12 @@
                     ; `from a import *` binds every public name the module has
                     (pair (list (lit %py-import-star) name) (rest what))
                     (%py-from-imports name what ())))))))
+        ; `del NAME`, `del a, b`, `del (a, (b, c))`: names and nothing else,
+        ; decided on the tokens so the check a read carries does not have to
+        ; be unwrapped back into a name here
+        ((if (%py-kw? t "del") (%py-del-plain? (first (%py-line-of (rest toks) ()))) #f)
+          (let ((sp (%py-line-of (rest toks) ())))
+            (pair (pair (lit do) (%py-del-forms (first sp) ())) (rest sp))))
         ; `del NAME[k]`, `del NAME[a:b]`: the subscript form decides which
         ((%py-kw? t "del")
           (let ((r (%py-postfix (rest toks))))
@@ -2682,6 +2774,10 @@
         ; `l[1:3] = xs` replaces that span, and may change the length
         ((eq? (first target) (lit %py-slice))
           (pair (lit %py-setslice) (%py-append (rest target) (list value))))
+        ; a name a `del` mentions reads through a check; assigning to it
+        ; binds the name the check was wrapped around
+        ((eq? (first target) (lit %py-name-live))
+          (list (lit set!) (List ref 2 target) value))
         (#t (Err raise (lit syntax) "cannot assign to this target" ())))
       (list (lit set!) target value))))
 
@@ -3073,6 +3169,9 @@
     ; Brackets first: an unclosed group makes every walk below read a shape the
     ; source never had, so the structural error goes ahead of them.
     (%py-groups-ok %toks)
+    ; before the body is walked: a read compiled ahead of the `del` that
+    ; names it still has to carry the check
+    (%set-first! %py-del-names (%py-del-targets %toks ()))
     (def %targets (%py-dedupe () (%py-assign-targets %toks ()) ()))
     (def %body (%py-check-escapes (first (%py-stmts (%py-semi->nl %toks) ()))))
     (def %undef
