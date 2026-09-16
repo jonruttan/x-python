@@ -446,6 +446,17 @@
   (fn (self v i n)
     (if (>= i n) () (pair (Str8 sub i 1 v) (self v (+ i 1) n)))))
 
+; WHAT __iter__ ANSWERED, as a list of items.  An instance that is not an
+; iterator is the error Python names; anything else is iterated as it stands.
+; Both iteration doors read the ANSWER through this, because asking the object
+; for __iter__ a second time runs it a second time -- which for a stream is a
+; second read, and for any object is a side effect the program wrote once.
+(def %py-iter-answer
+  (fn (_ it)
+    (if (%py-obj-is it)
+      (Err raise (lit type) "iter() returned non-iterator" ())
+      (%py-iter-elems it))))
+
 ; AN OBJECT ITERATES BY ITS PROTOCOL: __iter__ hands back an iterator whose
 ; __next__ is called until it raises StopIteration -- materialized here into
 ; the element list every consumer already walks.  Without __iter__, the old
@@ -457,9 +468,7 @@
         (let ((it (it-m)))
           (let ((nx (if (%py-obj-is it) (%py-dunder it "__next__") ())))
             (if (null? nx)
-              (if (%py-obj-is it)
-                (Err raise (lit type) "iter() returned non-iterator" ())
-                (%py-iter-elems it))
+              (%py-iter-answer it)
               (do
                 (def go
                   (fn (self acc)
@@ -490,6 +499,7 @@
   (fn (_ v . who)
     (match
       ((%py-obj-is v) (%py-obj-elems v))
+      ((%py-io-is v) (%py-io-drain! v))
       ((%py-arr-is v) (%py-arr-el v))
       ; Iterating a dict yields its KEYS, as in Python.
       ((%py-dict? v) (%py-dkeys (%py-dict-entries v)))

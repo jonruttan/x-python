@@ -821,6 +821,7 @@
       ((%py-set-is v) (if (%py-set-frozen? v) %py-cls-frozenset %py-cls-set))
       ((%py-dict-is v) %py-cls-dict)
       ((%py-tuple-is v) %py-cls-tuple)
+      ((%py-io-is v) (if (%py-io-text? v) %py-cls-StringIO %py-cls-BytesIO))
       ((%py-arr-is v) %py-cls-array)
       ((%py-obj-is v) (%py-obj-class v))
       ((%py-class-is v) %py-cls-type)

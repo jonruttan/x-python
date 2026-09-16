@@ -143,12 +143,17 @@
 ; of an instance, so handing it an int walks a number as though it were one --
 ; `with 42:` SEGFAULTED before this guard, the same shape as a shim arriving
 ; as a class base.
+;
+; A stream is the one value here that carries the protocol without being an
+; instance, so it is asked through the attribute door instead of the class.
 (def %py-ctx-method
   (fn (_ m name)
-    (if (not (%py-obj-is m))
-      (%py-ctx-error m)
-      (let ((f (%py-dunder m name)))
-        (if (null? f) (%py-ctx-error m) f)))))
+    (match
+      ((%py-io-is m) (%py-getattr m name))
+      ((not (%py-obj-is m)) (%py-ctx-error m))
+      (#t
+        (let ((f (%py-dunder m name)))
+          (if (null? f) (%py-ctx-error m) f))))))
 
 (def %py-ctx-error
   (fn (_ m)
@@ -435,6 +440,7 @@
       ((Str8 =? name "array") (%py-array-module))
       ((Str8 =? name "struct") (%py-struct-module))
       ((Str8 =? name "types") (%py-types-module))
+      ((Str8 =? name "io") (%py-io-module))
       ((Str8 =? name "builtins") (%py-module-new "builtins" ()))
       (#t ()))))
 
@@ -1029,7 +1035,7 @@
             (let ((it (it-m)))
               (let ((nx (if (%py-obj-is it) (%py-dunder it "__next__") ())))
                 (if (null? nx)
-                  (pair (%py-iter-elems v) ())
+                  (pair (%py-iter-answer it) ())
                   (list (lit %py-cursor) nx))))))
         (pair (%py-iter-elems v) ())))))
 (def %py-iter-pull!
