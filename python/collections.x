@@ -167,35 +167,19 @@
       ((not (%py-eq (rest (first a)) (rest (first b)))) #f)
       (#t (self (rest a) (rest b))))))
 
-(def %py-od-fill!
-  (fn (self d rows)
-    (if (null? rows)
-      d
-      (%seq (%py-dset d (first (first rows)) (rest (first rows))) (self d (rest rows))))))
-
-(def %py-od-new
-  (fn (_ d)
-    (let ((o (%py-obj-new %py-cls-OrderedDict)))
-      (%seq (%py-obj-native! o d) o))))
-
-(def %py-od-ctor
-  (fn (_ . more)
-    (let ((pos (%py-args-strip-kw more)))
-      (let ((d (if (null? pos) (%py-dict-new ()) (%py-dict-ctor (first pos)))))
-        (%seq
-          (%py-od-fill! d (%py-dict-entries (%py-kwargs-of more)))
-          (%py-od-new d))))))
-
+; OrderedDict({'a': 1}), or a subclass's own name in its place; an empty one
+; prints as OrderedDict().
 (def %py-od-repr
   (fn (_ o)
-    (let ((d (%py-obj-native o)))
+    (let ((d (%py-obj-native o)) (name (%py-class-name (%py-obj-class o))))
       (if (null? (%py-dict-entries d))
-        "OrderedDict()"
-        (Str8 append "OrderedDict(" (Str8 append (%py-repr-of d) ")"))))))
+        (Str8 append name "()")
+        (Str8 append name (Str8 append "(" (Str8 append (%py-repr-of d) ")")))))))
 
+; No constructor of its own: an OrderedDict is built as any dict subclass is,
+; by dict's constructor and dict's __init__, keywords included.
 (def %py-od-methods
   (list
-    (pair "%ctor" (%py-sig! %py-od-ctor "OrderedDict" () 0 #t "kwargs"))
     (pair "__eq__"
       (fn (_ o other)
         (if (%py-od-is other)

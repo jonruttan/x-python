@@ -528,23 +528,14 @@
             (if (if (%py-obj-is o) (%py-subclass? (%py-obj-class o) cls) #f)
               (%seq
                 ; A SUBCLASS OF A BUILTIN carries one: the %ctor INHERITED from
-                ; the builtin base builds the value from the same arguments,
-                ; and the instance keeps it.  `class mylist(list)` then holds a
-                ; real list, and a class whose own __init__ takes other
-                ; arguments still gets an empty one to start from.
-                (let ((bc (%py-inherited-ctor cls)))
-                  (if (null? bc)
+                ; the builtin base builds the value, and the instance keeps it.
+                ; `class mylist(list)` then holds a real list, and a class whose
+                ; own __init__ takes other arguments still gets an empty one to
+                ; start from.
+                (let ((cc (%py-ctor-class cls)))
+                  (if (null? cc)
                     ()
-                    ; THE ARGUMENTS GO TO THE CONSTRUCTOR, which is what
-                    ; Python does: __new__ receives them whether or not an
-                    ; __init__ exists, and that is the only way an IMMUTABLE
-                    ; builtin can be built at all -- a tuple or str cannot be
-                    ; filled in afterwards.  A class whose own __init__ takes
-                    ; DIFFERENT arguments would make that call raise, and then
-                    ; the empty value is right: its __init__ fills the
-                    ; instance itself, the way list.__init__(self, xs) does.
-                    (%py-obj-native! o
-                      (guard (e (bc)) (apply bc args)))))
+                    (%py-obj-native! o (%py-native-new cls cc args))))
                 (let ((init (%py-method-find cls "__init__")))
                   (if (null? init)
                     o
@@ -560,16 +551,41 @@
                             (Str8 append (%py-type-name r) "'")) ()))))))
               o)))))))
 
-; The %ctor a class INHERITS, if any -- the builtin base's constructor, found
-; by the same base walk everything else uses.  A class of its own has none.
-(def %py-inherited-ctor
+; The value a new instance of a builtin's subclass carries, built by the %ctor
+; of cc, the class it inherits that constructor from.
+;
+; When cc's own __init__ is the one that runs -- list, dict and set fill
+; themselves there -- the constructor builds the empty value and __init__ reads
+; the arguments, so a one-shot iterable is read once.
+;
+; Otherwise the arguments go to the constructor, as __new__ receives them in
+; Python, and that is the only way an immutable builtin can be built at all.  A
+; class whose own __init__ takes different arguments makes that call raise, and
+; then the empty value is right: its __init__ fills the instance itself, the way
+; list.__init__(self, xs) does.
+(def %py-native-new
+  (fn (_ cls cc args)
+    (let ((bc (rest (%py-alist-find "%ctor" (%py-class-methods cc))))
+          (own (%py-alist-find "__init__" (%py-class-methods cc))))
+      (if (if (null? own) #f (same? (rest own) (%py-method-find cls "__init__")))
+        (bc)
+        (guard (e (bc)) (apply bc args))))))
+
+; The class a class inherits its %ctor from -- the builtin base, found by the
+; same base walk everything else uses -- or nil for a class of its own.
+(def %py-ctor-class
   (fn (self cls)
     (if (null? cls)
       ()
-      (let ((e (%py-alist-find "%ctor" (%py-class-methods cls))))
-        (if (null? e)
-          (%py-inherited-ctor-bases (%py-class-bases cls))
-          (rest e))))))
+      (if (null? (%py-alist-find "%ctor" (%py-class-methods cls)))
+        (%py-ctor-class-bases (%py-class-bases cls))
+        cls))))
+
+; The %ctor a class INHERITS, if any.
+(def %py-inherited-ctor
+  (fn (_ cls)
+    (let ((c (%py-ctor-class cls)))
+      (if (null? c) () (rest (%py-alist-find "%ctor" (%py-class-methods c)))))))
 
 ; Does a class BELOW the builtin write its own __init__?  The walk stops at
 ; the class carrying the %ctor: that one and everything above it is the
@@ -586,11 +602,11 @@
     (if (null? bs)
       #f
       (if (%py-init-below-ctor? (first bs)) #t (self (rest bs))))))
-(def %py-inherited-ctor-bases
+(def %py-ctor-class-bases
   (fn (self bs)
     (if (null? bs)
       ()
-      (let ((c (%py-inherited-ctor (first bs))))
+      (let ((c (%py-ctor-class (first bs))))
         (if (null? c) (self (rest bs)) c)))))
 
 ; --- Tuples ------------------------------------------------------------------

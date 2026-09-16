@@ -227,3 +227,14 @@ bytearray(b'y\x08y\x03\x04z\x05\x06\x07\x01\x02')
 ValueError
 bytearray(b'\x00\x00')
 ```
+
+### a bytearray subclass prints under its own name
+
+```python
+(python-run "class BA(bytearray):\n    pass\nb = BA(b\"xy\")\nprint(b, repr(b), str(b), BA())\nb.append(122)\nprint(b, bytearray(b))")
+```
+---
+```output
+BA(b'xy') BA(b'xy') BA(b'xy') BA(b'')
+BA(b'xyz') bytearray(b'xyz')
+```

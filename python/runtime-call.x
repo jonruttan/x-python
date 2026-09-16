@@ -880,12 +880,37 @@
           (#t #f)))
       (%py-ord-refuse op))))
 
+; The set methods that change the set, which a frozenset does not have.
+(def %py-set-mutator?
+  (fn (_ name)
+    (match
+      ((Str8 =? name "add") #t)
+      ((Str8 =? name "discard") #t)
+      ((Str8 =? name "remove") #t)
+      ((Str8 =? name "pop") #t)
+      ((Str8 =? name "clear") #t)
+      ((Str8 =? name "update") #t)
+      ((Str8 =? name "intersection_update") #t)
+      ((Str8 =? name "difference_update") #t)
+      ((Str8 =? name "symmetric_difference_update") #t)
+      (#t #f))))
+
+(def %py-set-no-attr!
+  (fn (_ frozen name)
+    (Err raise (lit attribute)
+      (Str8 append
+        (Str8 append (Str8 append "'" (if frozen "frozenset" "set")) "' object has no attribute '")
+        (Str8 append name "'"))
+      ())))
+
 (def %py-set-attr
   (fn (_ s name)
     (def es (fn (_) (%py-set-elems s)))
     (def frozen (%py-set-frozen? s))
     (def like (fn (_ l) (%py-set-new frozen l)))
     (match
+      ; a frozenset's missing methods are missing when they are looked up
+      ((if frozen (%py-set-mutator? name) #f) (%py-set-no-attr! frozen name))
       ((Str8 =? name "add")
         (fn (_ v) (%py-set-mutate! s "add" (%py-set-put (es) v))))
       ((Str8 =? name "discard")
@@ -931,12 +956,7 @@
       ((Str8 =? name "isdisjoint")
         (fn (_ o) (null? (%py-set-keep (es) (%py-iter-elems o)))))
       ((Str8 =? name "__contains__") (fn (_ v) (%py-set-has? v (es))))
-      (#t
-        (Err raise (lit attribute)
-          (Str8 append
-            (Str8 append (Str8 append "'" (if frozen "frozenset" "set")) "' object has no attribute '")
-            (Str8 append name "'"))
-          ())))))
+      (#t (%py-set-no-attr! frozen name)))))
 
 (def %py-mklist-of
   (fn (_ v) (%py-list-new (%py-iter-elems v))))

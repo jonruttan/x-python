@@ -81,3 +81,18 @@ cannot convert 'C' object to bytes
 {} ['p', 'q']
 {'a': 1} {'b': 2, 'c': 3}
 ```
+
+### dict() copies a dict subclass, and fromkeys builds the class it is read from
+
+```python
+(python-run "class D(dict):\n    pass\nd = D({\"a\": 1})\nprint(dict(d), type(dict(d)).__name__)\nprint(dict(D(b=2), c=3))\nf = D.fromkeys([\"a\", \"b\"], 0)\nprint(f, type(f).__name__)\nprint(D().fromkeys([\"z\"]), type(D().fromkeys([\"z\"])).__name__)\nprint(dict.fromkeys(\"xy\"), type(dict.fromkeys(\"xy\")).__name__)\nclass S(dict):\n    def __setitem__(self, k, v):\n        super().__setitem__(k, v * 10)\nprint(S.fromkeys([1], 2))")
+```
+---
+```output
+{'a': 1} dict
+{'b': 2, 'c': 3}
+{'a': 0, 'b': 0} D
+{'z': None} D
+{'x': None, 'y': None} dict
+{1: 20}
+```

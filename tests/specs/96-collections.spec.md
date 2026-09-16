@@ -61,3 +61,16 @@ a 1
 b 2
 ```
 
+### an OrderedDict subclass takes keywords and prints under its own name
+
+```python
+(python-run "from collections import OrderedDict\nclass O(OrderedDict):\n    pass\nprint(O(a=1), O({'b': 2}), O(), OrderedDict(a=1), OrderedDict([('c', 3)], d=4))\no = O(x=1)\no['y'] = 2\nprint(o, type(o).__name__, isinstance(o, OrderedDict), o == OrderedDict(x=1, y=2), o == OrderedDict(y=2, x=1))\nprint(O.fromkeys(\"pq\", 0))\ntry:\n    OrderedDict(5)\nexcept TypeError:\n    print(\"TypeError\")\n")
+```
+---
+```output
+O({'a': 1}) O({'b': 2}) O() OrderedDict({'a': 1}) OrderedDict({'c': 3, 'd': 4})
+O({'x': 1, 'y': 2}) O True True False
+O({'p': 0, 'q': 0})
+TypeError
+```
+
