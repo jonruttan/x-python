@@ -167,7 +167,6 @@
     (match
       ((if (%py-seq? a) (%py-seq? b) #f)
         (< (%py-seq-cmp (%py-seq-of a) (%py-seq-of b)) 0))
-      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b "<"))
       ; BYTES-LIKE ORDER IS BYTE ORDER, whichever of the two types is
       ; holding the buffer.  Without this arm the pair fell past every test
       ; here to the numeric one and was answered by whatever comparing two
@@ -178,6 +177,9 @@
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__lt__" "__gt__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse "<") r)))
+      ; after the instance arm, so a set subclass instance beside a set is
+      ; asked through its class
+      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b "<"))
       (#t (%py-lt-num a b)))))
 (def %py-lt-num
   (fn (_ a b)
@@ -191,7 +193,6 @@
     (match
       ((if (%py-seq? a) (%py-seq? b) #f)
         (> (%py-seq-cmp (%py-seq-of a) (%py-seq-of b)) 0))
-      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b ">"))
       ; BYTES-LIKE ORDER IS BYTE ORDER, whichever of the two types is
       ; holding the buffer.  Without this arm the pair fell past every test
       ; here to the numeric one and was answered by whatever comparing two
@@ -202,6 +203,8 @@
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__gt__" "__lt__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse ">") r)))
+      ; after the instance arm, as in %py-lt
+      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b ">"))
       (#t (%py-gt-num a b)))))
 (def %py-gt-num
   (fn (_ a b)
@@ -213,7 +216,6 @@
 (def %py-le
   (fn (_ a b)
     (match
-      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b "<="))
       ; BYTES-LIKE ORDER IS BYTE ORDER, whichever of the two types is
       ; holding the buffer.  Without this arm the pair fell past every test
       ; here to the numeric one and was answered by whatever comparing two
@@ -224,13 +226,14 @@
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__le__" "__ge__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse "<=") r)))
+      ; after the instance arm, as in %py-lt
+      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b "<="))
       ((if (%py-str-is a) (%py-str-is b) #f) (<= (%pb-cmp (%py-str-cps a) (%py-str-cps b)) 0))
       ((%py-lt a b) #t)
       (#t (%py-eq a b)))))
 (def %py-ge
   (fn (_ a b)
     (match
-      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b ">="))
       ; BYTES-LIKE ORDER IS BYTE ORDER, whichever of the two types is
       ; holding the buffer.  Without this arm the pair fell past every test
       ; here to the numeric one and was answered by whatever comparing two
@@ -241,6 +244,8 @@
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (let ((r (%py-cmp2 a b "__ge__" "__le__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse ">=") r)))
+      ; after the instance arm, as in %py-lt
+      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b ">="))
       ((if (%py-str-is a) (%py-str-is b) #f) (>= (%pb-cmp (%py-str-cps a) (%py-str-cps b)) 0))
       ((%py-gt a b) #t)
       (#t (%py-eq a b)))))

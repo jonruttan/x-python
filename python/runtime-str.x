@@ -185,21 +185,33 @@
               m)))))
 
 ; What a builtin type offers beyond the methods on its class object: the
-; whole instance surface, unbound.  A class this does not know, or a name
-; none of them has, is the AttributeError it always was.
+; whole instance surface, unbound.  A subclass reaches its builtin base's row
+; through the base walk and answers the base's method, so `L.append` is
+; `list.append` and takes any list as its receiver.  A class with no builtin
+; base, or a name the surface does not have, is an AttributeError naming the
+; class that was asked.
 (def %py-class-unbound
   (fn (_ cls name)
-    (match
-      ((eq? cls %py-cls-str)       (%py-unbound cls %py-str-attr (%py-str-new ()) name))
-      ((eq? cls %py-cls-bytes)     (%py-unbound cls %py-bytes-attr (%py-bytes-new ()) name))
-      ((eq? cls %py-cls-bytearray) (%py-unbound cls %py-barr-attr (%py-barr-new ()) name))
-      ((eq? cls %py-cls-list)      (%py-unbound cls %py-list-attr (%py-list-new ()) name))
-      ((eq? cls %py-cls-dict)      (%py-unbound cls %py-dict-attr (%py-dict-new ()) name))
-      ((eq? cls %py-cls-set)       (%py-unbound cls %py-set-attr (%py-set-new #f ()) name))
-      (#t
+    (let ((m (guard (e (if (%py-exc-match e %py-exc-AttributeError) () (error e)))
+               (match
+                 ((%py-subclass? cls %py-cls-str)
+                   (%py-unbound %py-cls-str %py-str-attr (%py-str-new ()) name))
+                 ((%py-subclass? cls %py-cls-bytes)
+                   (%py-unbound %py-cls-bytes %py-bytes-attr (%py-bytes-new ()) name))
+                 ((%py-subclass? cls %py-cls-bytearray)
+                   (%py-unbound %py-cls-bytearray %py-barr-attr (%py-barr-new ()) name))
+                 ((%py-subclass? cls %py-cls-list)
+                   (%py-unbound %py-cls-list %py-list-attr (%py-list-new ()) name))
+                 ((%py-subclass? cls %py-cls-dict)
+                   (%py-unbound %py-cls-dict %py-dict-attr (%py-dict-new ()) name))
+                 ((%py-subclass? cls %py-cls-set)
+                   (%py-unbound %py-cls-set %py-set-attr (%py-set-new #f ()) name))
+                 (#t ())))))
+      (if (null? m)
         (Err raise (lit attribute)
           (Str8 append (Str8 append "type object '" (%py-class-name cls))
-            (Str8 append "' has no attribute '" (Str8 append name "'"))) ())))))
+            (Str8 append "' has no attribute '" (Str8 append name "'"))) ())
+        m))))
 
 ; STRING METHODS MAP ONTO Str8, WHICH ALREADY HAS THEM -- upcase, downcase,
 ; trim, split, join, replace, starts?, ends?, index-of. The work here is the

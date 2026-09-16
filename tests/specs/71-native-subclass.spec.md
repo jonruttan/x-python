@@ -49,3 +49,60 @@ True
 [] 0
 [1]
 ```
+
+### a method read off a subclass is its builtin base's
+
+```python
+(python-run "class L(list):\n    pass\nclass LL(L):\n    pass\nclass Base:\n    pass\nclass M(Base, list):\n    pass\nl = L()\nL.append(l, 1)\nprint(l)\nplain = []\nLL.append(plain, 2)\nprint(plain)\nm = M()\nM.append(m, 3)\nprint(m)\nclass S(str):\n    pass\nprint(S.upper(S(\"ab\")), S.upper(\"cd\"))\ntry:\n    L.append(1, 2)\nexcept TypeError as e:\n    print(e)\ntry:\n    L.nosuch\nexcept AttributeError as e:\n    print(e)\ntry:\n    list.nosuch\nexcept AttributeError as e:\n    print(e)")
+```
+---
+```output
+[1]
+[2]
+[3]
+AB CD
+descriptor 'append' for 'list' objects doesn't apply to a 'int' object
+type object 'L' has no attribute 'nosuch'
+type object 'list' has no attribute 'nosuch'
+```
+
+### a set subclass iterates, contains and compares as a set
+
+```python
+(python-run "class T(set):\n    pass\nt = T([1, 2])\nprint(sorted(t), len(t), 1 in t, 5 in t, bool(T()))\nprint([x * 10 for x in t])\nprint(t == {1, 2}, {1, 2} == t, t != {1}, isinstance(t, set))\nprint(t < {1, 2, 3}, {1} < t, t <= T([1, 2]), t >= {1}, t > {1})\nt.add(3)\nprint(t, T(), repr(T([5])))")
+```
+---
+```output
+[1, 2] 2 True False False
+[10, 20]
+True True True True
+True True True True True
+T({1, 2, 3}) T() T({5})
+```
+
+### a set subclass's operators answer a set, and in place keep the subclass
+
+```python
+(python-run "class T(set):\n    pass\nt = T([1, 2])\nu = t | {3}\nprint(type(u).__name__, sorted(u))\nprint(sorted({3} | t), sorted(t & {2, 5}), sorted(t - {1}), sorted({1, 2, 3} - t), sorted(t ^ {2, 3}))\nprint(sorted(t | T([4])), type(t | T([4])).__name__)\nt |= {9}\nt -= {1}\nprint(type(t).__name__, sorted(t))")
+```
+---
+```output
+set [1, 2, 3]
+[1, 2, 3] [2] [2] [3] [1, 3]
+[1, 2, 4] set
+T [2, 9]
+```
+
+### a frozenset subclass hashes as one and prints under its own name
+
+```python
+(python-run "class F(frozenset):\n    pass\nf = F([1])\nprint(f, F(), hash(f) == hash(frozenset([1])), f == frozenset([1]))\nprint({f: \"x\"}[frozenset([1])])\ng = f | {2}\nprint(type(g).__name__, sorted(g))\nf |= {3}\nprint(type(f).__name__, sorted(f))\nprint(sorted(frozenset(F([4, 5]))))")
+```
+---
+```output
+F({1}) F() True True
+x
+frozenset [1, 2]
+frozenset [1, 3]
+[4, 5]
+```

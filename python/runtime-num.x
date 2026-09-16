@@ -731,23 +731,25 @@
       ((if (%py-dict? a) (%py-dict? b) #f)
         (let ((d (%py-dict-new (%py-dict-copy (%py-dict-entries a)))))
           (%seq (%py-dict-merge! d b) d)))
-      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-or a b))
+      ; an instance before a set, so a set subclass instance beside a set is
+      ; asked through its class
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__or__" "__ror__" "|"))
+      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-or a b))
       (#t (%py-bit2 a b "|" %py-nib-or (fn (_ x y) (if x #t y)))))))
 (def %py-bitxor
   (fn (_ a b)
-    (if (if (%py-set-is a) #t (%py-set-is b))
-      (%py-set-xor a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (%py-binop a b "__xor__" "__rxor__" "^")
+    (if (if (%py-set-is a) #t (%py-set-is b))
+      (%py-set-xor a b)
       (%py-bit2 a b "^" %py-nib-xor (fn (_ x y) (if x (not y) y)))))))
 (def %py-bitand
   (fn (_ a b)
-    (if (if (%py-set-is a) #t (%py-set-is b))
-      (%py-set-and a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (%py-binop a b "__and__" "__rand__" "&")
+    (if (if (%py-set-is a) #t (%py-set-is b))
+      (%py-set-and a b)
       (%py-bit2 a b "&" %py-nib-and (fn (_ x y) (if x y #f)))))))
 
 ; --- Membership --------------------------------------------------------------

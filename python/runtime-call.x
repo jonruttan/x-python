@@ -191,10 +191,15 @@
     (match
       ((same? f %py-print) (%py-print-kw pos kws))
       ((if (same? f %py-min) #t (same? f %py-max)) (%py-minmax-kw f pos kws))
-      ; dict(a=1): the keywords are the entries
-      ((same? f %py-cls-dict)
+      ; dict(a=1): the keywords are the entries.  A subclass whose constructor
+      ; is dict's and that writes no __init__ is built from that dict, the way
+      ; D({"a": 1}) is.
+      ((if (%py-class-is f)
+         (if (same? (%py-inherited-ctor f) %py-dict-ctor) (not (%py-init-below-ctor? f)) #f)
+         #f)
         (let ((d (if (null? pos) (%py-dict-new ()) (%py-dict-ctor (first pos)))))
-          (%seq (%py-dict-merge! d (%py-dict-new (%py-dict-kwargs kws))) d)))
+          (%seq (%py-dict-merge! d (%py-dict-new (%py-dict-kwargs kws)))
+            (if (same? f %py-cls-dict) d (%py-instantiate f (list d))))))
       ((%py-class-is f)
         (let ((ctor (%py-alist-find "%ctor" (%py-class-methods f))))
           (let ((csig (if (null? ctor) () (%py-sig-of (rest ctor)))))

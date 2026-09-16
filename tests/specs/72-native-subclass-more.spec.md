@@ -55,3 +55,29 @@ Caught exception: MyExc('Some error', 1)
 Caught exception: MyExc('Some error2', 2)
 one | 
 ```
+
+### bytes() of a subclass instance converts the value it carries
+
+```python
+(python-run "class B(bytes):\n    pass\nclass BA(bytearray):\n    pass\nclass S(str):\n    pass\nclass I(int):\n    pass\nclass Tu(tuple):\n    pass\nprint(bytes(BA(b'x')), bytes(B(b'y')), type(bytes(B(b'y'))).__name__)\nprint(bytes(I(2)), bytes(Tu([65, 66])))\ntry:\n    bytes(S(\"a\"))\nexcept TypeError as e:\n    print(e)\nclass C:\n    pass\ntry:\n    bytes(C())\nexcept TypeError as e:\n    print(e)")
+```
+---
+```output
+b'x' b'y' bytes
+b'\x00\x00' b'AB'
+string argument without an encoding
+cannot convert 'C' object to bytes
+```
+
+### a dict subclass takes keyword arguments
+
+```python
+(python-run "class D(dict):\n    pass\nclass E(D):\n    pass\nd = D(a=1)\nprint(d, type(d).__name__, d[\"a\"], isinstance(d, dict))\nprint(D({\"x\": 1}, a=2), E(b=2), D())\nclass K(dict):\n    def __init__(self, **kw):\n        self.seen = sorted(kw)\nk = K(p=1, q=2)\nprint(k, k.seen)\nprint(dict(a=1), dict({\"b\": 2}, c=3))")
+```
+---
+```output
+{'a': 1} D 1 True
+{'x': 1, 'a': 2} {'b': 2} {}
+{} ['p', 'q']
+{'a': 1} {'b': 2, 'c': 3}
+```
