@@ -359,10 +359,32 @@
 ; NUL-bearing s would otherwise go out through a platform string and refuse.
 (def %py-str-ctor
   (fn (_ . a)
-    (if (null? a)
-      (%py-str-new ())
-      (let ((v (first a)))
-        (if (%py-str-is v) v (%py-str-of-x (%py-str v)))))))
+    (match
+      ((null? a) (%py-str-new ()))
+      ((null? (rest a))
+        (let ((v (first a)))
+          (if (%py-str-is v) v (%py-str-of-x (%py-str v)))))
+      (#t (%py-str-decode a)))))
+
+; str(b, encoding[, errors]) decodes a bytes-like value -- bytes, a bytearray or
+; an array's buffer -- as utf-8, the codec bytes.decode uses; like decode it
+; takes the encoding and errors arguments without consulting them.
+(def %py-str-decode
+  (fn (_ a)
+    (let ((v (%py-native-of (first a))))
+      (match
+        ((> (%py-length a) 3)
+          (Err raise (lit type)
+            (Str8 append "str expected at most 3 arguments, got " (%py-str (%py-length a)))
+            ()))
+        ((%py-str-is v) (Err raise (lit type) "decoding str is not supported" ()))
+        ((%py-bytes-is v) (%py-str-new (%ps-decode (%py-bytes-list v) ())))
+        ((%py-arr-is v) (%py-str-new (%ps-decode (%py-arr-buffer v) ())))
+        (#t
+          (Err raise (lit type)
+            (Str8 append "decoding to str: need a bytes-like object, "
+              (Str8 append (%py-class-name (%py-type-of v)) " found"))
+            ()))))))
 
 (def %py-list-ctor
   (fn (_ . a) (if (null? a) (%py-list-new ()) (%py-mklist-of (first a)))))
@@ -798,14 +820,22 @@
 ; bytes(n), chr(0) and every literal -- because the payload was a string that
 ; would have ended there.  The payload is a byte list; the only rule left is
 ; Python's own, that a byte is in range(0, 256).
+;
+; Anything but an int is the TypeError Python gives, raised before it reaches a
+; comparison that has no answer for it.
 (def %py-bytes-of-codes
   (fn (self codes acc)
     (if (null? codes)
       (List reverse acc)
       (let ((c (%py-boolnorm (first codes))))
-        (if (if (< c 0) #t (> c 255))
-          (Err raise (lit value) "bytes must be in range(0, 256)" ())
-          (self (rest codes) (pair c acc)))))))
+        (match
+          ((not (eq? (%py-num-kind c) (lit int)))
+            (Err raise (lit type)
+              (Str8 append (Str8 append "'" (%py-class-name (%py-type-of c)))
+                "' object cannot be interpreted as an integer") ()))
+          ((if (< c 0) #t (> c 255))
+            (Err raise (lit value) "bytes must be in range(0, 256)" ()))
+          (#t (self (rest codes) (pair c acc))))))))
 
 ; THE COUNT IS VALIDATED BEFORE THE BYTES ARE BUILT, and negative is its own
 ; answer rather than a share of zero's.  Measured, CPython 3.14.7: bytes(0) is

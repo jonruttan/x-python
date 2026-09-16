@@ -314,6 +314,51 @@
       (pair v (rest lst))
       (pair (first lst) (self (rest lst) (- k 1) v)))))
 
+; --- bytearray stores --------------------------------------------------------
+;
+; A bytearray changes in place by subscript -- an item, a slice, a deletion --
+; and all three are one splice: the bytes from lo up to hi are replaced, and the
+; new list hangs on the same cell, so every name bound to the bytearray sees it.
+; A value is converted before the store, so a refused one leaves the bytearray
+; as it was.
+(def %py-barr-splice!
+  (fn (_ b lo hi with)
+    (let ((l (%py-bytes-list b)))
+      (%seq (%py-barr-set! b (%pb-cat (%pb-take lo l ()) (%pb-cat with (%pb-drop hi l))))
+            ()))))
+
+; the position an index names, counted from the end when negative
+(def %py-barr-slot
+  (fn (_ b i)
+    (let ((n (%pb-len (%py-bytes-list b))) (k (%py-boolnorm i)))
+      (let ((j (if (< k 0) (+ n k) k)))
+        (if (if (< j 0) #t (>= j n))
+          (Err raise (lit index) "bytearray index out of range" ())
+          j)))))
+
+(def %py-barr-put!
+  (fn (_ b i v)
+    (let ((c (%py-bytes-of-codes (list v) ())))
+      (let ((j (%py-barr-slot b i)))
+        (%py-barr-splice! b j (+ j 1) c)))))
+
+(def %py-barr-del!
+  (fn (_ b i)
+    (let ((j (%py-barr-slot b i)))
+      (%py-barr-splice! b j (+ j 1) ()))))
+
+; What `b[lo:hi] = v` takes: bytes, a bytearray, or an iterable of ints in
+; range.  A str or a number is refused rather than iterated.
+(def %py-barr-bytes-in
+  (fn (_ v)
+    (match
+      ((null? v)
+        (Err raise (lit type) "cannot convert 'NoneType' object to bytearray" ()))
+      ((if (%py-str-is v) #t (not (null? (%py-num-kind (%py-boolnorm v)))))
+        (Err raise (lit type)
+          "can assign only bytes, buffers, or iterables of ints in range(0, 256)" ()))
+      (#t (%py-barr-bytes-of v)))))
+
 ; --- del and slice assignment ------------------------------------------------
 (def %py-delindex
   (fn (_ v i)
@@ -326,26 +371,33 @@
           (if (null? m)
             (Err raise (lit type) "object does not support item deletion" ())
             (m i))))
+      ((%py-barr-is v) (%py-barr-del! v i))
       ((%py-dict? v) (%py-ddel v i))
       ((%py-list? v) ((%py-list-attr v "__delitem__") i))
       (#t (Err raise (lit type) "object does not support item deletion" ())))))
-; the indices a slice selects, as (lo . hi) on a step of 1
+; the indices a slice selects, as (lo . hi) on a step of 1; a stop before the
+; start selects nothing, at the start
 (def %py-slice-span
   (fn (_ n start stop step)
     (if (if (null? step) #f (not (= (%py-boolnorm step) 1)))
       (Err raise (lit value) "only a step of 1 is supported here" ())
-      (pair (%py-list-clamp n start 0) (%py-list-clamp n stop n)))))
+      (let ((lo (%py-list-clamp n start 0)))
+        (let ((hi (%py-list-clamp n stop n)))
+          (pair lo (if (< hi lo) lo hi)))))))
 (def %py-setslice
   (fn (_ v start stop step new)
-    (if (not (%py-list? v))
-      (Err raise (lit type) "object does not support slice assignment" ())
-      (let ((els (%py-list-elems v)))
-        (let ((sp (%py-slice-span (%py-length els) start stop step)))
-          (let ((lo (first sp)))
-            (let ((hi (if (< (rest sp) lo) lo (rest sp))))
-              (%py-list-set! v
-                (%py-list-cat (%py-take lo els)
-                  (%py-list-cat (%py-iter-elems new) (%py-drop els hi)))))))))))
+    (match
+      ((%py-barr-is v)
+        (let ((sp (%py-slice-span (%pb-len (%py-bytes-list v)) start stop step)))
+          (%py-barr-splice! v (first sp) (rest sp) (%py-barr-bytes-in new))))
+      ((not (%py-list? v))
+        (Err raise (lit type) "object does not support slice assignment" ()))
+      (#t
+        (let ((els (%py-list-elems v)))
+          (let ((sp (%py-slice-span (%py-length els) start stop step)))
+            (%py-list-set! v
+              (%py-list-cat (%py-take (first sp) els)
+                (%py-list-cat (%py-iter-elems new) (%py-drop els (rest sp)))))))))))
 (def %py-delslice
   (fn (_ v start stop step)
     (%py-setslice v start stop step (%py-list-new ()))))
@@ -358,6 +410,7 @@
           (if (null? m)
             (Err raise (lit type) "object does not support item assignment" ())
             (m i v))))
+      ((%py-barr-is obj) (%py-barr-put! obj i v))
       ((%py-arr-is obj) (%py-arr-put! obj i v))
       ((%py-dict? obj) (%py-dset obj i v))
       ((not (%py-list? obj))

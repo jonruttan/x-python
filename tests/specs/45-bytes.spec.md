@@ -64,3 +64,21 @@ ab
 abc
 b'ab'
 ```
+
+### str() with an encoding decodes a bytes-like value
+
+```python
+(python-run "import array\nprint(str(b\"abc\", \"utf-8\"))\nprint([ord(c) for c in str(bytearray(b\"caf\\xc3\\xa9\"), \"utf-8\")])\nprint(repr(str(b\"\", \"utf-8\")), len(str(b\"x\\xf0\\x9f\\x90\\x8dy\", \"utf-8\")))\nprint(str(array.array(\"B\", [104, 105]), \"utf-8\"))\nprint(str(b\"abc\", \"utf-8\", \"ignore\"))\ntry:\n    str(b\"abc\", \"utf-8\", \"strict\", \"extra\")\nexcept TypeError as e:\n    print(e)\ntry:\n    str(\"abc\", \"utf-8\")\nexcept TypeError as e:\n    print(e)\ntry:\n    str(1, \"utf-8\")\nexcept TypeError as e:\n    print(e)\ntry:\n    str([1], \"utf-8\")\nexcept TypeError as e:\n    print(e)")
+```
+---
+```output
+abc
+[99, 97, 102, 233]
+'' 3
+hi
+abc
+str expected at most 3 arguments, got 4
+decoding str is not supported
+decoding to str: need a bytes-like object, int found
+decoding to str: need a bytes-like object, list found
+```
