@@ -118,3 +118,5 @@
 (%py-image-sweep!)
 (include-once "./struct.x")
 (%py-image-sweep!)
+(include-once "./io.x")
+(%py-image-sweep!)

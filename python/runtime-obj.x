@@ -496,24 +496,50 @@
               (self (rest vs) #f))))))
     (%seq (%go args #t) (display end))))
 (def %py-print (fn (_ . args) (%py-print-with " " "\n" args)))
-; print(..., sep=, end=): None means the default, as in Python
+
+; `print(..., file=x)` asks x for `write` and calls it once per piece: every
+; value, every separator, and the end -- including an empty one, which is a
+; write of the empty string and not a call skipped.
+(def %py-print-to
+  (fn (_ file sep end args)
+    (let ((w (%py-getattr file "write")))
+      (def %go
+        (fn (self vs first?)
+          (if (null? vs)
+            ()
+            (%seq
+              (if first? () (w (%py-str-ctor sep)))
+              (%seq (w (%py-str-ctor (first vs)))
+                (self (rest vs) #f))))))
+      (%seq (%go args #t) (w (%py-str-ctor end))))))
+
+; print(..., sep=, end=, file=, flush=): None means the default, as in Python
 (def %py-print-kw
   (fn (_ args kws)
     (def check
       (fn (self ks)
         (if (null? ks) ()
-          (if (if (Str8 =? (first (first ks)) "sep") #t (Str8 =? (first (first ks)) "end"))
-            (self (rest ks))
-            (Err raise (lit type)
-              (Str8 append (Str8 append "'" (first (first ks)))
-                "' is an invalid keyword argument for print()")
-              ())))))
+          (let ((k (first (first ks))))
+            (match
+              ((Str8 =? k "sep") (self (rest ks)))
+              ((Str8 =? k "end") (self (rest ks)))
+              ((Str8 =? k "file") (self (rest ks)))
+              ; nothing here buffers, so flush= is accepted and has no work
+              ((Str8 =? k "flush") (self (rest ks)))
+              (#t
+                (Err raise (lit type)
+                  (Str8 append (Str8 append "'" k)
+                    "' is an invalid keyword argument for print()")
+                  ())))))))
     (def pick
       (fn (_ k dflt)
         (let ((e (%py-alist-find k kws)))
           (if (null? e) dflt (if (null? (rest e)) dflt (rest e))))))
     (check kws)
-    (%py-print-with (pick "sep" " ") (pick "end" "\n") args)))
+    (let ((sep (pick "sep" " ")) (end (pick "end" "\n")) (file (pick "file" ())))
+      (if (null? file)
+        (%py-print-with sep end args)
+        (%py-print-to file sep end args)))))
 
 ; --- Exceptions --------------------------------------------------------------
 ;
