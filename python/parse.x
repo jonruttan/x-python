@@ -1585,7 +1585,9 @@
 ; depth limit on non-tail calls to catch it (x-lang#56).
 
 ; A body is a chain of %seq, because %seq takes two.  One statement is itself.
-(def %py-seq-of
+; NOT %py-seq-of: that name is the runtime's, for the elements of a sequence,
+; and a second def of it here won the global and left the runtime's unreachable.
+(def %py-body-seq
   (fn (self forms)
     (if (null? forms)
       ()
@@ -1632,13 +1634,13 @@
               (not (%py-block? (first (rest toks))))))
         (let ((sp (%py-line-of (rest toks) ())))
           (pair
-            (%py-seq-of (first (%py-stmts (%py-semi->nl (first sp)) ())))
+            (%py-body-seq (first (%py-stmts (%py-semi->nl (first sp)) ())))
             (rest sp)))
       (let ((t (%py-skip-nl (rest toks))))
         (if (not (%py-block? (if (null? t) () (first t))))
           (Err raise (lit syntax) "expected an indented block" ())
           (pair
-            (%py-seq-of (first (%py-stmts (%py-semi->nl (%py-block-toks (first t))) ())))
+            (%py-body-seq (first (%py-stmts (%py-semi->nl (%py-block-toks (first t))) ())))
             (rest t))))))))
 
 ; (line-tokens . rest-from-the-newline)
