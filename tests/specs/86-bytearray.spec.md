@@ -172,3 +172,58 @@ AB
 2
 1
 ```
+
+### an item stores in place, and a refused value leaves the bytearray as it was
+
+```python
+(python-run "b = bytearray(b\"abc\")\nb[0] = 65\nb[-1] = True\nprint(b)\ntry:\n    b[5] = 1\nexcept IndexError as e:\n    print(e)\ntry:\n    b[-4] = 1\nexcept IndexError as e:\n    print(e)\ntry:\n    b[0] = 256\nexcept ValueError:\n    print(\"ValueError\")\ntry:\n    b[0] = -1\nexcept ValueError:\n    print(\"ValueError\")\ntry:\n    b[0] = \"a\"\nexcept TypeError as e:\n    print(e)\ntry:\n    b[0] = None\nexcept TypeError as e:\n    print(e)\ntry:\n    b[0] = 1.5\nexcept TypeError as e:\n    print(e)\ntry:\n    b[5] = \"a\"\nexcept TypeError as e:\n    print(e)\nprint(b)")
+```
+---
+```output
+bytearray(b'Ab\x01')
+bytearray index out of range
+bytearray index out of range
+ValueError
+ValueError
+'str' object cannot be interpreted as an integer
+'NoneType' object cannot be interpreted as an integer
+'float' object cannot be interpreted as an integer
+'str' object cannot be interpreted as an integer
+bytearray(b'Ab\x01')
+```
+
+### a slice stores in place, and del removes an item or a slice
+
+```python
+(python-run "b = bytearray(range(10))\nb[1:3] = b\"xy\"\nprint(b)\nb[2:2] = [7, 8]\nprint(b)\nb[:3] = bytearray()\nprint(b)\nb[-2:] = (1, 2, 3)\nprint(b)\nb[4:] = b\nprint(b)\ndel b[0]\ndel b[-1]\nprint(b)\ndel b[1:3]\nprint(b)\nb[5:1] = b\"z\"\nprint(b)\ntry:\n    b[0:1] = \"ab\"\nexcept TypeError as e:\n    print(e)\ntry:\n    b[0:1] = 5\nexcept TypeError as e:\n    print(e)\ntry:\n    b[0:1] = None\nexcept TypeError as e:\n    print(e)\ntry:\n    b[0:1] = [1, 300]\nexcept ValueError:\n    print(\"ValueError\")\ntry:\n    del b[100]\nexcept IndexError as e:\n    print(e)\nprint(b)")
+```
+---
+```output
+bytearray(b'\x00xy\x03\x04\x05\x06\x07\x08\t')
+bytearray(b'\x00x\x07\x08y\x03\x04\x05\x06\x07\x08\t')
+bytearray(b'\x08y\x03\x04\x05\x06\x07\x08\t')
+bytearray(b'\x08y\x03\x04\x05\x06\x07\x01\x02\x03')
+bytearray(b'\x08y\x03\x04\x08y\x03\x04\x05\x06\x07\x01\x02\x03')
+bytearray(b'y\x03\x04\x08y\x03\x04\x05\x06\x07\x01\x02')
+bytearray(b'y\x08y\x03\x04\x05\x06\x07\x01\x02')
+bytearray(b'y\x08y\x03\x04z\x05\x06\x07\x01\x02')
+can assign only bytes, buffers, or iterables of ints in range(0, 256)
+can assign only bytes, buffers, or iterables of ints in range(0, 256)
+cannot convert 'NoneType' object to bytearray
+ValueError
+bytearray index out of range
+bytearray(b'y\x08y\x03\x04z\x05\x06\x07\x01\x02')
+```
+
+### a byte that is not an int is a TypeError
+
+```python
+(python-run "a = bytearray(2)\ntry:\n    a.append(None)\nexcept TypeError as e:\n    print(e)\ntry:\n    bytes([1, None])\nexcept TypeError as e:\n    print(e)\ntry:\n    bytearray([256])\nexcept ValueError:\n    print(\"ValueError\")\nprint(a)")
+```
+---
+```output
+'NoneType' object cannot be interpreted as an integer
+'NoneType' object cannot be interpreted as an integer
+ValueError
+bytearray(b'\x00\x00')
+```
