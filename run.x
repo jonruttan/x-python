@@ -38,6 +38,14 @@
 ; the only loop, and reads through the editor itself when there is one.
 ; Which of the two is a fact of the process, so the choice is remade after
 ; a state image loads; see %py-repl-choose! in python/repl.x.
-(set! %banner %python-banner)
-(%py-repl-install!)
-(%py-repl-choose!)
+;
+; All of that only when this bundle leads.  `-l` is repeatable, and named
+; second (`x -l xe -l python`) this bundle is a library to the lang that
+; owns the prompt: it registers "python" so (lang python) can switch to it,
+; and touches neither the banner nor the loop.
+(if (%py-leads?)
+  (do
+    (set! %banner %python-banner)
+    (%py-repl-install!)
+    (%py-repl-choose!))
+  (%py-repl-register!))
