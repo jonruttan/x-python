@@ -47,6 +47,7 @@
       ((%py-obj-is obj) (%py-obj-attr obj name))
       ; every value has a __class__; an instance answered its own above
       ((Str8 =? name "__class__") (%py-type-of obj))
+      ((%py-arr-is obj) (%py-arr-attr obj name))
       ((%py-list? obj) (%py-list-attr obj name))
       ((%py-dict? obj) (%py-dict-attr obj name))
       ((%py-str-is obj) (%py-str-method obj name))

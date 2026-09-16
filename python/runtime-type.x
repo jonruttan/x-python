@@ -337,6 +337,7 @@
       ((%py-view-is v) (not (null? (%py-view-elems v))))
       ((%py-dict-is v) (not (null? (%py-dict-entries v))))
       ((%py-tuple-is v) (not (null? (%py-tuple-elems v))))
+      ((%py-arr-is v) (not (null? (%py-arr-el v))))
       ((%py-obj-is v)
         (let ((b (%py-dunder v "__bool__")))
           (if (not (null? b))
@@ -705,6 +706,8 @@
             (%py-bytes-new (%py-bytes-of-codes (%py-tuple-elems v) ())))
           ((%py-str-is v)
             (Err raise (lit type) "string argument without an encoding" ()))
+          ; an array hands over its buffer, which is what it is
+          ((%py-arr-is (%py-native-of v)) (%py-bytes-new (%py-arr-buffer (%py-native-of v))))
           ((%py-num? v) (%py-bytes-new (%py-bytes-zeros v ())))
           (#t
             (Err raise (lit type)
@@ -808,6 +811,7 @@
       ((%py-set-is v) (if (%py-set-frozen? v) %py-cls-frozenset %py-cls-set))
       ((%py-dict-is v) %py-cls-dict)
       ((%py-tuple-is v) %py-cls-tuple)
+      ((%py-arr-is v) %py-cls-array)
       ((%py-obj-is v) (%py-obj-class v))
       ((%py-class-is v) %py-cls-type)
       ; an error the runtime raised by tag is an instance of the class the

@@ -119,6 +119,7 @@
     (match
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__add__" "__radd__" "+"))
+      ((%py-arr-is a) (%py-arr-cat a b))
       ((match
          ((%py-view-is a) #t)
          ((%py-view-is b) #t)
@@ -135,10 +136,15 @@
       ; bytearray is a bytes, as in Python -- the buffers concatenate either
       ; way, and only the answer's type is in question.
       ((%py-bytes-is a)
-        (if (%py-bytes-is b)
-          ((if (%py-barr-is a) %py-barr-new %py-bytes-new)
-            (%pb-cat (%py-bytes-list a) (%py-bytes-list b)))
-          (Err raise (lit type) "can't concat to bytes" ())))
+        (match
+          ((%py-bytes-is b)
+            ((if (%py-barr-is a) %py-barr-new %py-bytes-new)
+              (%pb-cat (%py-bytes-list a) (%py-bytes-list b))))
+          ; an array is a buffer, and a buffer concatenates onto bytes
+          ((%py-arr-is b)
+            ((if (%py-barr-is a) %py-barr-new %py-bytes-new)
+              (%pb-cat (%py-bytes-list a) (%py-arr-buffer b))))
+          (#t (Err raise (lit type) "can't concat to bytes" ()))))
       ((%py-bytes-is b)
         (Err raise (lit type) "can't concat bytes to non-bytes" ()))
       ((%py-str-is a)
@@ -754,6 +760,7 @@
           (if (null? m)
             (%py-in-walk a (%py-iter-elems b))
             (%py-truthy (m a)))))
+      ((%py-arr-is b) (%py-in-walk a (%py-arr-el b)))
       ((%py-bytes-is b)
         (if (%py-bytes-is a)
           (%pb-in? (%py-bytes-list a) (%py-bytes-list b))
@@ -762,7 +769,9 @@
           ; is zero and answers False rather than refusing.
           (if (eq? (%py-num-kind (%py-boolnorm a)) (lit int))
             (%py-in-walk (%py-boolnorm a) (%py-bytes-list b))
-            (Err raise (lit type) "a bytes-like object is required" ()))))
+            (if (%py-arr-is a)
+              (%pb-in? (%py-arr-buffer a) (%py-bytes-list b))
+              (Err raise (lit type) "a bytes-like object is required" ())))))
       ((%py-str-is b)
         (if (%py-str-is a)
           (%pb-in? (%py-str-cps a) (%py-str-cps b))
@@ -1146,6 +1155,7 @@
               (%py-barr-new (%ps-encode (%py-str-cps v) ()))))
           ((%py-list? v) (%py-barr-new (%py-bytes-of-codes (%py-list-elems v) ())))
           ((%py-tuple-is v) (%py-barr-new (%py-bytes-of-codes (%py-tuple-elems v) ())))
+          ((%py-arr-is (%py-native-of v)) (%py-barr-new (%py-arr-buffer (%py-native-of v))))
           ((%py-num? v) (%py-barr-new (%py-bytes-zeros v ())))
           (#t (%py-barr-new (%py-bytes-of-codes (%py-iter-elems v) ()))))))))
 
