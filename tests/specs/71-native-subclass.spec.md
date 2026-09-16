@@ -147,3 +147,49 @@ descriptor 'union' for 'frozenset' objects doesn't apply to a 'set' object
 [0, 1, 2] [4, 5]
 TypeError
 ```
+
+### the list, set and dict __init__ rows check their arguments, and list.__init__() empties the list
+
+```python
+(python-run "def err(f):\n    try:\n        f()\n        print(\"no error\")\n    except TypeError as e:\n        print(e)\nl = [1, 2]\nlist.__init__(l)\nprint(l)\nlist.__init__(l, (3, 4))\nprint(l)\nerr(lambda: list.__init__(l, x=1))\nerr(lambda: list.__init__(l, [1], [2]))\nerr(lambda: list.__init__(5))\ns = {1, 2}\nset.__init__(s)\nprint(s)\nerr(lambda: set.__init__(s, x=1))\nerr(lambda: set.__init__(s, [1], [2]))\nerr(lambda: dict.__init__({}, [], []))\nclass L(list):\n    pass\nclass T(set):\n    pass\nerr(lambda: L(x=1))\nerr(lambda: T(x=1))\nerr(lambda: L([1], [2]))\nerr(lambda: list(x=1))")
+```
+---
+```output
+[]
+[3, 4]
+list() takes no keyword arguments
+list expected at most 1 argument, got 2
+descriptor '__init__' requires a 'list' object but received a 'int'
+set()
+set() takes no keyword arguments
+set expected at most 1 argument, got 2
+dict expected at most 1 argument, got 2
+list() takes no keyword arguments
+set() takes no keyword arguments
+list expected at most 1 argument, got 2
+list() takes no keyword arguments
+```
+
+### super().__init__(*args, **kwargs) reaches list and set with an empty keyword dict
+
+```python
+(python-run "class L(list):\n    def __init__(self, *a, **k):\n        super().__init__(*a, **k)\nclass T(set):\n    def __init__(self, *a, **k):\n        super().__init__(*a, **k)\nprint(L([1]), L(), T([2]), T())\nl = L([5])\nl.__init__()\nprint(l)\nl.__init__([6, 7])\nprint(l)\ntry:\n    L(x=1)\nexcept TypeError as e:\n    print(e)")
+```
+---
+```output
+[1] [] T({2}) T()
+[]
+[6, 7]
+list() takes no keyword arguments
+```
+
+### a subclass whose own __init__ never calls the base's starts empty
+
+```python
+(python-run "class S(list):\n    def __init__(self, xs):\n        pass\nclass E(list):\n    def __init__(self, xs):\n        self.extend(xs)\nclass D(dict):\n    def __init__(self, m):\n        self.seen = len(m)\nclass T(set):\n    def __init__(self, xs):\n        pass\nclass U(dict):\n    def __init__(self, m):\n        for k in m:\n            self[k] = m[k] * 2\nprint(S([1, 2]), E([1, 2]), D({\"a\": 1}), D({\"a\": 1}).seen, T([1]), U({\"a\": 1}))\nclass P(list):\n    def __init__(self, xs):\n        self.n = len(xs)\n        super().__init__(xs)\np = P([3, 4])\nprint(p, p.n)")
+```
+---
+```output
+[] [1, 2] {} 1 T() {'a': 2}
+[3, 4] 2
+```
