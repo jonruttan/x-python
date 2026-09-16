@@ -120,3 +120,5 @@
 (%py-image-sweep!)
 (include-once "./io.x")
 (%py-image-sweep!)
+(include-once "./sys.x")
+(%py-image-sweep!)

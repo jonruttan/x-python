@@ -654,7 +654,6 @@
 (def %py-exc-ValueError      (%py-exc-new "ValueError"      %py-exc-Exception))
 (def %py-exc-AssertionError  (%py-exc-new "AssertionError"  %py-exc-Exception))
 (def %py-exc-StopIteration   (%py-exc-new "StopIteration"   %py-exc-Exception))
-(def %py-exc-StopAsyncIteration (%py-exc-new "StopAsyncIteration" %py-exc-Exception))
 (def %py-exc-GeneratorExit   (%py-exc-new "GeneratorExit"   %py-exc-Exception))
 (def %py-exc-SystemExit      (%py-exc-new "SystemExit"      %py-exc-Exception))
 (def %py-exc-RuntimeError    (%py-exc-new "RuntimeError"    %py-exc-Exception))
@@ -924,6 +923,18 @@
       (if (Str8 =? k (first (first rows)))
         (pair (pair k v) (rest rows))
         (pair (first rows) (self (rest rows) k v))))))
+
+; The rows a program can name, as a dict's entries: keys cross over to strs,
+; and the runtime's own rows stay behind -- "%native" and the like, keyed with
+; a % that no identifier can begin with.
+(def %py-attr-entries
+  (fn (self rows)
+    (match
+      ((null? rows) ())
+      ((= (%py-char-code (%str-ref (first (first rows)) 0)) 37) (self (rest rows)))
+      (#t
+        (pair (pair (%py-str-of-x (first (first rows))) (rest (first rows)))
+          (self (rest rows)))))))
 
 ; Dropping an attribute the instance does not carry is an AttributeError,
 ; the same one whether `del obj.x` takes the plain path below or a class's

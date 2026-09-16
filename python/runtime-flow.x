@@ -48,7 +48,15 @@
 (def %py-name-gone
   (fn (_ name v) (if (same? v %py-deleted) (%py-name-missing! name) %py-deleted)))
 
-(def %py-cls-module (%py-class-new "module" %py-cls-object () "module"))
+; A module's __dict__ is its attributes as a dict: a copy, as a class's is, so
+; reading it answers and writing to it does not reach the module.
+(def %py-cls-module
+  (%py-class-new "module" %py-cls-object
+    (list
+      (pair "__dict__"
+        (%py-desc-new (lit property)
+          (fn (_ m) (%py-dict-new (%py-attr-entries (%py-obj-attrs m)))))))
+    "module"))
 
 (def %py-module-new
   (fn (_ name rows)
@@ -70,47 +78,6 @@
 (def %py-module-put!
   (fn (_ name m)
     (%seq (%set-first! %py-modules (pair (pair name m) (first %py-modules))) m)))
-
-; WHAT THIS RUNTIME OFFERS, built on first import and remembered after.  sys
-; is the one the corpus reaches for most: its feature probes read
-; sys.implementation and sys.modules before deciding what to test.
-; WHAT PLATFORM THIS IS, read off x-machine -- the build triple the platform
-; layer already keys its syscalls from, e.g. "arm64-apple-darwin23.6.0" or
-; "x86_64-linux-gnu".  Python's own spellings are darwin, linux and win32; a
-; triple naming none of them answers ITSELF rather than a guess, which at
-; least says truthfully where it ran.
-; WHAT PLATFORM THIS IS, read off x-machine -- the build triple the platform
-; layer already keys its syscalls from, e.g. "arm64-apple-darwin23.6.0" or
-; "x86_64-linux-gnu".  The triples and Python's name for each are a TABLE, not
-; a chain of near-identical tests; a triple naming none of them answers ITSELF
-; rather than a guess, which at least says truthfully where it ran.
-(def %py-platform-names
-  (list
-    (pair "darwin"  "darwin")
-    (pair "linux"   "linux")
-    (pair "mingw"   "win32")
-    (pair "cygwin"  "win32")
-    (pair "windows" "win32")))
-
-(def %py-platform-of
-  (fn (self triple rows)
-    (match
-      ((null? rows) triple)
-      ((not (null? (Str8 index-of (first (first rows)) triple))) (rest (first rows)))
-      (#t (self triple (rest rows))))))
-
-; sys.implementation names the runtime a program is actually running on, and
-; this one is not CPython.  A test that branches on it should see the truth.
-(def %py-sys-implementation
-  (fn (_)
-    (%py-module-new "implementation"
-      (list
-        ; A MODULE'S TEXT ATTRIBUTES ARE strs.  These are written here as the
-        ; platform's strings and cross over on the way in; left bare,
-        ; type(sys.implementation.name).__name__ answered something that was
-        ; not "str" and every method on it was missing.
-        (pair "name" (%py-str-of-x "x-python"))
-        (pair "_machine" (%py-str-of-x x-machine))))))
 
 ; --- the math module ------------------------------------------------------
 ;
@@ -409,32 +376,15 @@
         (pair "MethodType" %py-cls-method)
         (pair "GeneratorType" %py-cls-generator)
         (pair "ModuleType" %py-cls-module)
+        (pair "SimpleNamespace" %py-cls-SimpleNamespace)
         (pair "coroutine" (%py-sig! (fn (_ f) f) "coroutine" (list "func") 1 #f))))))
 
+; The modules this runtime offers, each built on first import and remembered
+; after.
 (def %py-module-build
   (fn (_ name)
     (match
-      ((Str8 =? name "sys")
-        (%py-module-new "sys"
-                (list
-                  ; strs, for the reason in %py-sys-implementation below
-                  (pair "version" (%py-str-of-x "3.14.7"))
-                  (pair "platform"
-                    (%py-str-of-x (%py-platform-of x-machine %py-platform-names)))
-                  ; every architecture this platform builds for is little-endian;
-                  ; a big-endian port would have to say so here
-                  (pair "byteorder" (%py-str-of-x "little"))
-                  (pair "implementation" (%py-sys-implementation))
-                  ; the largest int a CPython machine word holds; this runtime has
-                  ; bigints and no such limit, and the number is what programs test
-                  (pair "maxsize" 9223372036854775807)
-                  (pair "path" (%py-list-new ()))
-                  (pair "argv" (%py-list-new ()))
-                  (pair "modules" (%py-dict-new ()))
-                  (pair "exit"
-                    (fn (_ . a)
-                      (%py-raise (%py-instantiate %py-exc-SystemExit
-                        (if (null? a) () (list (first a))))))))))
+      ((Str8 =? name "sys") (%py-sys-module))
       ((Str8 =? name "math") (%py-math-module))
       ((Str8 =? name "collections") (%py-collections-module))
       ((Str8 =? name "array") (%py-array-module))

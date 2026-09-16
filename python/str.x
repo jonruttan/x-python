@@ -55,8 +55,8 @@
 (import x/sys/file)
 
 (provide python/str
-  %ps-of-x %ps->x %ps-write %ps-nul? %ps-encode %ps-enc1 %ps-decode %ps-repr
-  %ps-upper %ps-lower %ps-swapcase %ps-capitalize %ps-title
+  %ps-of-x %ps->x %ps-write %ps-write-bytes-to %ps-nul? %ps-encode %ps-enc1 %ps-decode
+  %ps-repr %ps-upper %ps-lower %ps-swapcase %ps-capitalize %ps-title
   %ps-isspace %ps-isalpha %ps-isdigit %ps-isalnum %ps-isupper %ps-islower)
 
 ; --- the utf-8 codec ---------------------------------------------------------
@@ -155,14 +155,17 @@
       (display (%pb->str (%ps-encode l ()))))))
 
 ; The region is GC-owned and dies with the call.  An empty list writes nothing:
-; (str make 0) is not a buffer, and there is nothing to put in it.
-(def %ps-write-bytes
-  (fn (_ bs)
+; (str make 0) is not a buffer, and there is nothing to put in it.  The fd is
+; the caller's: print's is 1, and sys.stderr's is 2.
+(def %ps-write-bytes-to
+  (fn (_ fd bs)
     (let ((n (List length bs)))
       (unless (= n 0)
         (let ((region (%ps-make n)))
           (%seq (%ps-fill (%ps->ptr region) bs 0)
-                (File write 1 region n)))))))
+                (File write fd region n)))))))
+
+(def %ps-write-bytes (fn (_ bs) (%ps-write-bytes-to 1 bs)))
 
 (def %ps-fill
   (fn (self p bs i)

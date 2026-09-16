@@ -6,7 +6,7 @@
 ;   elements, a position in it, and a closed flag.  The elements are code
 ;   points for the text one and bytes for the binary one, which is the only
 ;   difference between them -- what read and getvalue hand back, and what
-;   write takes apart.
+;   write takes apart.  And the classes of the standard streams sys holds.
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan
 ; @license MIT No Attribution (MIT-0)
@@ -221,10 +221,123 @@
 (def %py-cls-BytesIO
   (%py-class-new "BytesIO" %py-cls-IOBase (%py-io-methods #f) "io.BytesIO"))
 
+; What a write to a stream that cannot take one raises: an OSError, and a
+; ValueError too, so either handler catches it.
+(def %py-exc-UnsupportedOperation
+  (%py-class-new "UnsupportedOperation" (list %py-exc-OSError %py-exc-ValueError) ()
+    "io.UnsupportedOperation"))
+
+; --- the standard streams ---------------------------------------------------------
+; sys.stdin, sys.stdout and sys.stderr: a text stream over a file descriptor,
+; with the byte stream beneath it as `buffer`.  Each is an ordinary instance
+; carrying name, mode and encoding as attributes, as CPython's do, and its
+; descriptor under "%fd" and whether it writes under "%out?" -- keys no Python
+; identifier can spell.
+;
+; Text written to stdout takes print's own door, and to any other descriptor
+; goes out as its utf-8 bytes; bytes go straight to the descriptor.  Reading
+; stdin is not offered: the interpreter's own reader takes its input from that
+; descriptor, at the REPL and under the spec harness alike, and a read here
+; would take from underneath it.
+
+(def %py-io-row
+  (fn (_ o k)
+    (let ((e (%py-alist-find k (%py-obj-attrs o))))
+      (if (null? e)
+        (Err raise (lit value) "I/O operation on uninitialized object" ())
+        (rest e)))))
+
+(def %py-io-put-text
+  (fn (_ fd cps)
+    (if (= fd 1) (%py-str-display cps) (%ps-write-bytes-to fd (%ps-encode cps ())))))
+
+(def %py-io-writable!
+  (fn (_ o)
+    (if (%py-io-row o "%out?")
+      ()
+      (%py-raise
+        (%py-instantiate %py-exc-UnsupportedOperation (list (%py-str-of-x "not writable")))))))
+
+(def %py-io-std-write
+  (fn (_ o s)
+    (%seq (%py-io-writable! o)
+      (if (%py-str-is s)
+        (%seq (%py-io-put-text (%py-io-row o "%fd") (%py-str-cps s))
+          (%py-length (%py-str-cps s)))
+        (Err raise (lit type)
+          (Str8 append "write() argument must be str, not "
+            (%py-class-name (%py-type-of s))) ())))))
+
+(def %py-io-std-write-bytes
+  (fn (_ o b)
+    (%seq (%py-io-writable! o)
+      (if (%py-bytes-is b)
+        (let ((bs (%py-bytes-list b)))
+          (%seq (%ps-write-bytes-to (%py-io-row o "%fd") bs)
+            (%py-length bs)))
+        (Err raise (lit type)
+          (Str8 append "a bytes-like object is required, not '"
+            (Str8 append (%py-class-name (%py-type-of b)) "'")) ())))))
+
+; <_io.TextIOWrapper name='<stdout>' mode='w' encoding='utf-8'>, and the byte
+; stream beneath it as <_io.BufferedWriter name='<stdout>'>.
+(def %py-io-std-repr
+  (fn (_ o)
+    (let ((head (Str8 append "<"
+                  (Str8 append (%py-class-qualname (%py-obj-class o))
+                    (Str8 append " name=" (%py-repr-of (%py-io-row o "name")))))))
+      (if (%py-subclass? (%py-obj-class o) %py-cls-TextIOWrapper)
+        (Str8 append head
+          (Str8 append " mode="
+            (Str8 append (%py-repr-of (%py-io-row o "mode"))
+              (Str8 append " encoding="
+                (Str8 append (%py-repr-of (%py-io-row o "encoding")) ">")))))
+        (Str8 append head ">")))))
+
+(def %py-io-std-methods
+  (fn (_ write)
+    (list
+      (pair "write" (%py-sig! write "write" (list "self" "s") 2 #f () () #t))
+      (pair "flush" (%py-sig! (fn (_ o) ()) "flush" (list "self") 1 #f () () #t))
+      (pair "fileno"
+        (%py-sig! (fn (_ o) (%py-io-row o "%fd")) "fileno" (list "self") 1 #f () () #t))
+      (pair "__repr__" %py-io-std-repr)
+      (pair "__str__" %py-io-std-repr))))
+
+(def %py-cls-TextIOWrapper
+  (%py-class-new "TextIOWrapper" %py-cls-IOBase (%py-io-std-methods %py-io-std-write)
+    "_io.TextIOWrapper"))
+(def %py-cls-BufferedWriter
+  (%py-class-new "BufferedWriter" %py-cls-IOBase (%py-io-std-methods %py-io-std-write-bytes)
+    "_io.BufferedWriter"))
+(def %py-cls-BufferedReader
+  (%py-class-new "BufferedReader" %py-cls-IOBase (%py-io-std-methods %py-io-std-write-bytes)
+    "_io.BufferedReader"))
+
+; One standard stream: fd, its name as CPython spells it, and whether it writes.
+(def %py-io-std
+  (fn (_ fd name out?)
+    (let ((raw (%py-obj-new (if out? %py-cls-BufferedWriter %py-cls-BufferedReader)))
+          (text (%py-obj-new %py-cls-TextIOWrapper)))
+      (%seq
+        (%py-obj-set-attrs! raw
+          (list (pair "%fd" fd) (pair "%out?" out?)
+            (pair "name" (%py-str-of-x name))
+            (pair "mode" (%py-str-of-x (if out? "wb" "rb")))))
+        (%seq
+          (%py-obj-set-attrs! text
+            (list (pair "%fd" fd) (pair "%out?" out?)
+              (pair "name" (%py-str-of-x name))
+              (pair "mode" (%py-str-of-x (if out? "w" "r")))
+              (pair "encoding" (%py-str-of-x "utf-8"))
+              (pair "buffer" raw)))
+          text)))))
+
 (def %py-io-module
   (fn (_)
     (%py-module-new "io"
       (list
         (pair "StringIO" %py-cls-StringIO)
         (pair "BytesIO" %py-cls-BytesIO)
-        (pair "IOBase" %py-cls-IOBase)))))
+        (pair "IOBase" %py-cls-IOBase)
+        (pair "UnsupportedOperation" %py-exc-UnsupportedOperation)))))
