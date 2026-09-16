@@ -52,11 +52,6 @@
 ; a 16K frame is an ordinary size for one and a fatal recursion depth for
 ; the other shape (docs and the spec-crash signatures both say so).
 
-; ONLY tokens, and only for %py-list->string.  Nothing here knows what a
-; Python value is -- these are algorithms over ints, and python/types.x
-; reaches for them rather than the other way round.
-(import python/tokens)
-
 (provide python/bytes
   %pb-of-str %pb->str %pb-nul? %pb-len %pb-ref %pb-sub %pb-cat %pb-repeat
   %pb-eq? %pb-cmp %pb-find %pb-rfind %pb-count %pb-drop %pb-take %pb-starts? %pb-ends? %pb-in?
@@ -67,6 +62,10 @@
 
 (def %pb-code (prim-ref (lit char) (lit ->int)))
 (def %pb-char (prim-ref (lit int) (lit ->char)))
+; The engine's byte packer: the low byte of each character goes into the string.
+; list->string is not that door, because the platform's str-utf8 type makes it
+; encode each character, which writes a byte of 128 or more as two.
+(def %pb-pack (prim-ref (lit bytes) (lit ->str)))
 (def %pb-bref (prim-ref (lit str) (lit byte-ref)))
 (def %pb-blen (prim-ref (lit str) (lit byte-len)))
 
@@ -99,11 +98,12 @@
       ; the one door saying it differently -- so a spec asserting the refusal
       ; matched three crossings and missed this one.
       (Err raise (lit value) "a NUL byte is not representable here" ())
-      (%pb->str-go l ""))))
-(def %pb->str-go
+      (if (null? l) "" (%pb-pack (%pb-chars l ()))))))
+
+; The bytes as characters, for %pb-pack to put one low byte each into the string.
+(def %pb-chars
   (fn (self l acc)
-    (if (null? l) acc
-      (self (rest l) (Str8 append acc (%py-list->string (list (%pb-char (first l)))))))))
+    (if (null? l) (List reverse acc) (self (rest l) (pair (%pb-char (first l)) acc)))))
 
 ; --- the sequence ------------------------------------------------------------
 (def %pb-len (fn (_ l) (List length l)))
