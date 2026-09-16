@@ -100,3 +100,4 @@
 ; the class objects it builds on are in runtime-type.x, so it comes after
 (include-once "./collections.x")
 (include-once "./array.x")
+(include-once "./struct.x")
