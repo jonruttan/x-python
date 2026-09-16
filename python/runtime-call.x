@@ -775,6 +775,7 @@
       ((%py-list-is v) #f)
       ((%py-dict-is v) #f)
       ((%py-set-is v) (%py-set-frozen? v))
+      ((%py-dq-is v) #f)
       (#t #t))))
 (def %py-check-hashable!
   (fn (_ v)

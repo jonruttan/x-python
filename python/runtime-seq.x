@@ -64,6 +64,7 @@
         (if (if (%py-arr-is a) (%py-arr-is b) #f)
           (%py-eq (%py-list-new (%py-arr-el a)) (%py-list-new (%py-arr-el b)))
           #f))
+      ((if (%py-dq-is a) #t (%py-dq-is b)) (%py-dq-eq a b))
       ((%py-str-is a) (if (%py-str-is b) (%pb-eq? (%py-str-cps a) (%py-str-cps b)) #f))
       ((%py-str-is b) #f)
       ((%py-bytes-is a)
@@ -139,10 +140,19 @@
 ; what makes <, <=, > and >= answer for one without four arms of their own.
 (def %py-seq-of
   (fn (_ v)
-    (if (%py-list? v) (%py-list-elems v)
-      (if (%py-tuple-is v) (%py-tuple-elems v)
-        (if (%py-arr-is v) (%py-arr-el v) ())))))
-(def %py-seq? (fn (_ v) (if (%py-list? v) #t (if (%py-tuple-is v) #t (%py-arr-is v)))))
+    (match
+      ((%py-list? v) (%py-list-elems v))
+      ((%py-tuple-is v) (%py-tuple-elems v))
+      ((%py-arr-is v) (%py-arr-el v))
+      ((%py-dq-is v) (%py-dq-el v))
+      (#t ()))))
+(def %py-seq?
+  (fn (_ v)
+    (match
+      ((%py-list? v) #t)
+      ((%py-tuple-is v) #t)
+      ((%py-arr-is v) #t)
+      (#t (%py-dq-is v)))))
 (def %py-seq-cmp
   (fn (self a b)
     (match
@@ -260,6 +270,7 @@
         (let ((m (%py-dunder v "__len__")))
           (if (null? m) (Err raise (lit type) "object of this type has no len()" ()) (m))))
       ((%py-arr-is v) (%py-length (%py-arr-el v)))
+      ((%py-dq-is v) (%py-length (%py-dq-el v)))
       ((%py-dict? v) (%py-length (%py-dict-entries v)))
       ((%py-tuple-is v) (%py-length (%py-tuple-elems v)))
       ((%py-list? v) (%py-length (%py-list-elems v)))
@@ -280,6 +291,7 @@
         (let ((m (%py-dunder v "__getitem__")))
           (if (null? m) (Err raise (lit type) "object is not subscriptable" ()) (m i))))
       ((%py-arr-is v) (%py-arr-at v i))
+      ((%py-dq-is v) (%py-dq-at v i))
       ((%py-str-is v)
         (let ((l (%py-str-cps v)))
           (let ((n (%pb-len l)))
@@ -328,6 +340,7 @@
             (m i))))
       ((%py-dict? v) (%py-ddel v i))
       ((%py-list? v) ((%py-list-attr v "__delitem__") i))
+      ((%py-dq-is v) (%py-dq-del! v i))
       (#t (Err raise (lit type) "object does not support item deletion" ())))))
 ; the indices a slice selects, as (lo . hi) on a step of 1
 (def %py-slice-span
@@ -359,6 +372,7 @@
             (Err raise (lit type) "object does not support item assignment" ())
             (m i v))))
       ((%py-arr-is obj) (%py-arr-put! obj i v))
+      ((%py-dq-is obj) (%py-dq-put! obj i v))
       ((%py-dict? obj) (%py-dset obj i v))
       ((not (%py-list? obj))
         (Err raise (lit type) "object does not support item assignment" ()))
@@ -501,6 +515,7 @@
       ((%py-obj-is v) (%py-obj-elems v))
       ((%py-io-is v) (%py-io-drain! v))
       ((%py-arr-is v) (%py-arr-el v))
+      ((%py-dq-is v) (%py-dq-el v))
       ; Iterating a dict yields its KEYS, as in Python.
       ((%py-dict? v) (%py-dkeys (%py-dict-entries v)))
       ((%py-tuple-is v) (%py-tuple-elems v))
