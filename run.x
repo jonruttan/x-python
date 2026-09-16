@@ -23,9 +23,12 @@
 ; bundle wherever it happens to sit.  That is the whole of the arrangement,
 ; and it is the part the 2024 generation did not have.
 (import python/base)
-
+; A sweep after each load while a state image is written; see python/util.x.
+(%py-image-sweep!)
 (import python/repl)
+(%py-image-sweep!)
 (import python/line)
+(%py-image-sweep!)
 
 ; The launcher runs (%banner) then (repl).  The banner is replaced.  The loop
 ; is kept where there is a terminal: the platform's line editor reads the

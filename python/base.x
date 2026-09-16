@@ -45,12 +45,20 @@
 ; what it cannot do it fails at rather than answering uniformly.  The suite
 ; measures the difference; `make score` ranks what is still red.
 
+(import python/util)
+; A sweep after each load while a state image is written; see python/util.x.
 (import python/tokens)
+(%py-image-sweep!)
 (import python/indent)
+(%py-image-sweep!)
 (import python/types)
+(%py-image-sweep!)
 (import python/str)
+(%py-image-sweep!)
 (import python/runtime)
+(%py-image-sweep!)
 (import python/parse)
+(%py-image-sweep!)
 
 (provide python/base python-version python-run python-tokenize python-lex python-parse python-parse-expr %python-repl-print
   %py-eval %py-exec %py-compile)

@@ -52,13 +52,20 @@
 ; the xenon dialect keeps the boot to what this bundle actually uses --
 ; and keeps the modules loadable one at a time, which is what the
 ; platform's linter does.
-(import x/num/tower)
-(import x/type/dict)
 (import python/util)
+; A sweep after each load while a state image is written; see python/util.x.
+(import x/num/tower)
+(%py-image-sweep!)
+(import x/type/dict)
+(%py-image-sweep!)
 (import python/types)
+(%py-image-sweep!)
 (import python/format)
+(%py-image-sweep!)
 (import python/bytes)
+(%py-image-sweep!)
 (import python/str)
+(%py-image-sweep!)
 
 (provide python/runtime
   %py-add %py-sub %py-mul %py-div %py-floordiv %py-mod %py-pow %py-neg
@@ -91,13 +98,23 @@
 ; declarations and their set! live in different ones, and some defs
 ; evaluate at load ((Complex make 0.0 1.0) for one).
 (include-once "./runtime-num.x")
+(%py-image-sweep!)
 (include-once "./runtime-seq.x")
+(%py-image-sweep!)
 (include-once "./runtime-str.x")
+(%py-image-sweep!)
 (include-once "./runtime-obj.x")
+(%py-image-sweep!)
 (include-once "./runtime-flow.x")
+(%py-image-sweep!)
 (include-once "./runtime-call.x")
+(%py-image-sweep!)
 (include-once "./runtime-type.x")
+(%py-image-sweep!)
 ; the class objects it builds on are in runtime-type.x, so it comes after
 (include-once "./collections.x")
+(%py-image-sweep!)
 (include-once "./array.x")
+(%py-image-sweep!)
 (include-once "./struct.x")
+(%py-image-sweep!)
