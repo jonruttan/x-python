@@ -164,6 +164,45 @@
 (def %py-with-normal
   (fn (_ m) (%seq ((%py-exit-fn m) () () ()) ())))
 
+; --- async ---------------------------------------------------------------------
+; A coroutine IS a generator here: `async def` compiles to a generator
+; function whether or not its body yields, and `await` compiles to the same
+; delegation `yield from` does.  That is what Python does too, and it is why
+; a coroutine that never suspends finishes on its first send.
+;
+; These take the generator as an argument because delegating is something the
+; GENERATOR does, not the x call stack: %py-yield-from is handed the object
+; the yields talk to, so a helper can delegate on the body's behalf.
+
+(def %py-aenter
+  (fn (_ g m) (%py-yield-from g ((%py-ctx-method m "__aenter__")))))
+
+(def %py-awith-normal
+  (fn (_ g m) (%seq (%py-yield-from g ((%py-ctx-method m "__aexit__") () () ())) ())))
+
+(def %py-awith-exc
+  (fn (_ g m e)
+    (let ((r (%py-yield-from g
+               ((%py-ctx-method m "__aexit__")
+                 (%py-exc-class-of e) (%py-exc-instance-of e) ()))))
+      (if (%py-truthy r) () (error e)))))
+
+; `async for` asks __aiter__ for the iterator and awaits each __anext__ until
+; it raises StopAsyncIteration.
+(def %py-aiter
+  (fn (_ v)
+    (if (not (%py-obj-is v))
+      (Err raise (lit type) "async for requires an object with __aiter__" ())
+      (let ((f (%py-dunder v "__aiter__")))
+        (if (null? f) (Err raise (lit type) "async for requires an object with __aiter__" ()) (f))))))
+
+(def %py-anext-co
+  (fn (_ it)
+    (let ((f (%py-dunder it "__anext__")))
+      (if (null? f)
+        (Err raise (lit type) "async for requires an object with __anext__" ())
+        (f)))))
+
 ; the body raised: __exit__(type, value, None), and a truthy answer swallows it
 (def %py-with-exc
   (fn (_ m e)
@@ -628,7 +667,7 @@
 ; anything else is Python's TypeError
 (def %py-raise-any
   (fn (_ e)
-    (if (if (%py-class-is e) #t (if (%py-obj-is e) (%py-subclass? (%py-obj-class e) %py-exc-Exception) #f))
+    (if (if (%py-class-is e) #t (if (%py-obj-is e) (%py-subclass? (%py-obj-class e) %py-exc-BaseException) #f))
       (error (%py-exc-instance e ()))
       (Err raise (lit type) "exceptions must derive from BaseException" ()))))
 ; is a thrown value (class or instance) of this exception class?

@@ -628,6 +628,7 @@
 (def %py-exc-ValueError      (%py-exc-new "ValueError"      %py-exc-Exception))
 (def %py-exc-AssertionError  (%py-exc-new "AssertionError"  %py-exc-Exception))
 (def %py-exc-StopIteration   (%py-exc-new "StopIteration"   %py-exc-Exception))
+(def %py-exc-StopAsyncIteration (%py-exc-new "StopAsyncIteration" %py-exc-Exception))
 (def %py-exc-GeneratorExit   (%py-exc-new "GeneratorExit"   %py-exc-Exception))
 (def %py-exc-SystemExit      (%py-exc-new "SystemExit"      %py-exc-Exception))
 (def %py-exc-RuntimeError    (%py-exc-new "RuntimeError"    %py-exc-Exception))
@@ -716,8 +717,10 @@
 ; called.
 (def %py-raise
   (fn (_ inst)
+    ; BaseException, not Exception: the root is raisable itself, and so are
+    ; the few that sit beside Exception under it
     (if (if (%py-obj-is inst)
-          (%py-subclass? (%py-obj-class inst) %py-exc-Exception)
+          (%py-subclass? (%py-obj-class inst) %py-exc-BaseException)
           #f)
       (error inst)
       ; An ordinary object is not raisable, and neither is a number or a string.

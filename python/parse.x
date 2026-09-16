@@ -381,6 +381,14 @@
       ((%py-op-is? t "~")
         (let ((r (%py-unary (rest toks))))
           (pair (list (lit %py-invert) (first r)) (rest r))))
+      ; `await E` DELEGATES, which is what `yield from` does: the awaited
+      ; coroutine's yields travel out to whoever is driving this one, and its
+      ; return value is the expression's.
+      ((%py-kw? t "await")
+        (if (null? (first %py-in-async))
+          (Err raise (lit syntax) "await outside an async function" ())
+          (let ((r (%py-unary (rest toks))))
+            (pair (list (lit %py-yield-from) (lit %py-gen) (first r)) (rest r)))))
       (#t (%py-power toks)))))
 
 ; RIGHT-ASSOCIATIVE, and it matters: 2**3**2 is 2**(3**2) = 512, not 64.  The
@@ -1385,6 +1393,7 @@
         (list "chr"       (lit %py-chr))
         (list "ord"       (lit %py-ord))
         (list "StopIteration"  (lit %py-exc-StopIteration))
+        (list "StopAsyncIteration" (lit %py-exc-StopAsyncIteration))
         (list "GeneratorExit"  (lit %py-exc-GeneratorExit))
         (list "next"           (lit %py-next))
         (list "sum"            (lit %py-builtin-sum))
@@ -1464,6 +1473,25 @@
 ; nested in a method or a def nested in a method does not leak its neighbour's.
 (def %py-current-class (pair () ()))
 (def %py-current-self (pair () ()))
+
+; `async def` makes a COROUTINE, which here is a generator whose body need
+; not yield; the flag says so to the def about to be parsed, and the def
+; clears it before parsing its own body so a plain def nested inside an
+; async one is still a plain def.  %py-in-async is what `async for` and
+; `async with` require, and what makes either a SyntaxError outside one.
+(def %py-async-def (pair () ()))
+(def %py-in-async (pair () ()))
+
+; `async def` is a def that makes a coroutine.  Every place that reads a def
+; -- a statement, a decorated one, a method, a decorated method -- reads this
+; one too, so the `async` is taken off here and the flag left for %py-def.
+(def %py-async-strip
+  (fn (_ toks)
+    (if (if (%py-kw? (if (null? toks) () (first toks)) "async")
+          (%py-kw? (if (null? (rest toks)) () (first (rest toks))) "def")
+          #f)
+      (%seq (%set-first! %py-async-def #t) (rest toks))
+      toks)))
 
 ; THE NAMES A `del` MENTIONS, collected before the body is walked.  A name
 ; cannot be unbound here -- the engine defines a global and never removes one
@@ -1776,9 +1804,30 @@
 ;
 ; Several items NEST, left to right, which is what `with A() as a, B() as b:`
 ; means -- and it is why B's __exit__ runs before A's.
+; The enter and the two exits, as the forms to emit.  `async with` is the
+; same machinery awaiting the same three calls, so it passes its own trio
+; rather than growing a second copy of the wind-stack handling below.
+(def %py-with-enter
+  (fn (_ async?)
+    (if async?
+      (list (lit %py-aenter) (lit %py-gen) (lit %py-mgr))
+      (list (lit %py-enter) (lit %py-mgr)))))
+(def %py-with-ok
+  (fn (_ async?)
+    (if async?
+      (list (lit %py-awith-normal) (lit %py-gen) (lit %py-mgr))
+      (list (lit %py-with-normal) (lit %py-mgr)))))
+(def %py-with-raised
+  (fn (_ async?)
+    (if async?
+      (list (lit %py-awith-exc) (lit %py-gen) (lit %py-mgr) (lit %py-we))
+      (list (lit %py-with-exc) (lit %py-mgr) (lit %py-we)))))
+
 (def %py-with-body ())
-(set! %py-with-body
-  (fn (self items body)
+(def %py-with-body-of ())
+(set! %py-with-body (fn (_ items body) (%py-with-body-of items body #f)))
+(set! %py-with-body-of
+  (fn (self items body async?)
     (if (null? items)
       body
       (let ((it (first items)))
@@ -1786,7 +1835,7 @@
           (list (lit let) (list (list (lit %py-mgr) mgr))
             (list (lit let)
               (list (list (if (null? name) (lit %py-unused) name)
-                      (list (lit %py-enter) (lit %py-mgr))))
+                      (%py-with-enter async?)))
               ; a cell, so the normal exit is taken only when the body ran to
               ; the end: a handler that swallowed an exception has already
               ; called __exit__ and must not call it twice
@@ -1802,18 +1851,18 @@
                 (list (lit let) (list (list (lit %py-ww)
                                             (list (lit %py-wind-push!)
                                               (list (lit fn) (list (lit _))
-                                                (list (lit %py-with-normal) (lit %py-mgr))))))
+                                                (%py-with-ok async?)))))
                   (list (lit %seq)
                     (list (lit guard)
                       (list (lit %py-we)
                         (list (lit %seq) (list (lit %py-wind-drop!) (lit %py-ww))
-                          (list (lit %py-with-exc) (lit %py-mgr) (lit %py-we))))
+                          (%py-with-raised async?)))
                       (list (lit %seq)
-                        (self (rest items) body)
+                        (self (rest items) body async?)
                         (list (lit %set-first!) (lit %py-wok) #t)))
                     (list (lit %seq) (list (lit %py-wind-drop!) (lit %py-ww))
                       (list (lit if) (list (lit first) (lit %py-wok))
-                        (list (lit %py-with-normal) (lit %py-mgr))
+                        (%py-with-ok async?)
                         ()))))))))))))
 
 ; ITEM, ITEM, ... : each is an expression with an optional `as NAME`
@@ -1898,6 +1947,17 @@
                   (list (lit if) (list (lit %py-truthy) (first c))
                     (first b) (first e))
                   (rest e))))))
+        ; `async def`, `async for`, `async with` -- the last two only inside
+        ; an async def, which is what makes either a SyntaxError elsewhere
+        ((%py-kw? t "async")
+          (let ((nx (if (null? (rest toks)) () (first (rest toks)))))
+            (match
+              ((%py-kw? nx "def") (%py-def (rest (%py-async-strip toks))))
+              ((null? (first %py-in-async))
+                (Err raise (lit syntax) "async for and async with need an async function" ()))
+              ((%py-kw? nx "for") (%py-async-for (rest (rest toks))))
+              ((%py-kw? nx "with") (%py-async-with (rest (rest toks))))
+              (#t (Err raise (lit syntax) "expected def, for or with after async" ())))))
         ((%py-kw? t "for") (%py-for (rest toks)))
         ((%py-kw? t "while")
           (let ((c (%py-test (rest toks))))
@@ -1915,7 +1975,7 @@
                   (rest e))))))
         ((%py-op-is? t "@")
           (let ((ds (%py-decos-of toks ())))
-            (let ((t2 (rest ds)))
+            (let ((t2 (%py-async-strip (rest ds))))
               (if (not (%py-kw? (if (null? t2) () (first t2)) "def"))
                 (Err raise (lit syntax) "a decorator must be followed by a def" ())
                 (let ((r (%py-def (rest t2))))
@@ -2113,6 +2173,50 @@
                 (list (lit %seq) loop 1))))
           ()
           els)))))
+
+; `async for x in A:` -- __aiter__ once, then each __anext__ awaited until it
+; raises StopAsyncIteration.  The loop is the one `for` uses, with the pull
+; replaced by that await.
+(def %py-async-for
+  (fn (_ toks)
+    (if (not (eq? (%py-tag (if (null? toks) () (first toks))) (lit tok-name)))
+      (Err raise (lit syntax) "expected a name after async for" ())
+      (let ((n (%py-for-names toks ())))
+        (let ((syms (%py-syms-of (first n) ())))
+          (let ((it (%py-exprlist (rest n))))
+            (let ((b (%py-block (rest it))))
+              (let ((e (%py-loop-else (rest b))))
+                (pair
+                  (%py-loop-tail
+                    (list
+                      (list (lit fn) (list (lit self) (lit %py-ait))
+                        (list (lit let)
+                          (list (list (lit %py-item)
+                                  (list (lit guard)
+                                    (list (lit %py-ae)
+                                      (list (lit if)
+                                        (list (lit %py-exc-match) (lit %py-ae)
+                                          (lit %py-exc-StopAsyncIteration))
+                                        (lit %py-gen-done)
+                                        (list (lit error) (lit %py-ae))))
+                                    (list (lit %py-yield-from) (lit %py-gen)
+                                      (list (lit %py-anext-co) (lit %py-ait))))))
+                          (list (lit if) (list (lit same?) (lit %py-item) (lit %py-gen-done))
+                            ()
+                            (list (lit %seq)
+                              (%py-for-bind syms)
+                              (list (lit %seq) (%py-wrap-escape (first b) (lit %py-continue))
+                                (list (lit self) (lit %py-ait)))))))
+                      (list (lit %py-aiter) (first it)))
+                    (first e))
+                  (rest e))))))))))
+
+; `async with` is the same machinery `with` uses, awaiting the two methods.
+(def %py-async-with
+  (fn (_ toks)
+    (let ((items (%py-with-items toks ())))
+      (let ((blk (%py-block (rest items))))
+        (pair (%py-with-body-of (first items) (first blk) #t) (rest blk))))))
 
 (def %py-for
   (fn (_ toks)
@@ -2606,7 +2710,7 @@
 (def %py-class-methods-of ())
 (set! %py-class-methods-of
   (fn (self toks acc)
-    (let ((t (%py-skip-nl toks)))
+    (let ((t (%py-async-strip (%py-skip-nl toks))))
       (match
         ((null? t) (pair (%py-reverse acc) t))
         ; A DECORATED METHOD is the same entry with a call around its function:
@@ -2614,7 +2718,7 @@
         ; what goes in the alist is deco(fn) rather than fn.
         ((%py-op-is? (first t) "@")
           (let ((ds (%py-decos-of t ())))
-            (let ((t2 (rest ds)))
+            (let ((t2 (%py-async-strip (rest ds))))
               (if (not (%py-kw? (if (null? t2) () (first t2)) "def"))
                 (Err raise (lit syntax) "a decorator must be followed by a def" ())
                 (let ((nm (if (null? (rest t2)) () (first (rest t2)))))
@@ -2827,6 +2931,11 @@
                 (%py-append (if (null? kw-sym) withrest (%py-append withrest (list kw-sym)))
                   kwo-syms)))
             (def after (%py-skip-annotation (rest (rest toks))))
+            ; taken and cleared here: a plain def nested in this body is plain
+            (def %py-async-me (pair (first %py-async-def) ()))
+            (def %py-async-outer (first %py-in-async))
+            (%set-first! %py-async-def ())
+            (%set-first! %py-in-async (first %py-async-me))
             (let ((outer-self (first %py-current-self)))
               (%set-first! %py-current-self (if (null? syms) () (first syms)))
               (let ((b (%py-block after)))
@@ -2859,7 +2968,7 @@
                   ; when it is first advanced, so the prelude wraps the
                   ; %py-gen-new form rather than sitting inside it.
                   (def fn-form
-                    (if (%py-has-yield? (%py-block-contents after) #f)
+                    (if (if (first %py-async-me) #t (%py-has-yield? (%py-block-contents after) #f))
                       (list (lit fn) (pair (lit _) params)
                         (prelude
                           (list (lit %py-gen-new)
@@ -2883,6 +2992,7 @@
                       (pair (lit list) (%py-kwo-names kwonly ()))
                       #t))
                   (%set-first! %py-current-self outer-self)
+                  (%set-first! %py-in-async %py-async-outer)
                   (pair
                     (list (lit def) (%py-name->sym (%py-val name))
                       (let ((all-dflts (%py-append dflts (%py-kwo-dflts kwonly ()))))
