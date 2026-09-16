@@ -269,10 +269,10 @@
     (Lang use! (if (%py-str-is name) (%ps->x (%py-str-cps name)) name))
     ()))
 
-; Register "python" and make it the session's lang.  Registration is the
-; whole of what the editor needs; the seams it sets are read on the next
-; line the editor reads, and nothing reads them in a batch.
-(def %py-repl-install!
+; Register "python": what the line means, how it is coloured, what Tab
+; offers.  Registration is the whole of what the editor needs to switch to
+; it; the seams themselves are set by use!, and nothing reads them in a batch.
+(def %py-repl-register!
   (fn (_)
     (when (%py-lang?)
       (Lang register! "python"
@@ -282,8 +282,22 @@
               (pair (lit %repl-paint) %py-paint)
               (pair (lit %repl-marks) %py-marks)
               (pair (lit %repl-complete) %py-complete)
-              (pair (lit %repl-eval-line) %py-eval-line)))
+              (pair (lit %repl-eval-line) %py-eval-line))))))
+
+; Register, and make it the session's lang.
+(def %py-repl-install!
+  (fn (_)
+    (when (%py-lang?)
+      (%py-repl-register!)
       (Lang use! "python"))))
+
+; Whether this bundle owns the prompt.  `-l` is repeatable, and a bundle
+; named by a second or later -l is loaded beside the first lang: the wrapper
+; emits %lang-lead, the first name, and a bundle whose name it is not
+; registers itself and leaves the prompt alone.  A wrapper older than the
+; seam binds nothing, and then this bundle leads, as it always did.
+(def %py-leads?
+  (fn (_) (guard (_ #t) (str=? %lang-lead "python"))))
 
 ; Which loop the session gets is a fact of the process -- whether there is a
 ; terminal -- and a state image is written by a child with a pipe for stdin,
@@ -296,9 +310,11 @@
 ; are asked; the editor's own install asks the same two.
 (def %py-repl-choose!
   (fn (_)
-    (unless (guard (_ #f) %image-writing)
-      (unless (if (%py-lang?) (if (Sys isatty 0) #t (Sys isatty 3)) #f)
-        (set! repl %python-repl)))))
+    (when (%py-leads?)
+      (unless (guard (_ #f) %image-writing)
+        (unless (if (%py-lang?) (if (Sys isatty 0) #t (Sys isatty 3)) #f)
+          (set! repl %python-repl))))))
 (set! %image-recache-hooks (pair (fn (_) (%py-repl-choose!)) %image-recache-hooks))
 
-(provide python/repl %python-repl %python-banner %py-eval-line %py-repl-install! %py-repl-choose! %py-lang?)
+(provide python/repl %python-repl %python-banner %py-eval-line
+  %py-repl-register! %py-repl-install! %py-repl-choose! %py-lang? %py-leads?)
