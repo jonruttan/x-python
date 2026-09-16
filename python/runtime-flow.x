@@ -28,6 +28,26 @@
 ; raises ImportError, which is not a limitation so much as the truth -- and it
 ; is what the corpus's own feature probes expect, since they wrap an import in
 ; a try and print SKIP when it fails.
+; --- del NAME ----------------------------------------------------------------
+; The engine defines a global and never removes one, so a deleted name is
+; rebound to this value instead.  Only the names a `del` mentions read
+; through the check, so nothing else pays for it.
+(def %py-deleted (pair (lit %py-deleted) ()))
+
+(def %py-name-missing!
+  (fn (_ name)
+    (Err raise (lit name)
+      (Str8 append (Str8 append "name '" name) "' is not defined") ())))
+
+; The value of a name that a `del` mentions.
+(def %py-name-live
+  (fn (_ name v) (if (same? v %py-deleted) (%py-name-missing! name) v)))
+
+; What `del NAME` rebinds the name to: deleting a name that is already gone
+; is the same NameError as reading one.
+(def %py-name-gone
+  (fn (_ name v) (if (same? v %py-deleted) (%py-name-missing! name) %py-deleted)))
+
 (def %py-cls-module (%py-class-new "module" %py-cls-object () "module"))
 
 (def %py-module-new
