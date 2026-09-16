@@ -114,6 +114,8 @@
 ; the class objects it builds on are in runtime-type.x, so it comes after
 (include-once "./collections.x")
 (%py-image-sweep!)
+(include-once "./deque.x")
+(%py-image-sweep!)
 (include-once "./array.x")
 (%py-image-sweep!)
 (include-once "./struct.x")

@@ -93,10 +93,13 @@
 
 (def %py-iadd
   (fn (_ a b)
-    ; a list grows in place from ANY iterable, which is list.extend's rule
-    (if (%py-list? a)
-      (%seq (%py-list-set! a (%py-list-cat (%py-list-elems a) (%py-iter-elems b))) a)
-      (%py-inplace "__iadd__" %py-add a b))))
+    (match
+      ; a list grows in place from ANY iterable, which is list.extend's rule
+      ((%py-list? a)
+        (%seq (%py-list-set! a (%py-list-cat (%py-list-elems a) (%py-iter-elems b))) a))
+      ; and a deque by its own extend, which keeps its bound
+      ((%py-dq-is a) (%seq (%py-dq-extend! a b) a))
+      (#t (%py-inplace "__iadd__" %py-add a b)))))
 
 (def %py-isub    (fn (_ a b) (%py-inplace "__isub__" %py-sub a b)))
 (def %py-imul    (fn (_ a b) (%py-inplace "__imul__" %py-mul a b)))
@@ -120,6 +123,7 @@
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__add__" "__radd__" "+"))
       ((%py-arr-is a) (%py-arr-cat a b))
+      ((%py-dq-is a) (%py-dq-cat a b))
       ((match
          ((%py-view-is a) #t)
          ((%py-view-is b) #t)
@@ -301,6 +305,8 @@
     (match
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__mul__" "__rmul__" "*"))
+      ((%py-dq-is a) (%py-dq-repeat a b))
+      ((%py-dq-is b) (%py-dq-repeat b a))
       ((if (%py-list? a) #t (%py-list? b))
         (let ((l (if (%py-list? a) a b)))
           (let ((k (if (%py-list? a) b a)))
@@ -761,6 +767,7 @@
             (%py-in-walk a (%py-iter-elems b))
             (%py-truthy (m a)))))
       ((%py-arr-is b) (%py-in-walk a (%py-arr-el b)))
+      ((%py-dq-is b) (%py-in-walk a (%py-dq-el b)))
       ((%py-bytes-is b)
         (if (%py-bytes-is a)
           (%pb-in? (%py-bytes-list a) (%py-bytes-list b))

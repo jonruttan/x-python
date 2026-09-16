@@ -338,6 +338,7 @@
       ((%py-dict-is v) (not (null? (%py-dict-entries v))))
       ((%py-tuple-is v) (not (null? (%py-tuple-elems v))))
       ((%py-arr-is v) (not (null? (%py-arr-el v))))
+      ((%py-dq-is v) (not (null? (%py-dq-el v))))
       ((%py-obj-is v)
         (let ((b (%py-dunder v "__bool__")))
           (if (not (null? b))
@@ -881,6 +882,7 @@
       ((%py-tuple-is v) %py-cls-tuple)
       ((%py-io-is v) (if (%py-io-text? v) %py-cls-StringIO %py-cls-BytesIO))
       ((%py-arr-is v) %py-cls-array)
+      ((%py-dq-is v) %py-cls-deque)
       ((%py-obj-is v) (%py-obj-class v))
       ((%py-class-is v) %py-cls-type)
       ((%py-gen-is v) %py-cls-generator)
@@ -973,6 +975,9 @@
   (fn (_ obj start stop step)
     (let ((st (if (null? step) 1 step)))
       (match
+        ; a deque is indexed but never sliced
+        ((%py-dq-is obj)
+          (Err raise (lit type) "sequence index must be integer, not 'slice'" ()))
         ((= st 0) (Err raise (lit value) "slice step cannot be zero" ()))
         ((%py-str-is obj)
           (let ((l (%py-str-cps obj)))

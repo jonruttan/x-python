@@ -216,4 +216,5 @@
     (%py-module-new "collections"
       (list
         (pair "namedtuple" (%py-sig! %py-namedtuple "namedtuple" (list "typename" "field_names") 2 #f))
-        (pair "OrderedDict" %py-cls-OrderedDict)))))
+        (pair "OrderedDict" %py-cls-OrderedDict)
+        (pair "deque" %py-cls-deque)))))

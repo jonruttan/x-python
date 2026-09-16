@@ -51,6 +51,7 @@
   %py-bytes %py-bytes-new %py-bytes-of-str %py-bytes-is %py-bytes-str
   %py-bytes-list %py-bytes-only?
   %py-barr %py-barr-new %py-barr-of-str %py-barr-is %py-barr-set!
+  %py-dq %py-dq-new %py-dq-is %py-dq-max %py-dq-el %py-dq-set!
   %py-gen %py-gen-new %py-gen-is %py-gen-state
   %py-set %py-set-new %py-set-is %py-set-elems %py-set-set! %py-set-frozen?
   %py-view %py-view-new %py-view-is %py-view-kind %py-view-elems
@@ -624,6 +625,24 @@
       (pair (lit write)
         (fn (_ self) (display (%py-barr-repr (first (first self))))))
       (pair (lit length) (fn (_ self) (List length (first (first self))))))))
+
+; --- PY-DEQUE ----------------------------------------------------------------
+; collections.deque: its bound, and its elements behind a cell so every name
+; bound to one sees a change.  Declared here with the other values the
+; dispatchers test for, so no door asks for one before the test exists;
+; python/deque.x holds the operations.
+(def %py-dq ())
+(def %py-dq-new (fn (_ maxlen elems) (%make-instance %py-dq (list maxlen elems))))
+(def %py-dq-is (fn (_ v) (%type? v %py-dq)))
+(def %py-dq-max (fn (_ v) (first (first v))))
+(def %py-dq-el (fn (_ v) (first (rest (first v)))))
+(def %py-dq-set! (fn (_ v l) (%seq (%set-first! (rest (first v)) l) ())))
+(set! %py-dq
+  (%make-type
+    "PY-DEQUE"
+    (list
+      (pair (lit write) (fn (_ self) (display (%py-dq-repr self))))
+      (pair (lit length) (fn (_ self) (%py-length (%py-dq-el self)))))))
 
 ; %py-bytes-is IS THE BYTES-LIKE TEST, and answers for a bytearray too.  That
 ; is not a shortcut: at every seam it guards -- concatenation, comparison,
