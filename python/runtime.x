@@ -118,6 +118,8 @@
 (%py-image-sweep!)
 (include-once "./array.x")
 (%py-image-sweep!)
+(include-once "./memoryview.x")
+(%py-image-sweep!)
 (include-once "./struct.x")
 (%py-image-sweep!)
 (include-once "./io.x")

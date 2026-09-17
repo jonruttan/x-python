@@ -517,6 +517,14 @@
         (pair "SimpleNamespace" %py-cls-SimpleNamespace)
         (pair "coroutine" (%py-sig! (fn (_ f) f) "coroutine" (list "func") 1 #f))))))
 
+; gc: nothing here collects on its own, so collect() is the platform's own
+; sweep, hand-placed as every other sweep in this bundle is.  It answers 0,
+; the count of unreachable objects Python reports.
+(def %py-gc-module
+  (fn (_)
+    (%py-module-new "gc"
+      (list (pair "collect" (fn (_ . a) (%seq (Heap collect) 0)))))))
+
 ; The modules this runtime offers, each built on first import and remembered
 ; after.
 (def %py-module-build
@@ -529,6 +537,7 @@
       ((Str8 =? name "struct") (%py-struct-module))
       ((Str8 =? name "types") (%py-types-module))
       ((Str8 =? name "io") (%py-io-module))
+      ((Str8 =? name "gc") (%py-gc-module))
       ((Str8 =? name "builtins") (%py-module-new "builtins" ()))
       (#t ()))))
 
