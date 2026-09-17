@@ -841,6 +841,29 @@
       (let ((m (%py-method-find-below (first bs) name)))
         (if (null? m) (self (rest bs) name) m)))))
 
+; The class whose own rows answer a name, by the walk %py-method-find takes:
+; depth first and left to right below object, then object.
+(def %py-method-owner
+  (fn (_ cls name)
+    (let ((c (%py-method-owner-below cls name)))
+      (match
+        ((not (null? c)) c)
+        ((null? (%py-alist-find name (%py-class-methods %py-cls-object))) ())
+        (#t %py-cls-object)))))
+(def %py-method-owner-below
+  (fn (self cls name)
+    (match
+      ((null? cls) ())
+      ((same? cls %py-cls-object) ())
+      ((not (null? (%py-alist-find name (%py-class-methods cls)))) cls)
+      (#t (%py-method-owner-bases (%py-class-bases cls) name)))))
+(def %py-method-owner-bases
+  (fn (self bs name)
+    (if (null? bs)
+      ()
+      (let ((c (%py-method-owner-below (first bs) name)))
+        (if (null? c) (self (rest bs) name) c)))))
+
 ; A name a builtin value's own attribute table does not have, answered from its
 ; class's rows: a classmethod binds the class, and a method binds the value, so
 ; `[1].__init__([2])` and `{}.fromkeys(ks)` work as they do read off the class.
@@ -904,8 +927,15 @@
               ((%py-desc-get? m)
                 ((%py-dunder m "__get__") obj (%py-obj-class obj)))
               ((if (null? m) #f (not (%py-fn-is m))) m)
-              ((if (null? m) #f (not (%py-user-fn? m))) m)
               ((Str8 =? name "__new__") m)
+              ; A builtin function binds when a class this runtime provides
+              ; carries it, since those are the type's methods, as
+              ; `ValueError("x").__str__` is; one a program's class carries,
+              ; as with `f = len`, does not.
+              ((if (null? m) #f (not (%py-user-fn? m)))
+                (if (%py-class-program? (%py-method-owner (%py-obj-class obj) name))
+                  m
+                  (%py-bound-new m obj)))
               ((null? m)
                 (let ((n (%py-obj-native obj)))
                   (if (not (null? n))
@@ -978,6 +1008,11 @@
 ; delete on a builtin type, and this is the test for one.
 (def %py-class-builtin?
   (fn (_ c) (Str8 =? (%py-class-qualname c) (%py-class-name c))))
+; A class a class statement made, which %py-mkclass qualifies as __main__.Foo.
+; The runtime's own classes, collections.deque and namedtuple's among them, are
+; qualified otherwise.
+(def %py-class-program?
+  (fn (_ c) (Str8 starts? "__main__." (%py-class-qualname c))))
 (def %py-immutable-type!
   (fn (_ verb cls name)
     (Err raise (lit type)

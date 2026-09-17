@@ -551,7 +551,7 @@
 (def %py-int-to-bytes
   (%py-sig!
     (fn (_ self . more)
-      (let ((n (%py-boolnorm self))
+      (let ((n (%py-boolnorm (%py-native-of self)))
             (nb (%py-int-length (%py-opt more 0 1)))
             (order (%py-int-byteorder (%py-opt more 1 "big")))
             (signed (%py-truthy (%py-kwonly more "signed" #f))))

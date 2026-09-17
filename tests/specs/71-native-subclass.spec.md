@@ -210,6 +210,30 @@ list() takes no keyword arguments
 'frozenset' object has no attribute 'add'
 ```
 
+### a str and a tuple answer their class's rows too
+
+```python
+(python-run "s = \"ab\"\nt = (1, 2)\nprint(s.__len__(), s.__getitem__(1), s.__contains__(\"a\"), s.__add__(\"c\"), s.__repr__())\nprint(t.__len__(), t.__getitem__(0), t.__contains__(2), t.__add__((3,)))\nf = s.__len__\nprint(f(), hasattr(s, \"__len__\"), hasattr(t, \"__eq__\"))\ntry:\n    s.nosuch\nexcept AttributeError as e:\n    print(e)")
+```
+---
+```output
+2 b True abc 'ab'
+2 1 True (1, 2, 3)
+2 True True
+'str' object has no attribute 'nosuch'
+```
+
+### a subclass instance's builtin dunders are bound methods
+
+```python
+(python-run "from collections import deque, namedtuple, OrderedDict\nclass L(list): pass\nclass D(dict): pass\nclass T(tuple): pass\nclass S(str): pass\nclass Q(deque): pass\nclass I(int): pass\nclass O(OrderedDict): pass\nP = namedtuple(\"P\", \"x y\")\nprint(L([1, 2]).__len__(), D(a=1).__getitem__(\"a\"), T((1,)).__contains__(1), S(\"ab\").__len__())\nprint(Q([1, 2]).__len__(), I(258).to_bytes(2, \"big\"), O(a=1).__repr__(), P(1, 2).__repr__())")
+```
+---
+```output
+2 1 True 2
+2 b'\x01\x02' O({'a': 1}) P(x=1, y=2)
+```
+
 ### bytearray and deque subclasses start empty and __init__ fills them
 
 ```python
