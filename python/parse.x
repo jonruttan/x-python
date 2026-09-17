@@ -438,6 +438,63 @@
 ; literal's utf-8 -- so adjacency is one join.
 (def %py-lit-join (fn (_ a b) (%py-append a b)))
 
+; A RUN OF ADJACENT TEXT LITERALS, which is where an f-string joins the
+; others: Python concatenates the pieces, and one f-string among them makes
+; the whole run one.  A plain piece beside it stays literal text, braces
+; included, because only an f-string's own body carries fields.
+(def %py-text-tok?
+  (fn (_ t)
+    (if (eq? (%py-tag t) (lit tok-string)) #t (eq? (%py-tag t) (lit tok-fstring)))))
+(def %py-text-run
+  (fn (self toks acc)
+    (if (if (null? toks) #f (%py-text-tok? (first toks)))
+      (self (rest toks) (pair (first toks) acc))
+      (pair (%py-reverse acc) toks))))
+(def %py-any-fstring?
+  (fn (self ts)
+    (if (null? ts)
+      #f
+      (if (eq? (%py-tag (first ts)) (lit tok-fstring)) #t (self (rest ts))))))
+(def %py-text-join
+  (fn (self ts acc)
+    (if (null? ts) acc (self (rest ts) (%py-append acc (%py-val (first ts)))))))
+(def %py-text-parts
+  (fn (self ts acc)
+    (if (null? ts)
+      acc
+      (self (rest ts)
+        (%py-append acc
+          (if (eq? (%py-tag (first ts)) (lit tok-fstring))
+            (%py-fstring-parts (%pb->str (%py-val (first ts))))
+            (list (%pb->str (%py-val (first ts))))))))))
+
+; THE RUN'S CODE POINTS ARE DECIDED HERE, once, at parse time: the tokenizer
+; hands over the utf-8 (it cannot reach python/str.x, which imports it), and
+; the emitted form is the code point list itself rather than a decode the
+; evaluator would repeat on every evaluation.
+;
+; AN f-STRING BODY IS SCANNED AS A PLATFORM STRING.  The token carries utf-8
+; like a plain literal, but this body is not a value -- it is SOURCE,
+; re-tokenized field by field -- and the scanner reads it with Str8 doors, so
+; it crosses over here instead of being decoded to code points.  That makes a
+; zero byte in a run holding an f-string raise where a plain run carries it:
+; %pb->str refuses rather than truncate.  It is the same limit the format
+; engines have, and where the f-string case in 64-inplace-and-bytes.spec.md
+; lands.
+;
+; AND THE RESULT IS A str.  %py-fjoin builds a PLATFORM string, which is right
+; for the other caller -- a nested spec, handed to %py-format-spec as one.
+; Here the value is what the program gets, so it crosses back: without this an
+; f-string evaluated to a platform string and print showed it QUOTED (`x="7"`
+; for `f'{x=}'`), because %py-display saw something that was not a str and fell
+; through to %py-write.
+(def %py-text-form
+  (fn (_ ts)
+    (if (%py-any-fstring? ts)
+      (list (lit %py-str-of-x)
+        (list (lit %py-fjoin) (pair (lit list) (%py-text-parts ts ()))))
+      (list (lit %py-str-new) (pair (lit list) (%ps-decode (%py-text-join ts ()) ()))))))
+
 (set! %py-postfix
   (fn (_ toks)
     (def %a (%py-atom toks))
@@ -1051,38 +1108,15 @@
           ; python/str.x, which imports it), and the emitted form is the
           ; code point list itself rather than a decode the evaluator would
           ; repeat on every evaluation.
-          ((eq? (%py-tag t) (lit tok-string))
-            (let ((r (%py-adjacent (lit tok-string) (%py-val t) (rest toks))))
-              (pair
-                (list (lit %py-str-new) (pair (lit list) (%ps-decode (first r) ())))
-                (rest r))))
+          ((%py-text-tok? t)
+            (let ((r (%py-text-run toks ())))
+              (pair (%py-text-form (first r)) (rest r))))
           ; THE VALUE IS A BYTE LIST, so it is emitted as one: a (list ...)
           ; form the evaluator builds, not a datum standing where a form
           ; belongs.
           ((eq? (%py-tag t) (lit tok-bytes))
             (let ((r (%py-adjacent (lit tok-bytes) (%py-val t) (rest toks))))
               (pair (list (lit %py-bytes-new) (pair (lit list) (first r))) (rest r))))
-          ; AN f-STRING BODY IS SCANNED AS A PLATFORM STRING.  The token
-          ; carries UTF-8 bytes like tok-string above, but this body is not a
-          ; value -- it is SOURCE, re-tokenized field by field -- and the
-          ; scanner reads it with Str8 doors, so it crosses over here instead
-          ; of being decoded to code points.
-          ;
-          ; That makes a zero byte in an f-string BODY raise where a plain
-          ; literal carries it: %pb->str refuses rather than truncate.  It is
-          ; the same limit the format engines have, and where the f-string case
-          ; in 64-inplace-and-bytes.spec.md lands.
-          ; AND THE RESULT IS A str.  %py-fstring-form emits a %py-fjoin, which
-          ; builds a PLATFORM string, and that is right for the other caller --
-          ; a nested spec, which is handed to %py-format-spec as one.  At the
-          ; top level the value is what the program gets, so it crosses back:
-          ; without this an f-string evaluated to a platform string and print
-          ; showed it QUOTED (`x="7"` for `f'{x=}'`), because %py-display saw
-          ; something that was not a str and fell through to %py-write.
-          ((eq? (%py-tag t) (lit tok-fstring))
-            (pair (list (lit %py-str-of-x)
-                    (%py-fstring-form (%pb->str (%py-val t))))
-                  (rest toks)))
           ((%py-super-call? toks)
             (match
               ; super(type, obj): the arguments go through to the runtime
@@ -1331,28 +1365,36 @@
           form
           (list (lit %py-fjoin) (list (lit list) expr-s0 form)))))))
 
-(def %py-fstring-form
+; The PARTS of an f-string body: a run of literal text as itself, a field as
+; the form that renders it.  The accumulator is `text` and NOT `lit`, which is
+; the name of the form two lines below it -- as `lit` it shadowed that form, so
+; this function's own refusal read `(<the text so far> syntax ...)` and a single
+; '}' died as "object: no such method syntax".
+(def %py-fstring-parts
   (fn (_ s)
     (def n (Str8 length s))
     (def go
-      (fn (self i lit acc)
-        (def flush (fn (_) (if (Str8 =? lit "") acc (pair lit acc))))
+      (fn (self i text acc)
+        (def flush (fn (_) (if (Str8 =? text "") acc (pair text acc))))
         (if (>= i n)
           (%py-reverse (flush))
           (let ((c (%py-fs-code s i)))
             (if (= c 123)
               (if (if (< (+ i 1) n) (= (%py-fs-code s (+ i 1)) 123) #f)
-                (self (+ i 2) (Str8 append lit "{") acc)
+                (self (+ i 2) (Str8 append text "{") acc)
                 (let ((close (%py-fs-expr-close s (+ i 1) ())))
                   (self (+ close 1) ""
                     (pair (%py-fstring-field (Str8 sub (+ i 1) (- close (+ i 1)) s))
                       (flush)))))
               (if (= c 125)
                 (if (if (< (+ i 1) n) (= (%py-fs-code s (+ i 1)) 125) #f)
-                  (self (+ i 2) (Str8 append lit "}") acc)
+                  (self (+ i 2) (Str8 append text "}") acc)
                   (Err raise (lit syntax) "f-string: single '}' is not allowed" ()))
-                (self (+ i 1) (Str8 append lit (Str8 sub i 1 s)) acc)))))))
-    (list (lit %py-fjoin) (pair (lit list) (go 0 "" ())))))
+                (self (+ i 1) (Str8 append text (Str8 sub i 1 s)) acc)))))))
+    (go 0 "" ())))
+
+(def %py-fstring-form
+  (fn (_ s) (list (lit %py-fjoin) (pair (lit list) (%py-fstring-parts s)))))
 
 ; A Python name becomes an x symbol, EXCEPT the builtins that have a runtime
 ; function -- `print` is the only one so far.  A name table rather than a

@@ -29,6 +29,27 @@ x=42 'w' 0042 84 {x}     42|
 2s
 ```
 
+### adjacent literals join, and one f-string makes the run one
+
+```python
+(python-run "x, y = 1, 2\nprint(f\"\" f\"\")\nprint(f\"a\" f\"b\")\nprint(f\"{x}\" f\"{y}\")\nprint(\"a\" f\"{x}\" \"b\")\nprint(f\"{x}\" \"a{}b\" f\"{y}\")\nprint(\n    f\"a{x}b-\"\n    f\"cd-\"\n    f\"e{y}f\"\n)\nprint(f\"a\" \"b\" f\"c\" '''d''' rf\"\\n\" \"e\")\nprint(\"plain\" \"join\")\nprint(f\"{x}{{}}\" \"{}\")\ntry:\n    eval(\"f'{{}'\")\nexcept (ValueError, SyntaxError):\n    print(\"SyntaxError\")\ntry:\n    eval('f\"}\"')\nexcept (ValueError, SyntaxError):\n    print(\"SyntaxError\")\nprint(f\"{x=}\", f\"{'q'!r:>5}\")")
+```
+---
+```output
+
+ab
+12
+a1b
+1a{}b2
+a1b-cd-e2f
+abcd\ne
+plainjoin
+1{}{}
+SyntaxError
+SyntaxError
+x=1   'q'
+```
+
 ### nested replacement fields in the spec
 
 ```python
