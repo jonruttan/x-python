@@ -338,6 +338,7 @@
       ((%py-dict-is v) (not (null? (%py-dict-entries v))))
       ((%py-tuple-is v) (not (null? (%py-tuple-elems v))))
       ((%py-arr-is v) (not (null? (%py-arr-el v))))
+      ((%py-mv-is v) (< 0 (%py-mv-len v)))
       ((%py-dq-is v) (not (null? (%py-dq-el v))))
       ((%py-obj-is v)
         (let ((b (%py-dunder v "__bool__")))
@@ -1077,6 +1078,7 @@
       ((%py-tuple-is v) %py-cls-tuple)
       ((%py-io-is v) (if (%py-io-text? v) %py-cls-StringIO %py-cls-BytesIO))
       ((%py-arr-is v) %py-cls-array)
+      ((%py-mv-is v) %py-cls-memoryview)
       ((%py-dq-is v) %py-cls-deque)
       ((%py-obj-is v) (%py-obj-class v))
       ((%py-class-is v) %py-cls-type)
@@ -1181,6 +1183,7 @@
           (let ((l (%py-bytes-list obj)))
             ((if (%py-barr-is obj) %py-barr-new %py-bytes-new)
               (%py-sl-pick l (%py-slice-idxs (%pb-len l) start stop st) ()))))
+        ((%py-mv-is obj) (%py-mv-slice obj start stop step))
         ((%py-list-is obj)
           (%py-list-new
             (%py-sl-pick (%py-list-elems obj)
