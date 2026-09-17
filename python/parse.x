@@ -676,7 +676,7 @@
     (let ((r (%py-comp-scoped elems (fn (_) (%py-test elems)))))
       (if (not (%py-kw? (if (null? (rest r)) () (first (rest r))) "for"))
         (Err raise (lit syntax) "expected for in generator expression" ())
-        (let ((cls (%py-comp-scoped elems (fn (_) (%py-comp-clauses (rest r) ())))))
+        (let ((cls (%py-comp-clauses (rest r) ())))
           (list (lit %py-gen-new)
             (list (lit fn) (list (lit _) (lit %py-gen))
               (list (lit %py-escape)
@@ -928,7 +928,9 @@
             (list (lit self) (list (lit rest) (lit %py-items))))))
       (list (lit %py-iter-elems) iter))))
 
-; (for SYMS ITER-FORM) and (if COND-FORM), in source order
+; (for SYMS ITER-FORM) and (if COND-FORM), in source order.  The first iterable
+; is evaluated in the enclosing scope, as in Python, so it is compiled before the
+; names the clauses bind are in scope, and every clause after it with them.
 (def %py-comp-clauses ())
 (set! %py-comp-clauses
   (fn (self toks acc)
@@ -937,8 +939,10 @@
       ((%py-kw? (first toks) "for")
         (let ((n (%py-for-names (rest toks) ())))
           (let ((it (%py-or-e (rest n))))
-            (self (rest it)
-              (pair (list (lit for) (%py-syms-of (first n) ()) (first it)) acc)))))
+            (let ((more (pair (list (lit for) (%py-syms-of (first n) ()) (first it)) acc)))
+              (if (null? acc)
+                (%py-comp-scoped toks (fn (_) (self (rest it) more)))
+                (self (rest it) more))))))
       ((%py-kw? (first toks) "if")
         (let ((c (%py-or-e (rest toks))))
           (self (rest c) (pair (list (lit if) (first c)) acc))))
@@ -965,7 +969,7 @@
     (let ((r (%py-comp-scoped elems (fn (_) (%py-test elems)))))
       (if (not (%py-kw? (if (null? (rest r)) () (first (rest r))) "for"))
         (Err raise (lit syntax) "expected for in comprehension" ())
-        (let ((cls (%py-comp-scoped elems (fn (_) (%py-comp-clauses (rest r) ())))))
+        (let ((cls (%py-comp-clauses (rest r) ())))
           (list (lit let)
             (list (list (lit %py-acc) (list (lit pair) () ())))
             (list (lit %seq)
@@ -982,7 +986,7 @@
     (let ((r (%py-comp-scoped elems (fn (_) (%py-test elems)))))
       (if (not (%py-kw? (if (null? (rest r)) () (first (rest r))) "for"))
         (Err raise (lit syntax) "expected for in comprehension" ())
-        (let ((cls (%py-comp-scoped elems (fn (_) (%py-comp-clauses (rest r) ())))))
+        (let ((cls (%py-comp-clauses (rest r) ())))
           (list (lit let)
             (list (list (lit %py-acc) (list (lit pair) () ())))
             (list (lit %seq)
@@ -999,7 +1003,7 @@
         (let ((v (%py-comp-scoped elems (fn (_) (%py-test (rest (rest k)))))))
           (if (not (%py-kw? (if (null? (rest v)) () (first (rest v))) "for"))
             (Err raise (lit syntax) "expected for in comprehension" ())
-            (let ((cls (%py-comp-scoped elems (fn (_) (%py-comp-clauses (rest v) ())))))
+            (let ((cls (%py-comp-clauses (rest v) ())))
               (list (lit let)
                 (list (list (lit %py-acc) (list (lit %py-mkdict))))
                 (list (lit %seq)
@@ -1358,6 +1362,8 @@
         (list "True"  #t)
         (list "False" #f)
         (list "None"  ())
+        ; True, since no program here is run with -O
+        (list "__debug__" #t)
         (list "len"   (lit %py-len))
         (list "range" (lit %py-cls-range))
         ; str and list are now the CLASS OBJECTS -- calling one still converts,
