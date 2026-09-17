@@ -36,6 +36,26 @@ TypeError
 TypeError
 ```
 
+### every source bytes and bytearray take
+
+```python
+(python-run "print(bytes(iter([128, 255])), bytearray(iter([1, 2])))\nprint(bytes(x for x in [1, 2]), bytes({3, 4}), bytes({1: 2}), bytes(range(3)))\nprint(bytes(5), bytes(True), bytearray(3))\n\n\ndef err(f):\n    try:\n        f()\n    except (TypeError, ValueError) as e:\n        print(type(e).__name__, e)\n\n\nerr(lambda: bytes(5.5))\nerr(lambda: bytearray(5.5))\nerr(lambda: bytes(None))\nerr(lambda: bytearray(None))\nerr(lambda: bytes([1, 2, 300]))\nerr(lambda: bytes(-1))\nerr(lambda: bytearray(-1))\nerr(lambda: bytes(\"abc\"))")
+```
+---
+```output
+b'\x80\xff' bytearray(b'\x01\x02')
+b'\x01\x02' b'\x03\x04' b'\x01' b'\x00\x01\x02'
+b'\x00\x00\x00\x00\x00' b'\x00' bytearray(b'\x00\x00\x00')
+TypeError cannot convert 'float' object to bytes
+TypeError cannot convert 'float' object to bytearray
+TypeError cannot convert 'NoneType' object to bytes
+TypeError cannot convert 'NoneType' object to bytearray
+ValueError bytes must be in range(0, 256)
+ValueError negative count
+ValueError negative count
+TypeError string argument without an encoding
+```
+
 ### bytes values
 
 ```python
