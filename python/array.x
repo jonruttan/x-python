@@ -24,13 +24,14 @@
   (fn (self n acc) (if (= n 0) acc (self (- n 1) (* acc 2)))))
 
 ; --- IEEE 754 -----------------------------------------------------------------
-; A float's bit pattern at half, single or double width, and back, for the f and
-; d typecodes here and the e, f and d codes of python/struct.x.  Both directions
-; are exact arithmetic on the value: frexp finds the exponent, the significand
-; is scaled to an integer and rounded half to even by rint, and a carry out of
-; the fraction moves the exponent up.  A finite value past the width's range
-; comes back as the infinity's pattern, which struct refuses and array('f')
-; keeps, as CPython's cast does.  A NaN is the positive quiet NaN.
+; A float IS its IEEE 754 double bit pattern here -- lib/x/num/float.x stores it
+; that way, and python/runtime-obj.x's repr already reads the sign, exponent and
+; mantissa out of it with div/mod against powers of two.  So d is that pattern,
+; and f and e are the same fields narrowed and widened, rounded half to even.
+; Nothing below computes a float.
+;
+; A finite value past the narrower range comes back as the infinity's pattern,
+; which struct refuses and array('f') keeps, as CPython's cast does.
 
 ; (size exponent-bits fraction-bits bias top one sign): top is the all-ones
 ; exponent, one is 2**fraction-bits, and sign is the sign bit.
@@ -47,53 +48,103 @@
 (def %py-ieee-one (fn (_ f) (first (rest (rest (rest (rest (rest f))))))))
 (def %py-ieee-sign (fn (_ f) (first (rest (rest (rest (rest (rest (rest f)))))))))
 
-(def %py-ieee-inf (%py-float-of-str "inf"))
-(def %py-ieee-nan (%py-float-of-str "nan"))
-(def %py-ieee-pow2 (fn (_ k) (Float pow 2.0 (* k 1.0))))
+(def %py-ieee-2p63 (%py-floordiv %py-f-2p64 2))
 
-; The exponent and fraction fields of a finite a > 0.  A normal a is its
-; significand less the leading 1, scaled to an integer; a subnormal one is a
-; count of the smallest subnormal, scaled up in two halves so that neither power
-; of two overflows a double.  A carry lands in the exponent by the addition, and
-; a pattern at or past the all-ones exponent is the infinity's.
-(def %py-ieee-finite
-  (fn (_ a f)
-    (let ((fe (%py-mfrexp-pair a)) (bias (%py-ieee-bias f)) (fbits (%py-ieee-fbits f))
-          (inf (* (%py-ieee-top f) (%py-ieee-one f))))
-      (let ((be (+ (- (rest fe) 1) bias)))
-        (if (< 0 be)
-          (let ((n (+ (* be (%py-ieee-one f))
-                      (Float ->int
-                        (Float rint (* (- (* (first fe) 2.0) 1.0) (%py-ieee-pow2 fbits)))))))
-            (if (< n inf) n inf))
-          (let ((k (+ (- bias 1) fbits)))
-            (let ((h (Num quotient k 2)))
-              (Float ->int
-                (Float rint (* (* a (%py-ieee-pow2 h)) (%py-ieee-pow2 (- k h))))))))))))
+; The double's pattern as an unsigned integer, and the float a pattern stands
+; for -- the sign bit makes the stored pattern negative as a machine int.
+;
+; -0.0 IS THE ONE PATTERN THE TOWER CANNOT ADD TO: it is INT64_MIN, and
+; (- 0 INT64_MIN) and (+ INT64_MIN 2**64) both answer a corrupt bigint (one
+; that prints as -9-223372036-854775808).  Both zeros are answered from their
+; sign instead, which needs no arithmetic at all.
+(def %py-ieee-neg-zero (%py-fcopysign 0.0 (- 0.0 1.0)))
+(def %py-ieee-raw
+  (fn (_ x)
+    (if (= x 0.0)
+      (if (< (%py-fcopysign 1.0 x) 0.0) %py-ieee-2p63 0)
+      (let ((b (first x))) (if (< b 0) (%py-add b %py-f-2p64) b)))))
+(def %py-ieee-float
+  (fn (_ u)
+    (match
+      ((= u 0) 0.0)
+      ((= u %py-ieee-2p63) %py-ieee-neg-zero)
+      ((< u %py-ieee-2p63) (%make-instance %float u))
+      (#t (%make-instance %float (%py-sub u %py-f-2p64))))))
 
-; The unsigned bit pattern of the float x at format f.
+; m / 2**k rounded half to even, which is how a narrower format takes the bits
+; it cannot keep.
+(def %py-ieee-round
+  (fn (_ m k)
+    (let ((p (%py-f-pow 2 k)))
+      (let ((q (%py-floordiv m p)) (r (%py-mod m p)) (h (%py-f-pow 2 (- k 1))))
+        (match
+          ((< r h) q)
+          ((< h r) (%py-add q 1))
+          ((= (%py-mod q 2) 1) (%py-add q 1))
+          (#t q))))))
+
+; The double pattern u at the narrower format f.  A double subnormal is far
+; below f's smallest subnormal and rounds to zero; a carry out of the fraction
+; moves the exponent up by the addition, and a pattern at or past the all-ones
+; exponent is the infinity's.
+(def %py-ieee-narrow
+  (fn (_ u f)
+    (let ((sign (if (< u %py-ieee-2p63) 0 (%py-ieee-sign f)))
+          (hi (%py-mod (%py-floordiv u %py-f-2p52) 2048))
+          (m (%py-mod u %py-f-2p52)))
+      (let ((one (%py-ieee-one f)) (fbits (%py-ieee-fbits f))
+            (inf (%py-mul (%py-ieee-top f) (%py-ieee-one f))))
+        (match
+          ((= hi 2047)
+            (%py-add sign (%py-add inf (if (= m 0) 0 (%py-floordiv one 2)))))
+          ((= hi 0) sign)
+          (#t
+            (let ((be (%py-add (- hi 1023) (%py-ieee-bias f)))
+                  (sig (%py-add m %py-f-2p52)))
+              (if (< 0 be)
+                (let ((n (%py-add (%py-mul be one)
+                           (%py-sub (%py-ieee-round sig (- 52 fbits)) one))))
+                  (%py-add sign (if (< n inf) n inf)))
+                (%py-add sign
+                  (%py-ieee-round sig (%py-sub (- 53 fbits) be)))))))))))
+
+; The double pattern the narrower pattern n stands for.  A subnormal there is a
+; normal double: its fraction shifts up until the leading bit is in place, and
+; the exponent comes down with it.
+(def %py-ieee-widen-shift
+  (fn (self frac one k)
+    (if (< frac one) (self (%py-mul frac 2) one (+ k 1)) (pair frac k))))
+(def %py-ieee-widen
+  (fn (_ n f)
+    (let ((one (%py-ieee-one f)) (fbits (%py-ieee-fbits f)) (bias (%py-ieee-bias f))
+          (sb (%py-ieee-sign f)))
+      (let ((sign (if (< n sb) 0 %py-ieee-2p63)) (m (if (< n sb) n (%py-sub n sb))))
+        (let ((be (%py-floordiv m one)) (frac (%py-mod m one))
+              (wide (%py-f-pow 2 (- 52 fbits))))
+          (match
+            ((= be (%py-ieee-top f))
+              (%py-add sign
+                (%py-add (%py-mul 2047 %py-f-2p52)
+                  (if (= frac 0) 0 (%py-floordiv %py-f-2p52 2)))))
+            ((if (= be 0) (= frac 0) #f) sign)
+            ((= be 0)
+              (let ((p (%py-ieee-widen-shift frac one 0)))
+                (%py-add sign
+                  (%py-add (%py-mul (+ (- 1024 bias) (- 0 (rest p))) %py-f-2p52)
+                    (%py-mul (%py-sub (first p) one) wide)))))
+            (#t
+              (%py-add sign
+                (%py-add (%py-mul (%py-add (%py-sub be bias) 1023) %py-f-2p52)
+                  (%py-mul frac wide))))))))))
+
+; The unsigned bit pattern of the float x at format f, and back.
 (def %py-ieee-bits
   (fn (_ x f)
-    (let ((inf (* (%py-ieee-top f) (%py-ieee-one f)))
-          (sign (if (if (< x 0.0) #t (if (= x 0.0) (< (/ 1.0 x) 0.0) #f)) (%py-ieee-sign f) 0)))
-      (match
-        ((Float nan? x) (+ inf (Num quotient (%py-ieee-one f) 2)))
-        ((Float inf? x) (+ sign inf))
-        ((= x 0.0) sign)
-        (#t (+ sign (%py-ieee-finite (Float abs x) f)))))))
-
-; The float the unsigned bit pattern n stands for at format f.
+    (let ((u (%py-ieee-raw x)))
+      (if (same? f %py-ieee-double) u (%py-ieee-narrow u f)))))
 (def %py-ieee-value
   (fn (_ n f)
-    (let ((neg (not (< n (%py-ieee-sign f)))) (one (%py-ieee-one f))
-          (shift (+ (%py-ieee-bias f) (%py-ieee-fbits f))))
-      (let ((m (if neg (- n (%py-ieee-sign f)) n)))
-        (let ((be (Num quotient m one)) (frac (Num modulo m one)))
-          (let ((v (match
-                     ((= be (%py-ieee-top f)) (if (= frac 0) %py-ieee-inf %py-ieee-nan))
-                     ((= be 0) (* (* frac 1.0) (%py-ieee-pow2 (- 1 shift))))
-                     (#t (* (* (+ one frac) 1.0) (%py-ieee-pow2 (- be shift)))))))
-            (if neg (* %py-mminus-one v) v)))))))
+    (%py-ieee-float (if (same? f %py-ieee-double) n (%py-ieee-widen n f)))))
 
 ; (typecode size signed? low high float-format), the format nil for an integer
 (def %py-arr-entry
