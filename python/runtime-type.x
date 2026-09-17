@@ -916,15 +916,16 @@
       (pair "__eq__" %py-ns-eq))
     "types.SimpleNamespace"))
 
-; bytes(...) -- from a list of ints, from a count (that many zero bytes), or
-; from something already bytes.  The type object makes `bytes` a name and
-; gives type(b'a') something to answer.
+; bytes(...) -- from a str and its encoding, from a list of ints, from a count
+; (that many zero bytes), or from something already bytes.  The type object
+; makes `bytes` a name and gives type(b'a') something to answer.
 (def %py-bytes-ctor
   (fn (_ . args)
     (if (null? args)
       (%py-bytes-new ())
-      (let ((v (first args)))
+      (let ((v (%py-bytes-source "bytes" args)))
         (match
+          ((same? v %py-dflt) (%py-bytes-new ()))
           ; bytes(bytearray(b'x')) is a bytes, and a bytes of its own -- this
           ; is one of the two places the strict test earns its keep.
           ((%py-bytes-only? v) v)
@@ -933,8 +934,6 @@
             (%py-bytes-new (%py-bytes-of-codes (%py-list-elems v) ())))
           ((%py-tuple-is v)
             (%py-bytes-new (%py-bytes-of-codes (%py-tuple-elems v) ())))
-          ((%py-str-is v)
-            (Err raise (lit type) "string argument without an encoding" ()))
           ; an array hands over its buffer, which is what it is
           ((%py-arr-is (%py-native-of v)) (%py-bytes-new (%py-arr-buffer (%py-native-of v))))
           ((%py-num? v) (%py-bytes-new (%py-bytes-zeros v ())))
@@ -998,7 +997,7 @@
 
 (def %py-bytes-methods
   (list
-    (pair "%ctor" %py-bytes-ctor)
+    (pair "%ctor" (%py-sig! %py-bytes-ctor "bytes" (list "source" "encoding" "errors") 0 #f))
     (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
     (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
     (pair "__iter__"     (fn (_ self) (%py-native-of self)))
@@ -1035,21 +1034,13 @@
       (let ((b (%py-native-of self)))
         (if (not (%py-barr-is b))
           (%py-init-receiver! "bytearray" self)
-          (let ((src (%py-opt more 0 %py-dflt)) (enc (%py-opt more 1 %py-dflt)))
-            (%seq (%py-takes-at-most! "bytearray" 3 (%py-length more))
-              (%seq
-                (%py-barr-set! b
-                  (%py-bytes-list
-                    (match
-                      ((same? src %py-dflt) (%py-barr-new ()))
-                      ((same? enc %py-dflt) (%py-bytearray-ctor src))
-                      (#t (%py-bytearray-ctor src enc)))))
-                ()))))))
+          (%seq (%py-barr-set! b (%py-bytes-list (apply %py-bytearray-ctor more))) ()))))
     "__init__" (list "self" "source" "encoding" "errors") 1 #f () () #t))
 
 (def %py-bytearray-methods
   (list
-    (pair "%ctor" %py-bytearray-ctor)
+    (pair "%ctor"
+      (%py-sig! %py-bytearray-ctor "bytearray" (list "source" "encoding" "errors") 0 #f))
     (pair "__init__"     %py-bytearray-init)
     (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
     (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))

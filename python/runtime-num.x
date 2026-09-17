@@ -1147,22 +1147,47 @@
           (%py-barr-set! b (%pb-cat (%py-bytes-list b) (%py-barr-bytes-of v)))))
       (#t (%py-b-attr (%py-bytes-list b) %py-barr-new name b)))))
 
+; The source a bytes or bytearray call gives, from its source, encoding and
+; errors arguments, of which there is at least one.  A keyword call leaves
+; %py-dflt in a slot it did not fill, which reads as not given, and so is the
+; answer when no source is.  The slots are read by position rather than through
+; %py-opt, which would count the list for each of them.
+(def %py-bytes-source
+  (fn (_ cname args)
+    (let ((more (rest args)))
+      (match
+        ((null? more) (%py-bytes-source-check (first args) %py-dflt %py-dflt))
+        ((null? (rest more)) (%py-bytes-source-check (first args) (first more) %py-dflt))
+        (#t
+          (%seq (%py-takes-at-most! cname 3 (%py-length args))
+            (%py-bytes-source-check (first args) (first more) (first (rest more)))))))))
+
+; Checked as CPython checks them: a str, or a str subclass instance, needs an
+; encoding and answers its encoded bytes, and any other source takes neither.
+(def %py-bytes-source-check
+  (fn (_ v enc errs)
+    (match
+      ((%py-str-is (%py-native-of v))
+        (if (same? enc %py-dflt)
+          (Err raise (lit type) "string argument without an encoding" ())
+          (%py-bytes-new (%ps-encode (%py-str-cps (%py-native-of v)) ()))))
+      ((not (same? enc %py-dflt))
+        (Err raise (lit type) "encoding without a string argument" ()))
+      ((not (same? errs %py-dflt))
+        (Err raise (lit type) "errors without a string argument" ()))
+      (#t v))))
+
 ; The bytes an argument stands for, whichever way it was written.
 ; bytearray(), bytearray(b'..'), bytearray('..', 'utf-8'), bytearray([..]),
-; bytearray(n).  A str WITHOUT an encoding is Python's TypeError; with one it
-; is the string's own bytes.  A count asks for that many zero bytes and now
-; gets them.
+; bytearray(n).  A count asks for that many zero bytes and now gets them.
 (def %py-bytearray-ctor
   (fn (_ . args)
     (if (null? args)
       (%py-barr-new ())
-      (let ((v (%seq (%py-takes-at-most! "bytearray" 3 (%py-length args)) (first args))))
+      (let ((v (%py-bytes-source "bytearray" args)))
         (match
+          ((same? v %py-dflt) (%py-barr-new ()))
           ((%py-bytes-is v) (%py-barr-new (%py-bytes-list v)))
-          ((%py-str-is v)
-            (if (null? (rest args))
-              (Err raise (lit type) "string argument without an encoding" ())
-              (%py-barr-new (%ps-encode (%py-str-cps v) ()))))
           ((%py-list? v) (%py-barr-new (%py-bytes-of-codes (%py-list-elems v) ())))
           ((%py-tuple-is v) (%py-barr-new (%py-bytes-of-codes (%py-tuple-elems v) ())))
           ((%py-arr-is (%py-native-of v)) (%py-barr-new (%py-arr-buffer (%py-native-of v))))

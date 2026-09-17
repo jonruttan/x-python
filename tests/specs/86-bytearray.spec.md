@@ -238,3 +238,20 @@ bytearray(b'\x00\x00')
 BA(b'xy') BA(b'xy') BA(b'xy') BA(b'')
 BA(b'xyz') bytearray(b'xyz')
 ```
+
+### bytearray takes its source, encoding and errors by keyword, and checks them as CPython does
+
+```python
+(python-run "class BA(bytearray):\n    pass\nprint(bytearray(source=b\"x\"), bytearray(source=\"é\", encoding=\"utf-8\"), bytearray(\"ab\", encoding=\"ascii\", errors=\"strict\"))\nprint(bytearray(source=[1, 2]), bytearray(source=3), BA(source=\"é\", encoding=\"utf-8\"))\ndef err(f):\n    try:\n        f()\n    except TypeError as e:\n        print(e)\nerr(lambda: bytearray(\"ab\", errors=\"strict\"))\nerr(lambda: bytearray(encoding=\"utf-8\"))\nerr(lambda: bytearray(errors=\"strict\"))\nerr(lambda: bytearray(b\"x\", \"utf-8\"))\nerr(lambda: bytearray(nope=1))\nerr(lambda: bytearray(1, 2, 3, 4))")
+```
+---
+```output
+bytearray(b'x') bytearray(b'\xc3\xa9') bytearray(b'ab')
+bytearray(b'\x01\x02') bytearray(b'\x00\x00\x00') BA(b'\xc3\xa9')
+string argument without an encoding
+encoding without a string argument
+errors without a string argument
+encoding without a string argument
+bytearray() got an unexpected keyword argument 'nope'
+bytearray() takes at most 3 arguments (4 given)
+```
