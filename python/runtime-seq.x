@@ -70,6 +70,9 @@
         (if (if (%py-buffer? a) (%py-buffer? b) #f)
           (%py-eq (%py-list-new (%py-mv-in a)) (%py-list-new (%py-mv-in b)))
           #f))
+      ; two slices are equal when their three parts are, and equal nothing else
+      ((%py-sl-is a) (%py-sl-eq a b))
+      ((%py-sl-is b) #f)
       ((if (%py-dq-is a) #t (%py-dq-is b)) (%py-dq-eq a b))
       ((%py-str-is a) (if (%py-str-is b) (%pb-eq? (%py-str-cps a) (%py-str-cps b)) #f))
       ((%py-str-is b) #f)
@@ -415,7 +418,18 @@
 (def %py-setslice
   (fn (_ v start stop step new)
     (match
+      ; a class takes the slice itself, as it does on the way in
+      ((if (%py-obj-is v)
+         (%py-user-fn? (%py-method-find (%py-obj-class v) "__setitem__"))
+         #f)
+        ((%py-dunder v "__setitem__") (%py-sl-new start stop step) new))
+      ; a builtin's subclass stores into the value it carries, as it reads from
+      ; it, unless its class writes a __setitem__ of its own
+      ((if (%py-obj-is v) (not (null? (%py-obj-native v))) #f)
+        (%py-setslice (%py-obj-native v) start stop step new))
       ((%py-mv-is v) (%py-mv-setslice! v start stop step new))
+      ; a dict's subscript is a key, and a slice is one
+      ((%py-dict? v) (%py-dset v (%py-sl-new start stop step) new))
       ((%py-barr-is v)
         (let ((sp (%py-slice-span (%pb-len (%py-bytes-list v)) start stop step)))
           (%py-barr-splice! v (first sp) (rest sp) (%py-barr-bytes-in new))))
@@ -427,9 +441,14 @@
             (%py-list-set! v
               (%py-list-cat (%py-take (first sp) els)
                 (%py-list-cat (%py-iter-elems new) (%py-drop els (rest sp)))))))))))
+; `del a[1:2]` is __delitem__ on a class and an empty splice on a sequence.
 (def %py-delslice
   (fn (_ v start stop step)
-    (%py-setslice v start stop step (%py-list-new ()))))
+    (if (if (%py-obj-is v)
+          (%py-user-fn? (%py-method-find (%py-obj-class v) "__delitem__"))
+          #f)
+      ((%py-dunder v "__delitem__") (%py-sl-new start stop step))
+      (%py-setslice v start stop step (%py-list-new ())))))
 
 (def %py-setindex
   (fn (_ obj i v)

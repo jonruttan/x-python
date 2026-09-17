@@ -1408,6 +1408,7 @@
         (list "__debug__" #t)
         (list "len"   (lit %py-len))
         (list "range" (lit %py-cls-range))
+        (list "slice" (lit %py-cls-slice))
         ; str and list are now the CLASS OBJECTS -- calling one still converts,
         ; through the %ctor entry, and `type(x) == str` is an identity compare.
         (list "str"     (lit %py-cls-str))

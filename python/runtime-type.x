@@ -1086,6 +1086,7 @@
       ((%py-io-is v) (if (%py-io-text? v) %py-cls-StringIO %py-cls-BytesIO))
       ((%py-arr-is v) %py-cls-array)
       ((%py-mv-is v) %py-cls-memoryview)
+      ((%py-sl-is v) %py-cls-slice)
       ((%py-dq-is v) %py-cls-deque)
       ((%py-obj-is v) (%py-obj-class v))
       ((%py-class-is v) %py-cls-type)
@@ -1175,10 +1176,114 @@
       (%py-reverse acc)
       (self str (rest idxs) (pair (Str sub (first idxs) 1 str) acc)))))
 
+; --- slice, the object a program can hold ------------------------------------
+;
+; Three values and nothing else: start, stop and step, each None where the
+; subscript left it out.  A sequence never needs one -- the parser hands the
+; three parts straight to %py-slice above -- but a CLASS does: `a[1:2:3]` on an
+; object with a __getitem__ is a call with one argument, and that argument is
+; this.  A program can build one itself, and ask it what it means for a length.
+(def %py-sl ())
+(def %py-sl-new
+  (fn (_ start stop step) (%make-instance %py-sl (list start stop step))))
+(def %py-sl-is (fn (_ v) (%type? v %py-sl)))
+(def %py-sl-start (fn (_ v) (first (first v))))
+(def %py-sl-stop (fn (_ v) (first (rest (first v)))))
+(def %py-sl-step (fn (_ v) (first (rest (rest (first v))))))
+
+(set! %py-sl
+  (%make-type
+    "PY-SLICE"
+    (list
+      (pair (lit write)
+        (fn (_ self)
+          (display "slice(")
+          (%py-repr (%py-sl-start self))
+          (display ", ")
+          (%py-repr (%py-sl-stop self))
+          (display ", ")
+          (%py-repr (%py-sl-step self))
+          (display ")"))))))
+
+; slice(stop), slice(start, stop), slice(start, stop, step) -- the arguments
+; are not checked, since Python does not check them either: slice("a", None)
+; is a slice, and only using it complains.
+(def %py-slice-ctor
+  (fn (_ . a)
+    (match
+      ((null? a)
+        (Err raise (lit type) "slice expected at least 1 argument, got 0" ()))
+      ((null? (rest a)) (%py-sl-new () (first a) ()))
+      ((null? (rest (rest a))) (%py-sl-new (first a) (first (rest a)) ()))
+      ((null? (rest (rest (rest a))))
+        (%py-sl-new (first a) (first (rest a)) (first (rest (rest a)))))
+      (#t
+        (Err raise (lit type)
+          (Str8 append "slice expected at most 3 arguments, got "
+            (%py-str (%py-length a))) ())))))
+
+; s.indices(len) resolves the slice against a length: the same clamping the
+; sequences get, answered as the triple rather than walked.
+(def %py-sl-indices
+  (fn (_ v n)
+    (match
+      ((not (eq? (%py-num-kind (%py-boolnorm n)) (lit int)))
+        (Err raise (lit type)
+          (Str8 append "'" (Str8 append (%py-class-name (%py-type-of n))
+            "' object cannot be interpreted as an integer")) ()))
+      ((< n 0) (Err raise (lit value) "length should not be negative" ()))
+      (#t
+        (let ((st (if (null? (%py-sl-step v)) 1 (%py-sl-step v))))
+          (if (= st 0)
+            (Err raise (lit value) "slice step cannot be zero" ())
+            (let ((b (%py-sl-bounds n (%py-sl-start v) (%py-sl-stop v) st)))
+              (%py-tuple-new (list (first b) (rest b) st)))))))))
+
+(def %py-sl-eq
+  (fn (_ a b)
+    (if (%py-sl-is b)
+      (if (%py-truthy (%py-eq (%py-sl-start a) (%py-sl-start b)))
+        (if (%py-truthy (%py-eq (%py-sl-stop a) (%py-sl-stop b)))
+          (%py-truthy (%py-eq (%py-sl-step a) (%py-sl-step b)))
+          #f)
+        #f)
+      #f)))
+
+(def %py-sl-attr
+  (fn (_ v name)
+    (match
+      ((Str8 =? name "start") (%py-sl-start v))
+      ((Str8 =? name "stop") (%py-sl-stop v))
+      ((Str8 =? name "step") (%py-sl-step v))
+      (#t (%py-class-row-attr %py-cls-slice v name "slice")))))
+
+(def %py-sl-methods
+  (list
+    (pair "%ctor" %py-slice-ctor)
+    (pair "indices" (fn (_ o n) (%py-sl-indices (%py-native-of o) n)))
+    (pair "__eq__"
+      (fn (_ o other) (%py-sl-eq (%py-native-of o) (%py-native-of other))))
+    (pair "start"
+      (%py-desc-new (lit property) (fn (_ o) (%py-sl-start (%py-native-of o)))))
+    (pair "stop"
+      (%py-desc-new (lit property) (fn (_ o) (%py-sl-stop (%py-native-of o)))))
+    (pair "step"
+      (%py-desc-new (lit property) (fn (_ o) (%py-sl-step (%py-native-of o)))))))
+
+(def %py-cls-slice
+  (%py-class-new "slice" %py-cls-object %py-sl-methods "slice"))
+
 (def %py-slice
   (fn (_ obj start stop step)
     (let ((st (if (null? step) 1 step)))
       (match
+        ; A CLASS TAKES THE SLICE ITSELF.  Its __getitem__ is a one-argument
+        ; call, and the argument is the object above -- which is why the object
+        ; exists.
+        ((if (%py-obj-is obj)
+           (%py-user-fn? (%py-method-find (%py-obj-class obj) "__getitem__"))
+           #f)
+          ((%py-dunder obj "__getitem__") (%py-sl-new start stop step)))
         ; a deque is indexed but never sliced
         ((%py-dq-is obj)
           (Err raise (lit type) "sequence index must be integer, not 'slice'" ()))
@@ -1208,7 +1313,9 @@
              (not (%py-user-fn? (%py-method-find (%py-obj-class obj) "__getitem__"))))
            #f)
           (%py-slice (%py-obj-native obj) start stop step))
-        ; a dict gets Python's own complaint: a slice is not a key
+        ; A DICT IS NOT A SEQUENCE: its subscript is a key lookup, so a slice
+        ; there is a key like any other -- and one that is usually missing.
+        ((%py-dict? obj) (%py-dget obj (%py-sl-new start stop step)))
         (#t (Err raise (lit type) "unhashable type: 'slice'" ()))))))
 
 ; --- def, whatever the frame depth -------------------------------------------
