@@ -808,9 +808,13 @@
 (def %py-mkset (fn (_ . vs) (%py-set-of #f vs)))
 ; set(x) / frozenset(x): from any iterable, or empty
 (def %py-set-ctor
-  (fn (_ . a) (%py-set-of #f (if (null? a) () (%py-iter-elems (first a))))))
+  (fn (_ . a)
+    (%seq (%py-at-most-one! "set" a)
+      (%py-set-of #f (if (null? a) () (%py-iter-elems (first a)))))))
 (def %py-frozenset-ctor
-  (fn (_ . a) (%py-set-of #t (if (null? a) () (%py-iter-elems (first a))))))
+  (fn (_ . a)
+    (%seq (%py-at-most-one! "frozenset" a)
+      (%py-set-of #t (if (null? a) () (%py-iter-elems (first a)))))))
 ; the elements of any iterable, as a plain list
 (def %py-set-args
   (fn (self as acc)
@@ -958,7 +962,9 @@
       ((Str8 =? name "isdisjoint")
         (fn (_ o) (null? (%py-set-keep (es) (%py-iter-elems o)))))
       ((Str8 =? name "__contains__") (fn (_ v) (%py-set-has? v (es))))
-      (#t (%py-set-no-attr! frozen name)))))
+      (#t
+        (%py-class-row-attr (if frozen %py-cls-frozenset %py-cls-set) s name
+          (if frozen "frozenset" "set"))))))
 
 (def %py-mklist-of
   (fn (_ v) (%py-list-new (%py-iter-elems v))))

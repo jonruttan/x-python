@@ -637,6 +637,7 @@
 (def %py-dq-max (fn (_ v) (first (first v))))
 (def %py-dq-el (fn (_ v) (first (rest (first v)))))
 (def %py-dq-set! (fn (_ v l) (%seq (%set-first! (rest (first v)) l) ())))
+(def %py-dq-set-max! (fn (_ v m) (%seq (%set-first! (first v) m) ())))
 (set! %py-dq
   (%make-type
     "PY-DEQUE"
