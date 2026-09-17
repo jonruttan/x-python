@@ -80,10 +80,38 @@
       (%py-mv-new (%py-mv-target v) (+ (%py-mv-start v) (first sp))
         (+ (%py-mv-start v) (rest sp)) (%py-mv-code v)))))
 
+; A buffer: bytes, a bytearray, an array, or a view of one.  An array reaches a
+; program wrapped in its instance, so the question is asked of what a value
+; carries -- here rather than at each of the places that ask it.
+(def %py-buffer?
+  (fn (_ v0)
+    (let ((v (%py-native-of v0)))
+      (match ((%py-mv-is v) #t) ((%py-bytes-is v) #t) (#t (%py-arr-is v))))))
+
+; The BYTES a buffer offers, which is not always its elements: a view of an
+; array covers its span of the array's own byte layout.  str(), int(), bytes()
+; and eval() read a buffer through here, so each of them takes every one.
+(def %py-mv-bytes
+  (fn (_ v)
+    (let ((t (%py-mv-target v)))
+      (if (%py-arr-is t)
+        (let ((w (%py-mv-itemsize v)))
+          (%py-take-n (%py-drop (%py-arr-buffer t) (* (%py-mv-start v) w))
+            (* (%py-mv-len v) w) ()))
+        (%py-mv-elems v)))))
+(def %py-buffer-bytes
+  (fn (_ v0)
+    (let ((v (%py-native-of v0)))
+      (match
+        ((%py-mv-is v) (%py-mv-bytes v))
+        ((%py-bytes-is v) (%py-bytes-list v))
+        ((%py-arr-is v) (%py-arr-buffer v))
+        (#t ())))))
+(def %py-buffer-text
+  (fn (_ v) (%py-bytes-str (%py-bytes-new (%py-buffer-bytes v)))))
+
 ; The elements a value offers a view: what a slice assignment stores, and what
 ; an equality compares against.
-(def %py-mv-buffer?
-  (fn (_ v) (match ((%py-mv-is v) #t) ((%py-bytes-is v) #t) (#t (%py-arr-is v)))))
 (def %py-mv-in
   (fn (_ new)
     (match
