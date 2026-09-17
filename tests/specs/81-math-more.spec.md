@@ -151,3 +151,70 @@ tanh 20.5 1.0
 tanh 1000000.0 1.0
 24.0 0.69314718056 0.84270079295
 ```
+
+### special values, conversions and errors, in CPython's words
+
+```python
+(python-run "import math\nclass F:\n    def __float__(self):\n        return 2.5\ndef show(label, f):\n    try:\n        print(label, f())\n    except Exception as e:\n        print(label, type(e).__name__, e)\nnan, inf = float(\"nan\"), float(\"inf\")\nshow(\"exp F\", lambda: \"%.12g\" % math.exp(F()))\nshow(\"exp str\", lambda: math.exp(\"a\"))\nshow(\"exp 1000\", lambda: math.exp(1000))\nshow(\"sinh -1000\", lambda: math.sinh(-1000))\nshow(\"expm1 1000\", lambda: math.expm1(1000))\nshow(\"sqrt 10**30\", lambda: math.sqrt(10**30))\nshow(\"log(2, 1)\", lambda: math.log(2, 1))\nshow(\"log(1, 0)\", lambda: math.log(1, 0))\nshow(\"log(nan, inf)\", lambda: math.log(nan, inf))\nshow(\"log(8, 2)\", lambda: math.log(8, 2))\nshow(\"pow(0, -1)\", lambda: math.pow(0, -1))\nshow(\"pow(-1, 2.3)\", lambda: math.pow(-1, 2.3))\nshow(\"pow(2, 10000)\", lambda: math.pow(2, 10000))\nshow(\"pow(0, -inf)\", lambda: math.pow(0, -inf))\nshow(\"pow(nan, 0)\", lambda: math.pow(nan, 0))\nshow(\"fmod(2.5, inf)\", lambda: math.fmod(2.5, inf))\nshow(\"fmod(1e300, 3)\", lambda: math.fmod(1e300, 3.0))\nshow(\"fmod(1, 0)\", lambda: math.fmod(1, 0))\nshow(\"fmod(nan, 0)\", lambda: math.fmod(nan, 0))\nshow(\"copysign\", lambda: (math.copysign(3, -0.0), math.copysign(-0.0, 1), math.copysign(0.0, -2)))\nshow(\"ldexp(1, 2000)\", lambda: math.ldexp(1.0, 2000))\nshow(\"ldexp(1, 10**10)\", lambda: math.ldexp(1.0, 10**10))\nshow(\"ldexp(1, -10**10)\", lambda: math.ldexp(1.0, -10**10))\nshow(\"ldexp\", lambda: (math.ldexp(3.0, -2), math.ldexp(5e-324, -1), math.ldexp(-inf, 3)))\nshow(\"asinh\", lambda: (\"%.12g\" % math.asinh(1e308), \"%.12g\" % math.asinh(-1e300), math.asinh(-inf)))\nshow(\"acosh\", lambda: (\"%.12g\" % math.acosh(1e308), math.acosh(1.0)))\nshow(\"atanh(1)\", lambda: math.atanh(1.0))\nshow(\"sin(inf)\", lambda: math.sin(inf))\nshow(\"sqrt(nan)\", lambda: math.sqrt(nan))\nshow(\"whole\", lambda: (math.floor(1e25), math.ceil(-1e25), math.trunc(2.0**70), math.floor(2.5), math.ceil(-2.5)))\nshow(\"isclose\", lambda: (math.isclose(inf, inf), math.isclose(nan, nan), math.isclose(inf, 1e308), math.isclose(1e10, 1.00000001e10)))\nshow(\"isclose rel<0\", lambda: math.isclose(1, 1, rel_tol=-0.5))\nshow(\"floor(nan)\", lambda: math.floor(nan))\nshow(\"ceil(-inf)\", lambda: math.ceil(-inf))")
+```
+---
+```output
+exp F 12.1824939607
+exp str TypeError must be real number, not str
+exp 1000 OverflowError math range error
+sinh -1000 OverflowError math range error
+expm1 1000 OverflowError math range error
+sqrt 10**30 1000000000000000.0
+log(2, 1) ZeroDivisionError division by zero
+log(1, 0) ValueError expected a positive input
+log(nan, inf) nan
+log(8, 2) 3.0
+pow(0, -1) ValueError math domain error
+pow(-1, 2.3) ValueError math domain error
+pow(2, 10000) OverflowError math range error
+pow(0, -inf) inf
+pow(nan, 0) 1.0
+fmod(2.5, inf) 2.5
+fmod(1e300, 3) 0.0
+fmod(1, 0) ValueError math domain error
+fmod(nan, 0) nan
+copysign (-3.0, 0.0, -0.0)
+ldexp(1, 2000) OverflowError math range error
+ldexp(1, 10**10) OverflowError math range error
+ldexp(1, -10**10) 0.0
+ldexp (0.75, 0.0, -inf)
+asinh ('709.889355823', '-691.468675079', -inf)
+acosh ('709.889355823', 0.0)
+atanh(1) ValueError expected a number between -1 and 1, got 1.0
+sin(inf) ValueError expected a finite input, got inf
+sqrt(nan) nan
+whole (10000000000000000905969664, -10000000000000000905969664, 1180591620717411303424, 2, -2)
+isclose (True, False, False, False)
+isclose rel<0 ValueError tolerances must be non-negative
+floor(nan) ValueError cannot convert float NaN to integer
+ceil(-inf) OverflowError cannot convert float infinity to integer
+```
+
+### frexp and modf
+
+```python
+(python-run "import math\nfor x in (1.0, -100.0, 0.1, 3.0, 1e308, 5e-324, 2.2250738585072014e-308, -0.0, 0.0, float(\"inf\"), float(\"-inf\")):\n    print(x, math.frexp(x), math.modf(x))\nm, e = math.frexp(float(\"nan\"))\nprint(m, e, math.modf(float(\"nan\")), math.frexp(7))\nfor x in (123.456, -7.25, 2.0 ** 60):\n    m, e = math.frexp(x)\n    print(m * 2.0 ** e == x, math.modf(x))")
+```
+---
+```output
+1.0 (0.5, 1) (0.0, 1.0)
+-100.0 (-0.78125, 7) (-0.0, -100.0)
+0.1 (0.8, -3) (0.1, 0.0)
+3.0 (0.75, 2) (0.0, 3.0)
+1e+308 (0.5562684646268004, 1024) (0.0, 1e+308)
+5e-324 (0.5, -1073) (5e-324, 0.0)
+2.2250738585072014e-308 (0.5, -1021) (2.2250738585072014e-308, 0.0)
+-0.0 (-0.0, 0) (-0.0, -0.0)
+0.0 (0.0, 0) (0.0, 0.0)
+inf (inf, 0) (0.0, inf)
+-inf (-inf, 0) (-0.0, -inf)
+nan 0 (nan, nan) (0.875, 3)
+True (0.45600000000000307, 123.0)
+True (-0.25, -7.0)
+True (0.0, 1.152921504606847e+18)
+```

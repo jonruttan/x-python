@@ -192,21 +192,57 @@
       e
       (%py-instantiate (%py-exc-class-of e) (list (Err subject-of e))))))
 
-(def %py-mfloat (fn (_ x) (Float from (%py-boolnorm x))))
+; The float a math function reads: an int converts, a float is itself, an
+; instance answers through __float__, and anything else is Python's TypeError.
+(def %py-mfloat
+  (fn (_ x)
+    (let ((n (%py-boolnorm x)))
+      (let ((k (%py-num-kind n)))
+        (match
+          ((eq? k (lit float)) n)
+          ((eq? k (lit int)) (* n 1.0))
+          ((%py-obj-is n)
+            (let ((m (%py-dunder n "__float__")))
+              (if (null? m) (%py-mfloat-refused n) (%py-mfloat (m)))))
+          (#t (%py-mfloat-refused n)))))))
+(def %py-mfloat-refused
+  (fn (_ v)
+    (Err raise (lit type)
+      (Str8 append "must be real number, not " (%py-class-name (%py-type-of v))) ())))
 
 ; a domain error is Python's, not a NaN
 (def %py-mdomain
   (fn (_) (%py-raise (%py-instantiate %py-exc-ValueError (list "math domain error")))))
 
-(def %py-mcheck
-  (fn (_ v) (if (Float nan? v) (%py-mdomain) v)))
+; A domain error naming the input the function expected and the float it got,
+; in CPython's words, or math domain error for a function with no such words.
+(def %py-mdomain-got
+  (fn (_ expected v)
+    (if (null? expected)
+      (%py-mdomain)
+      (%py-raise (%py-instantiate %py-exc-ValueError
+        (list (Str8 append expected (Str8 append ", got " (%py-repr-of v)))))))))
 
-; A LOGARITHM'S DOMAIN IS THE ARGUMENT, not the answer: log(0) is -inf rather
-; than NaN, so checking what came back lets it through where Python raises.
+; A one-argument function whose result is read as CPython's math_1 reads it: a
+; NaN from an argument that was not one is a domain error, and an infinity from
+; a finite argument is a range error where the function can overflow and a
+; domain error where it cannot, as log(0.0) and atanh(1) are.
+(def %py-math-1
+  (fn (_ f can-overflow expected)
+    (fn (_ x)
+      (let ((v (%py-mfloat x)))
+        (let ((r (f v)))
+          (match
+            ((Float nan? r) (if (Float nan? v) r (%py-mdomain-got expected v)))
+            ((if (Float inf? r) (Float finite? v) #f)
+              (if can-overflow (%py-mrange-error) (%py-mdomain-got expected v)))
+            (#t r)))))))
+
+; A NaN or an infinity has no integer for floor, ceil or trunc to answer.
 (def %py-mfinite
   (fn (_ v)
     (if (Float nan? v)
-      (%py-mdomain)
+      (Err raise (lit value) "cannot convert float NaN to integer" ())
       (if (Float inf? v)
         (%py-raise (%py-instantiate %py-exc-OverflowError
           (list "cannot convert float infinity to integer")))
@@ -222,22 +258,77 @@
       (if (eq? (%py-num-kind n) (lit int))
         n
         (let ((v (%py-mfinite (%py-mfloat n))))
-          (Float ->int
-            (match
-              ((eq? k (lit floor)) (Float floor v))
-              ((eq? k (lit ceil)) (Float ceil v))
-              (#t (Float trunc v)))))))))
+          (let ((w (match
+                     ((eq? k (lit floor)) (Float floor v))
+                     ((eq? k (lit ceil)) (Float ceil v))
+                     (#t (Float trunc v)))))
+            ; from 2**62 up a double is already whole but past what ->int
+            ; answers, so it converts through int()'s exact digits
+            (if (if (< w %py-mwhole-high) (< %py-mwhole-low w) #f)
+              (Float ->int w)
+              (%py-int-ctor w))))))))
+(def %py-mwhole-high 4611686018427387904.0)
+(def %py-mwhole-low (- 0.0 4611686018427387904.0))
 
-(def %py-mlog-arg
-  (fn (_ v)
-    (if (Float < (%py-mfloat 0) v) v (%py-mdomain))))
+; log, log2 and log10.  An int argument is checked before it converts, as
+; CPython checks it, so its message names no float.
+(def %py-math-log
+  (fn (_ f)
+    (let ((g (%py-math-1 f #f "expected a positive input")))
+      (fn (_ x)
+        (let ((n (%py-boolnorm x)))
+          (if (if (eq? (%py-num-kind n) (lit int)) (not (< 0 n)) #f)
+            (%py-raise (%py-instantiate %py-exc-ValueError (list "expected a positive input")))
+            (g n)))))))
 
-; sinh/cosh/tanh and their inverses are not bound in the platform, and each is
-; one line of the exponential that is.
+; log(x), and log(x, base) as the quotient Python divides, where a base whose
+; log is 0 is ZeroDivisionError.
+(def %py-mlog-1 (%py-math-log (fn (_ v) (Float log v))))
+(def %py-mlog
+  (fn (_ x b)
+    (let ((num (%py-mlog-1 x)))
+      (if (null? b)
+        num
+        (let ((den (%py-mlog-1 (first b))))
+          (if (= den 0.0)
+            (%py-raise (%py-instantiate %py-exc-ZeroDivisionError (list "division by zero")))
+            (/ num den)))))))
+
+; pow of two finite floats reads libm's answer as CPython does: a NaN is a
+; domain error, and an infinity is one from a zero base and a range error
+; otherwise.  libm answers the special values as Python does already.
+(def %py-mpow
+  (fn (_ x y)
+    (let ((r (Float pow x y)))
+      (match
+        ((not (if (Float finite? x) (Float finite? y) #f)) r)
+        ((Float nan? r) (%py-mdomain))
+        ((Float inf? r) (if (= x 0.0) (%py-mdomain) (%py-mrange-error)))
+        (#t r)))))
+
+; sinh, cosh, tanh and their inverses are not bound in the platform; sinh and
+; cosh are one line each of the exponential that is.
 (def %py-msinh
   (fn (_ x) (Float / (Float - (Float exp x) (Float exp (Float - (%py-mfloat 0) x))) (%py-mfloat 2))))
 (def %py-mcosh
   (fn (_ x) (Float / (Float + (Float exp x) (Float exp (Float - (%py-mfloat 0) x))) (%py-mfloat 2))))
+
+; asinh and acosh past 2**28 are log(2x), where x*x would overflow or swamp the
+; 1; asinh is odd, which keeps a large negative x and -inf from cancelling.
+(def %py-mln2 (Float log 2.0))
+(def %py-masinh
+  (fn (self x)
+    (match
+      ((< x 0.0) (- 0.0 (self (- 0.0 x))))
+      ((< 268435456.0 x) (+ (Float log x) %py-mln2))
+      (#t (Float log (+ x (Float sqrt (+ (* x x) 1.0))))))))
+(def %py-macosh
+  (fn (_ x)
+    (if (< 268435456.0 x)
+      (+ (Float log x) %py-mln2)
+      (Float log (+ x (Float sqrt (- (* x x) 1.0)))))))
+(def %py-matanh
+  (fn (_ x) (/ (Float log (/ (+ 1.0 x) (- 1.0 x))) 2.0)))
 
 ; --- erf, erfc, gamma and lgamma ------------------------------------------------
 ; None of the four is bound in the platform either.  They are computed from the
@@ -427,41 +518,98 @@
   (fn (self n acc)
     (if (< n 2) acc (self (- n 1) (* acc n)))))
 
-; fmod keeps the DIVIDEND's sign, which is C's rule and not Python's %
+; fmod keeps the DIVIDEND's sign, which is C's rule and not Python's %, and it
+; is libm's fmod, which the float type's % is.  A finite x over an infinity is
+; x, a NaN passes through, and an infinite x or a zero divisor is a domain error.
 (def %py-mfmod
   (fn (_ a b)
-    (if (Float = b (%py-mfloat 0))
-      (%py-mdomain)
-      (Float - a (Float * b (Float trunc (Float / a b)))))))
+    (match
+      ((if (Float inf? b) (Float finite? a) #f) a)
+      ((Float nan? a) a)
+      ((Float nan? b) b)
+      ((if (Float inf? a) #t (= b 0.0)) (%py-mdomain))
+      (#t (% a b)))))
 
+; copysign reads b's sign bit: -0.0 is negative, which 1/b tells apart from 0.0,
+; and multiplying by -1 keeps a zero's sign where subtracting from 0 would not.
+(def %py-mminus-one (- 0.0 1.0))
 (def %py-mcopysign
   (fn (_ a b)
     (let ((m (Float abs a)))
-      (if (Float < b (%py-mfloat 0)) (Float - (%py-mfloat 0) m) m))))
+      (if (if (< b 0.0) #t (if (= b 0.0) (< (/ 1.0 b) 0.0) #f))
+        (* %py-mminus-one m)
+        m))))
 
-(def %py-mldexp
+; ldexp doubles or halves x n times.  Past 2,200 steps either way the answer has
+; overflowed or underflowed, so n is clamped there, and a finite x that overflows
+; is a range error.
+(def %py-mldexp-steps
   (fn (self x n)
-    (if (= n 0)
+    (match
+      ((= n 0) x)
+      ((> n 0) (self (* x 2.0) (- n 1)))
+      (#t (self (/ x 2.0) (+ n 1))))))
+(def %py-mldexp
+  (fn (_ x n)
+    (if (if (= x 0.0) #t (not (Float finite? x)))
       x
-      (if (> n 0)
-        (self (Float * x (%py-mfloat 2)) (- n 1))
-        (self (Float / x (%py-mfloat 2)) (+ n 1))))))
+      (%py-mrange-check
+        (%py-mldexp-steps x (if (> n 2200) 2200 (if (< n -2200) -2200 n)))))))
 
-; isclose is Python's own formula, keywords and all
+; frexp(x) is (m, e) with x = m * 2**e and 0.5 <= |m| < 1, found from log2 and
+; corrected by a step either way; zero, an infinity and a NaN are (x, 0).  A
+; subnormal x is scaled by 2**54 first, which keeps every 2**-e below a double's
+; largest power of two, so each 2**-e and each product is exact.
+(def %py-mmin-normal (Float pow 2.0 (- 0.0 1022.0)))
+(def %py-mfrexp-at
+  (fn (self x e shift)
+    (let ((m (* x (Float pow 2.0 (* (- 0 e) 1.0)))))
+      (match
+        ((not (< (Float abs m) 1.0)) (self x (+ e 1) shift))
+        ((< (Float abs m) 0.5) (self x (- e 1) shift))
+        (#t (%py-tuple-new (list m (+ e shift))))))))
+(def %py-mfrexp-scaled
+  (fn (_ x shift)
+    (%py-mfrexp-at x (+ (Float ->int (Float floor (Float log2 (Float abs x)))) 1) shift)))
+(def %py-mfrexp
+  (fn (_ x)
+    (match
+      ((if (= x 0.0) #t (not (Float finite? x))) (%py-tuple-new (list x 0)))
+      ((< (Float abs x) %py-mmin-normal) (%py-mfrexp-scaled (* x 18014398509481984.0) -54))
+      (#t (%py-mfrexp-scaled x 0)))))
+
+; modf(x) is (fraction, whole part), both floats carrying x's sign.
+(def %py-mmodf
+  (fn (_ x)
+    (match
+      ((Float nan? x) (%py-tuple-new (list x x)))
+      ((Float inf? x) (%py-tuple-new (list (%py-mcopysign 0.0 x) x)))
+      (#t
+        (let ((w (Float trunc x)))
+          (%py-tuple-new (list (%py-mcopysign (- x w) x) w)))))))
+
+; isclose is CPython's: a negative tolerance is refused, equal values are close,
+; which is how an infinity is close to itself, any other infinity is not, and
+; otherwise the difference is within rel_tol of either value or within abs_tol.
+; Python's default rel_tol is written as a division because the reader does not
+; take 1e-9 here.
+(def %py-mwithin?
+  (fn (_ d t) (if (< d t) #t (= d t))))
 (def %py-misclose
   (fn (_ a b . kw)
-    ; Python's default rel_tol, written as a division because the reader does
-    ; not take 1e-9 here
-    (let ((rel (%py-opt kw 0 (Float / (%py-mfloat 1) (%py-mfloat 1000000000))))
-          (abs- (%py-opt kw 1 (%py-mfloat 0))))
-      ; Python's rule is abs(a-b) <= max(rel_tol * max(|a|, |b|), abs_tol), and
-      ; the <= is load-bearing: isclose(0.0, 0.0) is True on the equality, not
-      ; on any tolerance.
-      (let ((d (Float abs (Float - a b))))
-        (let ((ma (Float abs a)) (mb (Float abs b)))
-          (let ((t (Float * rel (if (Float < ma mb) mb ma))))
-            (let ((lim (if (Float < t abs-) abs- t)))
-              (if (Float < d lim) #t (Float = d lim)))))))))
+    (let ((rel (%py-mfloat (%py-opt kw 0 (/ 1.0 1000000000.0))))
+          (abs- (%py-mfloat (%py-opt kw 1 0.0))))
+      (match
+        ((if (< rel 0.0) #t (< abs- 0.0))
+          (Err raise (lit value) "tolerances must be non-negative" ()))
+        ((= a b) #t)
+        ((if (Float inf? a) #t (Float inf? b)) #f)
+        (#t
+          (let ((d (Float abs (- b a))))
+            (match
+              ((%py-mwithin? d (Float abs (* rel b))) #t)
+              ((%py-mwithin? d (Float abs (* rel a))) #t)
+              (#t (%py-mwithin? d abs-)))))))))
 
 (def %py-math-module
   (fn (_)
@@ -475,52 +623,39 @@
         ; refuse its own spelling of infinity.
         (pair "inf" (%py-float-of-str "inf"))
         (pair "nan" (%py-float-of-str "nan"))
-        (pair "sqrt" (fn (_ x) (%py-mcheck (Float sqrt (%py-mfloat x)))))
-        (pair "exp" (fn (_ x) (Float exp (%py-mfloat x))))
-        (pair "log"
-          (fn (_ x . b)
-            (let ((v (Float log (%py-mlog-arg (%py-mfloat x)))))
-              (if (null? b) v (Float / v (Float log (%py-mfloat (first b))))))))
-        (pair "log2" (fn (_ x) (Float log2 (%py-mlog-arg (%py-mfloat x)))))
-        (pair "log10" (fn (_ x) (Float log10 (%py-mlog-arg (%py-mfloat x)))))
-        (pair "sin" (fn (_ x) (Float sin (%py-mfloat x))))
-        (pair "cos" (fn (_ x) (Float cos (%py-mfloat x))))
-        (pair "tan" (fn (_ x) (Float tan (%py-mfloat x))))
-        (pair "asin" (fn (_ x) (%py-mcheck (Float asin (%py-mfloat x)))))
-        (pair "acos" (fn (_ x) (%py-mcheck (Float acos (%py-mfloat x)))))
-        (pair "atan" (fn (_ x) (Float atan (%py-mfloat x))))
+        (pair "sqrt" (%py-math-1 (fn (_ v) (Float sqrt v)) #f "expected a nonnegative input"))
+        (pair "exp" (%py-math-1 (fn (_ v) (Float exp v)) #t ()))
+        (pair "log" (fn (_ x . b) (%py-mlog x b)))
+        (pair "log2" (%py-math-log (fn (_ v) (Float log2 v))))
+        (pair "log10" (%py-math-log (fn (_ v) (Float log10 v))))
+        (pair "sin" (%py-math-1 (fn (_ v) (Float sin v)) #f "expected a finite input"))
+        (pair "cos" (%py-math-1 (fn (_ v) (Float cos v)) #f "expected a finite input"))
+        (pair "tan" (%py-math-1 (fn (_ v) (Float tan v)) #f "expected a finite input"))
+        (pair "asin"
+          (%py-math-1 (fn (_ v) (Float asin v)) #f "expected a number in range from -1 up to 1"))
+        (pair "acos"
+          (%py-math-1 (fn (_ v) (Float acos v)) #f "expected a number in range from -1 up to 1"))
+        (pair "atan" (%py-math-1 (fn (_ v) (Float atan v)) #f ()))
         (pair "atan2" (fn (_ y x) (Float atan2 (%py-mfloat y) (%py-mfloat x))))
         (pair "hypot" (fn (_ a b) (Float hypot (%py-mfloat a) (%py-mfloat b))))
-        (pair "pow" (fn (_ a b) (Float pow (%py-mfloat a) (%py-mfloat b))))
+        (pair "pow" (fn (_ a b) (%py-mpow (%py-mfloat a) (%py-mfloat b))))
         (pair "fabs" (fn (_ x) (Float abs (%py-mfloat x))))
         (pair "fmod" (fn (_ a b) (%py-mfmod (%py-mfloat a) (%py-mfloat b))))
         (pair "copysign" (fn (_ a b) (%py-mcopysign (%py-mfloat a) (%py-mfloat b))))
         (pair "ldexp" (fn (_ x n) (%py-mldexp (%py-mfloat x) (%py-boolnorm n))))
-        (pair "sinh" (fn (_ x) (%py-msinh (%py-mfloat x))))
-        (pair "cosh" (fn (_ x) (%py-mcosh (%py-mfloat x))))
+        (pair "sinh" (%py-math-1 %py-msinh #t ()))
+        (pair "cosh" (%py-math-1 %py-mcosh #t ()))
         ; past 20 the answer rounds to 1, and sinh and cosh would reach inf / inf
         (pair "tanh"
-          (fn (_ x)
-            (let ((v (%py-mfloat x)))
+          (%py-math-1
+            (fn (_ v)
               (if (< 20.0 (Float abs v))
-                (if (< v 0.0) (- 0.0 1.0) 1.0)
-                (Float / (%py-msinh v) (%py-mcosh v))))))
-        (pair "asinh"
-          (fn (_ x)
-            (let ((v (%py-mfloat x)))
-              (Float log (Float + v (Float sqrt (Float + (Float * v v) (%py-mfloat 1))))))))
-        (pair "acosh"
-          (fn (_ x)
-            (let ((v (%py-mfloat x)))
-              (%py-mcheck
-                (Float log (Float + v (Float sqrt (Float - (Float * v v) (%py-mfloat 1)))))))))
-        (pair "atanh"
-          (fn (_ x)
-            (let ((v (%py-mfloat x)))
-              (%py-mcheck
-                (Float / (Float log (Float / (Float + (%py-mfloat 1) v)
-                                             (Float - (%py-mfloat 1) v)))
-                         (%py-mfloat 2))))))
+                (if (< v 0.0) %py-mminus-one 1.0)
+                (Float / (%py-msinh v) (%py-mcosh v))))
+            #f ()))
+        (pair "asinh" (%py-math-1 %py-masinh #f ()))
+        (pair "acosh" (%py-math-1 %py-macosh #f "expected argument value not less than 1"))
+        (pair "atanh" (%py-math-1 %py-matanh #f "expected a number between -1 and 1"))
         (pair "degrees"
           (fn (_ x) (Float / (Float * (%py-mfloat x) (%py-mfloat 180)) (Float pi))))
         (pair "radians"
@@ -544,13 +679,15 @@
         (pair "isclose"
           (%py-sig! (fn (_ a b . kw) (apply %py-misclose (pair (%py-mfloat a) (pair (%py-mfloat b) kw))))
             "isclose" (list "a" "b" "rel_tol" "abs_tol") 2 #f))
-        (pair "erf" (fn (_ x) (%py-merf (%py-mfloat x))))
-        (pair "erfc" (fn (_ x) (%py-merfc (%py-mfloat x))))
+        (pair "erf" (%py-math-1 %py-merf #f ()))
+        (pair "erfc" (%py-math-1 %py-merfc #f ()))
         (pair "gamma" (fn (_ x) (%py-mgamma (%py-mfloat x))))
         (pair "lgamma" (fn (_ x) (%py-mlgamma (%py-mfloat x))))
-        (pair "expm1" (fn (_ x) (Float - (Float exp (%py-mfloat x)) (%py-mfloat 1))))
+        (pair "expm1" (%py-math-1 (fn (_ v) (- (Float exp v) 1.0)) #t ()))
         (pair "log1p"
-          (fn (_ x) (Float log (%py-mlog-arg (Float + (%py-mfloat 1) (%py-mfloat x))))))))))
+          (%py-math-1 (fn (_ v) (Float log (+ 1.0 v))) #f "expected argument value > -1"))
+        (pair "frexp" (fn (_ x) (%py-mfrexp (%py-mfloat x))))
+        (pair "modf" (fn (_ x) (%py-mmodf (%py-mfloat x))))))))
 
 ; The types module: the type objects a program names rather than derives,
 ; and `coroutine`.  Awaiting here is the delegation `yield from` does, which
