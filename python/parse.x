@@ -1441,6 +1441,8 @@
         (list "KeyboardInterrupt" (lit %py-exc-KeyboardInterrupt))
         (list "IndentationError"  (lit %py-exc-IndentationError))
         (list "UnicodeError"      (lit %py-exc-UnicodeError))
+        (list "UnicodeDecodeError" (lit %py-exc-UnicodeDecodeError))
+        (list "UnicodeEncodeError" (lit %py-exc-UnicodeEncodeError))
         (list "MemoryError"       (lit %py-exc-MemoryError))
         (list "OverflowError"     (lit %py-exc-OverflowError))
         (list "NotImplementedError" (lit %py-exc-NotImplementedError))

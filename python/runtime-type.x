@@ -371,9 +371,9 @@
           (if (%py-str-is v) v (%py-str-of-x (%py-str v)))))
       (#t (%py-str-decode a)))))
 
-; str(b, encoding[, errors]) decodes a bytes-like value -- bytes, a bytearray or
-; an array's buffer -- as utf-8, the codec bytes.decode uses; like decode it
-; takes the encoding and errors arguments without consulting them.
+; str(b, encoding[, errors]) decodes a buffer -- bytes, a bytearray, an array
+; or a view of one -- through the same codec bytes.decode reads, with the same
+; two arguments and the same three error handlers.
 (def %py-str-decode
   (fn (_ a)
     (let ((v (%py-native-of (first a))))
@@ -383,7 +383,10 @@
             (Str8 append "str expected at most 3 arguments, got " (%py-str (%py-length a)))
             ()))
         ((%py-str-is v) (Err raise (lit type) "decoding str is not supported" ()))
-        ((%py-buffer? v) (%py-str-new (%ps-decode (%py-buffer-bytes v) ())))
+        ((%py-buffer? v)
+          (%py-str-new
+            (%ps-decode-as (%py-buffer-bytes v) (%py-codec-arg (rest a) 0 "utf-8")
+              (%py-codec-arg (rest a) 1 "strict"))))
         (#t
           (Err raise (lit type)
             (Str8 append "decoding to str: need a bytes-like object, "

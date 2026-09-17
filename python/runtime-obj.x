@@ -666,6 +666,10 @@
   (%py-exc-new "KeyboardInterrupt" %py-exc-BaseException))
 (def %py-exc-IndentationError (%py-exc-new "IndentationError" %py-exc-SyntaxError))
 (def %py-exc-UnicodeError    (%py-exc-new "UnicodeError"    %py-exc-ValueError))
+(def %py-exc-UnicodeDecodeError
+  (%py-exc-new "UnicodeDecodeError" %py-exc-UnicodeError))
+(def %py-exc-UnicodeEncodeError
+  (%py-exc-new "UnicodeEncodeError" %py-exc-UnicodeError))
 
 ; An Err's tag names the class it would have been.  A tag with no row -- one
 ; raised by the platform rather than by this runtime -- answers Exception, so
@@ -683,7 +687,10 @@
     (pair (lit overflow)      %py-exc-OverflowError)
     (pair (lit syntax)        %py-exc-SyntaxError)
     (pair (lit state)         %py-exc-RuntimeError)
-    (pair (lit import)        %py-exc-ImportError)))
+    (pair (lit import)        %py-exc-ImportError)
+    (pair (lit unicode-decode) %py-exc-UnicodeDecodeError)
+    (pair (lit unicode-encode) %py-exc-UnicodeEncodeError)
+    (pair (lit lookup)        %py-exc-LookupError)))
 
 (def %py-tag-class
   (fn (self k rows)

@@ -1032,10 +1032,35 @@
 ; and not when it is called.  That is what makes `bytes.nosuch` an
 ; AttributeError at the dot -- which is the shape %py-str-attr already had,
 ; and which five conformance programs probe with a bare `bytes.count`.
+; An encoding or errors argument: the platform string the codec names it by.
+; A call that left it out, or a constructor carrying %py-dflt for it, takes the
+; default instead.
+(def %py-codec-name
+  (fn (_ v dflt)
+    (match
+      ((null? v) dflt)
+      ((same? v %py-dflt) dflt)
+      (#t
+        (let ((s (%py-native-of v)))
+          (if (%py-str-is s)
+            (%ps->x (%py-str-cps s))
+            (Err raise (lit type) "encoding and errors must be str" ())))))))
+
+(def %py-codec-arg
+  (fn (self a i dflt)
+    (match
+      ((null? a) dflt)
+      ((> i 0) (self (rest a) (- i 1) dflt))
+      (#t (%py-codec-name (first a) dflt)))))
+
 (def %py-b-attr
   (fn (_ l mk name v)
     (match
-      ((Str8 =? name "decode")   (fn (_ . a) (%pb->str l)))
+      ((Str8 =? name "decode")
+        (fn (_ . a)
+          (%py-str-new
+            (%ps-decode-as l (%py-codec-arg a 0 "utf-8")
+              (%py-codec-arg a 1 "strict")))))
       ((Str8 =? name "find")     (fn (_ . a) (%py-b-search l a #f)))
       ((Str8 =? name "rfind")    (fn (_ . a) (%py-b-search l a #t)))
       ((Str8 =? name "index")    (fn (_ . a) (%py-b-index (%py-b-search l a #f))))
@@ -1170,7 +1195,9 @@
       ((%py-str-is (%py-native-of v))
         (if (same? enc %py-dflt)
           (Err raise (lit type) "string argument without an encoding" ())
-          (%py-bytes-new (%ps-encode (%py-str-cps (%py-native-of v)) ()))))
+          (%py-bytes-new
+            (%ps-encode-as (%py-str-cps (%py-native-of v))
+              (%py-codec-name enc "utf-8") (%py-codec-name errs "strict")))))
       ((not (same? enc %py-dflt))
         (Err raise (lit type) "encoding without a string argument" ()))
       ((not (same? errs %py-dflt))
