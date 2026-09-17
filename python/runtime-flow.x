@@ -567,16 +567,20 @@
       (match
         ((not (< (Float abs m) 1.0)) (self x (+ e 1) shift))
         ((< (Float abs m) 0.5) (self x (- e 1) shift))
-        (#t (%py-tuple-new (list m (+ e shift))))))))
+        (#t (pair m (+ e shift)))))))
 (def %py-mfrexp-scaled
   (fn (_ x shift)
     (%py-mfrexp-at x (+ (Float ->int (Float floor (Float log2 (Float abs x)))) 1) shift)))
-(def %py-mfrexp
+; (m . e), which the IEEE encoder in python/array.x reads too
+(def %py-mfrexp-pair
   (fn (_ x)
     (match
-      ((if (= x 0.0) #t (not (Float finite? x))) (%py-tuple-new (list x 0)))
+      ((if (= x 0.0) #t (not (Float finite? x))) (pair x 0))
       ((< (Float abs x) %py-mmin-normal) (%py-mfrexp-scaled (* x 18014398509481984.0) -54))
       (#t (%py-mfrexp-scaled x 0)))))
+(def %py-mfrexp
+  (fn (_ x)
+    (let ((p (%py-mfrexp-pair x))) (%py-tuple-new (list (first p) (rest p))))))
 
 ; modf(x) is (fraction, whole part), both floats carrying x's sign.
 (def %py-mmodf

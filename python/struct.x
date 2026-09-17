@@ -3,8 +3,8 @@
 ; ## python/struct.x -- the struct module
 ;
 ; @description pack, unpack and calcsize over a format string, on the same
-;   integer encoder int.to_bytes and array use.  Integer codes and the two
-;   that take no value: b B h H i I l L q Q, s and x.
+;   integer encoder int.to_bytes and array use.  Integer codes, the float codes
+;   and the two that take no value: b B h H i I l L q Q, e f d, s and x.
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan
 ; @license MIT No Attribution (MIT-0)
@@ -20,18 +20,20 @@
 ; that differs between them is l and L, four bytes standard and eight native,
 ; which is what makes `calcsize("<l")` 4 and `calcsize("@l")` 8.
 ;
-; The float codes f and d are not here for the reason python/array.x gives:
-; this runtime has no IEEE encoder, and a wrong answer would be worse than
-; the refusal.
+; The float codes e, f and d write a float's IEEE bits, through the encoder in
+; python/array.x, at the same width in both sizings.
 
-; (typecode standard-size native-size signed?)
+; (typecode standard-size native-size signed?), where a float code's last field
+; is its IEEE format rather than a sign
 (def %py-st-codes
   (list
     (list "b" 1 1 #t) (list "B" 1 1 #f)
     (list "h" 2 2 #t) (list "H" 2 2 #f)
     (list "i" 4 4 #t) (list "I" 4 4 #f)
     (list "l" 4 8 #t) (list "L" 4 8 #f)
-    (list "q" 8 8 #t) (list "Q" 8 8 #f)))
+    (list "q" 8 8 #t) (list "Q" 8 8 #f)
+    (list "e" 2 2 %py-ieee-half) (list "f" 4 4 %py-ieee-single)
+    (list "d" 8 8 %py-ieee-double)))
 
 (def %py-st-find
   (fn (self tc rows)
@@ -140,6 +142,20 @@
           (%py-take-n bs k ())
           (%py-list-cat bs (%py-st-zeros (- k have) ())))))))
 
+; A float code's value is a real number, and a finite one too large for e or f
+; is Python's OverflowError rather than the infinity's bits.
+(def %py-st-float-bits
+  (fn (_ v f tc)
+    (let ((x (if (if (%py-num? v) #t (if (%py-obj-is v) (not (null? (%py-dunder v "__float__"))) #f))
+               (%py-mfloat v)
+               (%py-st-bad! "required argument is not a float"))))
+      (let ((n (%py-ieee-bits x f)) (inf (* (%py-ieee-top f) (%py-ieee-one f))))
+        (if (if (Float finite? x) (= (if (< n (%py-ieee-sign f)) n (- n (%py-ieee-sign f))) inf) #f)
+          (Err raise (lit overflow)
+            (Str8 append "float too large to pack with " (Str8 append tc " format")) ())
+          n)))))
+
+; e is (typecode width signed?), a float code's signed? being its IEEE format.
 (def %py-st-ints
   (fn (self e cnt order vals acc)
     (if (= cnt 0)
@@ -148,7 +164,11 @@
         (%py-st-bad! "not enough arguments for the format")
         (self e (- cnt 1) order (rest vals)
           (%py-list-cat acc
-            (%py-int-encode (%py-boolnorm (first vals)) (List ref 1 e) order (List ref 2 e))))))))
+            (let ((kind (first (rest (rest e)))))
+              (if (pair? kind)
+                (%py-int-encode (%py-st-float-bits (first vals) kind (first e))
+                  (List ref 1 e) order #f)
+                (%py-int-encode (%py-boolnorm (first vals)) (List ref 1 e) order kind)))))))))
 
 ; (bytes . unused-values)
 (def %py-st-emit
@@ -187,9 +207,11 @@
 (def %py-st-decode
   (fn (_ bs w signed order)
     (let ((big (if (Str8 =? order "little") (List reverse bs) bs)))
-      (if (if signed (>= (first big) 128) #f)
-        (- (- 0 (%py-int-join (%py-int-invert big ()))) 1)
-        (%py-int-join big)))))
+      (match
+        ((pair? signed) (%py-ieee-value (%py-int-join big) signed))
+        ((if signed (>= (first big) 128) #f)
+          (- (- 0 (%py-int-join (%py-int-invert big ()))) 1))
+        (#t (%py-int-join big))))))
 
 (def %py-st-take
   (fn (self e cnt order bs acc)

@@ -64,3 +64,21 @@ OverflowError 1
 True True
 ```
 
+
+### the float typecodes f and d
+
+```python
+(python-run "import struct, array\nclass F:\n    def __float__(self):\n        return 2.5\ndef show(label, f):\n    try:\n        print(label, repr(f()))\n    except Exception as e:\n        print(label, type(e).__name__, e)\nnan = float(\"nan\")\nshow(\"array f 1e300\", lambda: array.array(\"f\", [1e300]))\nshow(\"array f str\", lambda: array.array(\"f\", [\"a\"]))\nshow(\"array d int\", lambda: array.array(\"d\", [1, True, F()]))\nshow(\"array f 1.2\", lambda: array.array(\"f\", [1.2]))\nshow(\"array f bytes\", lambda: array.array(\"f\", b\"\\x00\\x00\\x80?\"))\nshow(\"attrs\", lambda: (array.array(\"f\").itemsize, array.array(\"d\").itemsize, array.array(\"d\", [1.5]).typecode))\nshow(\"eq add\", lambda: (array.array(\"f\", [1.0]) == array.array(\"d\", [1.0]), array.array(\"d\", [1.0]) + array.array(\"d\", [2.5])))\nshow(\"bytes\", lambda: (bytes(array.array(\"d\", [1.0, -2.0])), bytes(array.array(\"f\", [0.1]))))\nshow(\"d from bytes\", lambda: array.array(\"d\", bytes(array.array(\"d\", [1e-310, 1.7976931348623157e308]))))")
+```
+---
+```output
+array f 1e300 array('f', [inf])
+array f str TypeError must be real number, not str
+array d int array('d', [1.0, 1.0, 2.5])
+array f 1.2 array('f', [1.2000000476837158])
+array f bytes array('f', [1.0])
+attrs (4, 8, 'd')
+eq add (True, array('d', [1.0, 2.5]))
+bytes (b'\x00\x00\x00\x00\x00\x00\xf0?\x00\x00\x00\x00\x00\x00\x00\xc0', b'\xcd\xcc\xcc=')
+d from bytes array('d', [1e-310, 1.7976931348623157e+308])
+```
