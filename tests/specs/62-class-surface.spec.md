@@ -62,23 +62,17 @@ True True False 1
 
 ### a base that is not a class raises, and does not crash
 
-Before this, an undefined base took the interpreter down: an undefined name is
-bound to a SHIM that raises when it is CALLED -- a deferred NameError, which is
-this runtime's design -- and a shim arriving as a base sent method lookup
-walking into a closure as though it were a class record.  The guard in
-%py-mkclass makes it a TypeError instead.
-
-DIVERGENCE, and it follows from that design: CPython evaluates the base
-expression first and so raises NameError here, while this runtime only learns
-the name was undefined when something calls the shim, which a base never does.
-Both raise, and the case catches either, which is what a program that cares
-would write.
+An undefined base is read like any other name and raises NameError, as in
+CPython.  A base that is a value but not a class is a TypeError from the guard
+in %py-mkclass, so method lookup never walks into a value as though it were a
+class record.
 
 ```python
-(python-run "try:\n    class C(nosuch):\n        pass\nexcept NameError:\n    print(\"NameError\")\nexcept TypeError:\n    print(\"TypeError\")")
+(python-run "try:\n    class C(nosuch):\n        pass\nexcept NameError:\n    print(\"NameError\")\nexcept TypeError:\n    print(\"TypeError\")\ntry:\n    class D(5):\n        pass\nexcept TypeError:\n    print(\"TypeError\")")
 ```
 ---
 ```output
+NameError
 TypeError
 ```
 

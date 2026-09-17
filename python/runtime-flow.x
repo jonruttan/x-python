@@ -30,8 +30,8 @@
 ; a try and print SKIP when it fails.
 ; --- del NAME ----------------------------------------------------------------
 ; The engine defines a global and never removes one, so a deleted name is
-; rebound to this value instead.  Only the names a `del` mentions read
-; through the check, so nothing else pays for it.
+; rebound to this value instead, and a name the program never binds starts out
+; bound to it.  Only reads of those names go through the check.
 (def %py-deleted (pair (lit %py-deleted) ()))
 
 (def %py-name-missing!

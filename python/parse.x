@@ -629,7 +629,8 @@
           (if (%py-op-is? (first ts) ":") (pair (%py-reverse acc) (rest ts))
             (self (rest ts) (pair (first ts) acc))))))
     (let ((sp (split (rest toks) ())))
-      (let ((sig (%py-params-of (first sp))) (b (%py-test (rest sp))))
+      (let ((sig (%py-params-of (first sp)))
+            (b (%py-scoped (%py-param-syms (%py-params-of (first sp))) (fn (_) (%py-test (rest sp))))))
         (def names (first sig))
         (def syms (%py-strs->syms names))
         (def dflts (first (rest sig)))
@@ -672,10 +673,10 @@
     (if (null? toks) #f (if (%py-kw? (first toks) "for") #t (self (rest toks))))))
 (def %py-genexp
   (fn (_ elems)
-    (let ((r (%py-test elems)))
+    (let ((r (%py-comp-scoped elems (fn (_) (%py-test elems)))))
       (if (not (%py-kw? (if (null? (rest r)) () (first (rest r))) "for"))
         (Err raise (lit syntax) "expected for in generator expression" ())
-        (let ((cls (%py-comp-clauses (rest r) ())))
+        (let ((cls (%py-comp-scoped elems (fn (_) (%py-comp-clauses (rest r) ())))))
           (list (lit %py-gen-new)
             (list (lit fn) (list (lit _) (lit %py-gen))
               (list (lit %py-escape)
@@ -961,10 +962,10 @@
 
 (def %py-listcomp
   (fn (_ elems)
-    (let ((r (%py-test elems)))
+    (let ((r (%py-comp-scoped elems (fn (_) (%py-test elems)))))
       (if (not (%py-kw? (if (null? (rest r)) () (first (rest r))) "for"))
         (Err raise (lit syntax) "expected for in comprehension" ())
-        (let ((cls (%py-comp-clauses (rest r) ())))
+        (let ((cls (%py-comp-scoped elems (fn (_) (%py-comp-clauses (rest r) ())))))
           (list (lit let)
             (list (list (lit %py-acc) (list (lit pair) () ())))
             (list (lit %seq)
@@ -978,10 +979,10 @@
 
 (def %py-setcomp
   (fn (_ elems)
-    (let ((r (%py-test elems)))
+    (let ((r (%py-comp-scoped elems (fn (_) (%py-test elems)))))
       (if (not (%py-kw? (if (null? (rest r)) () (first (rest r))) "for"))
         (Err raise (lit syntax) "expected for in comprehension" ())
-        (let ((cls (%py-comp-clauses (rest r) ())))
+        (let ((cls (%py-comp-scoped elems (fn (_) (%py-comp-clauses (rest r) ())))))
           (list (lit let)
             (list (list (lit %py-acc) (list (lit pair) () ())))
             (list (lit %seq)
@@ -992,13 +993,13 @@
 
 (def %py-dictcomp
   (fn (_ elems)
-    (let ((k (%py-test elems)))
+    (let ((k (%py-comp-scoped elems (fn (_) (%py-test elems)))))
       (if (not (%py-op-is? (if (null? (rest k)) () (first (rest k))) ":"))
         (Err raise (lit syntax) "expected : in dict comprehension" ())
-        (let ((v (%py-test (rest (rest k)))))
+        (let ((v (%py-comp-scoped elems (fn (_) (%py-test (rest (rest k)))))))
           (if (not (%py-kw? (if (null? (rest v)) () (first (rest v))) "for"))
             (Err raise (lit syntax) "expected for in comprehension" ())
-            (let ((cls (%py-comp-clauses (rest v) ())))
+            (let ((cls (%py-comp-scoped elems (fn (_) (%py-comp-clauses (rest v) ())))))
               (list (lit let)
                 (list (list (lit %py-acc) (list (lit %py-mkdict))))
                 (list (lit %seq)
@@ -1573,13 +1574,61 @@
           ((%py-group? t "(") (self (rest ts) (%py-del-line-names (%py-group-of t) acc)))
           (#t (self (rest ts) acc)))))))
 
-; A read of a deleted-name candidate goes through the check; every other
-; name is the bare symbol it always was.
+; THE NAMES A PROGRAM MENTIONS AND NEVER BINDS, collected before the body is
+; walked.  Each is bound at the start to %py-deleted, as a deleted name is, so a
+; read of one is the same check.
+(def %py-undef-names (pair () ()))
+
+; The names the def, lambda or comprehension being compiled binds for itself,
+; as symbols.  A read of one of these finds that binding and never the module's
+; %py-deleted, so it stays a bare symbol.
+(def %py-scope-syms (pair () ()))
+
+; Compile with syms added to the local names, and take them off again however
+; the compile ends.
+(def %py-scoped
+  (fn (_ syms thunk)
+    (let ((outer (first %py-scope-syms)))
+      (%seq (%set-first! %py-scope-syms (%py-append syms outer))
+        (let ((r (guard (e (%seq (%set-first! %py-scope-syms outer) (error e))) (thunk))))
+          (%seq (%set-first! %py-scope-syms outer) r))))))
+
+; The names a parameter list binds, as symbols: the positional ones, *rest,
+; **kw and the keyword-only ones.
+(def %py-param-syms
+  (fn (_ sig)
+    (let ((rest-name (List ref 2 sig)) (kw-name (List ref 3 sig)))
+      (%py-append (%py-strs->syms (first sig))
+        (%py-append (if (null? rest-name) () (list (%py-name->sym rest-name)))
+          (%py-append (if (null? kw-name) () (list (%py-name->sym kw-name)))
+            (%py-strs->syms (%py-kwo-names (List ref 4 sig) ()))))))))
+
+; The names a comprehension's for clauses bind, as symbols.
+(def %py-comp-targets
+  (fn (self toks acc)
+    (match
+      ((null? toks) acc)
+      ((%py-kw? (first toks) "for")
+        (let ((n (%py-for-names (rest toks) ())))
+          (self (rest n) (%py-append (%py-syms-of (first n) ()) acc))))
+      (#t (self (rest toks) acc)))))
+
+; Compile part of a comprehension with the names its for clauses bind in scope.
+(def %py-comp-scoped
+  (fn (_ elems thunk) (%py-scoped (%py-comp-targets elems ()) thunk)))
+
+; A read of a deleted-name candidate, or of a name the program never binds and
+; no enclosing scope binds either, goes through the check; every other name is
+; the bare symbol it always was.
 (def %py-name-read
   (fn (_ s)
-    (if (%py-del-member? s (first %py-del-names))
-      (list (lit %py-name-live) s (%py-name->sym s))
-      (%py-name->sym s))))
+    (let ((sym (%py-name->sym s)))
+      (if (if (%py-del-member? s (first %py-del-names)) #t
+            (if (%py-del-member? s (first %py-undef-names))
+              (not (%py-seen? sym (first %py-scope-syms)))
+              #f))
+        (list (lit %py-name-live) s sym)
+        sym))))
 
 (def %py-name->sym
   (fn (_ s)
@@ -2530,14 +2579,14 @@
         ; `except (A, B):` -- a tuple of classes, any of which matches
         (%py-except-tail
           (list (lit %py-exc-match-any) (lit %py-exc)
-            (pair (lit list) (%py-group-names (%py-group-of (first toks)) ())))
+            (pair (lit list) (%py-group-exprs (%py-group-of (first toks)))))
           (rest toks))
         (let ((n (first toks)))
           (if (not (eq? (%py-tag n) (lit tok-name)))
             (Err raise (lit syntax) "expected an exception name after except" ())
             (%py-except-tail
               (list (lit %py-exc-match) (lit %py-exc)
-                (%py-name->sym (%py-val n)))
+                (%py-name-read (%py-val n)))
               (rest toks))))))))
 
 (def %py-except-clauses ())
@@ -2665,8 +2714,7 @@
         (if (not (eq? (%py-tag n) (lit tok-name)))
           (Err raise (lit syntax) "expected an exception name after raise" ())
           ; `raise X(...)` CALLS X and raises the result, which is what Python
-          ; does -- and is why an undefined name still answers NameError with no
-          ; special case: it is bound to a shim that raises when called.
+          ; does.  X is read as any name is, so an undefined one is NameError.
           ; `raise X` with no parens instantiates it too, as Python does.
           (if (%py-group? (if (null? (rest toks)) () (first (rest toks))) "(")
             (let ((g (%py-group-of (first (rest toks)))))
@@ -2674,14 +2722,14 @@
                 (list (lit %py-raise)
                   (if (null? g)
                     ; `raise X()` -- no argument
-                    (list (%py-name->sym (%py-val n)))
+                    (list (%py-name-read (%py-val n)))
                     ; every argument: raise ValueError('a', 0)
-                    (pair (%py-name->sym (%py-val n)) (%py-group-exprs g))))
+                    (pair (%py-name-read (%py-val n)) (%py-group-exprs g))))
                 (rest (rest toks))))
             ; `raise X` with no parens: a class instantiates, an instance
             ; (from `except X as e`) raises as itself
             (pair
-              (list (lit %py-raise) (list (lit %py-exc-instance) (%py-name->sym (%py-val n)) ()))
+              (list (lit %py-raise) (list (lit %py-exc-instance) (%py-name-read (%py-val n)) ()))
               (rest toks))))))))
 
 ; --- decorators --------------------------------------------------------------
@@ -2951,7 +2999,13 @@
             (%set-first! %py-in-async (first %py-async-me))
             (let ((outer-self (first %py-current-self)))
               (%set-first! %py-current-self (if (null? syms) () (first syms)))
-              (let ((b (%py-block after)))
+              ; the parameters and the names the body binds, less the ones it
+              ; declares global, are this body's own for %py-name-read
+              (let ((b (%py-scoped
+                         (%py-append all-syms
+                           (%py-minus (%py-assign-targets (%py-block-contents after) ())
+                             (%py-global-names (%py-block-contents after) ())))
+                         (fn (_) (%py-block after)))))
                 ; A FUNCTION'S ASSIGNMENTS ARE ITS OWN.  The module-level scan
                 ; skips def bodies, so their targets are hoisted HERE instead,
                 ; as a `let` (NOT `def`: x's `def` decides global-versus-local
@@ -3240,12 +3294,9 @@
         (self seen (rest syms) acc)
         (self (pair (first syms) seen) (rest syms) (pair (first syms) acc))))))
 
-; A name mentioned but never bound gets a shim that raises PYTHON's error.
-;
-; Without this the program dies on `Unbound SYMBOL 'py-int` -- and `py-int` is
-; not in anyone's source. The prefix exists so Python's names cannot resolve to
-; x's, which it must; it has no business appearing in a diagnostic. The shim
-; puts the programmer's own spelling back.
+; A name mentioned but never bound is bound at the start to %py-deleted, and a
+; read of it raises Python's NameError in the programmer's own spelling rather
+; than x's `Unbound SYMBOL 'py-int`, a name in nobody's source.
 (def %py-undefined
   (fn (self names bound acc)
     (if (null? names)
@@ -3267,8 +3318,8 @@
 ; so an unconditional shim for a name this LINE does not bind would clobber a
 ; binding an EARLIER line made -- `x = 5` then `x` re-shimmed py-x and the
 ; session forgot everything.  The guard evaluates the name: bound answers
-; itself and the def never runs; unbound raises into the guard, which defs the
-; shim.  Batch semantics are unchanged -- a truly unbound name still shims.
+; itself and the def never runs; unbound raises into the guard, which binds
+; the name to %py-deleted.
 ; The handler defines through the base/def-global door, because a plain def
 ; inside a guard HANDLER binds in the handler's frame -- measured in the REPL:
 ; the hoist "succeeded" and the very next form found the name unbound.
@@ -3281,11 +3332,7 @@
           (list (lit guard)
             (list (lit %py-e)
               (list (lit %py-defg) (list (lit lit) (%py-name->sym (first names)))
-                (list (lit fn) (list (lit _))
-                  (list (lit Err) (lit raise) (list (lit lit) (lit name))
-                    (Str8 append (Str8 append "name '" (first names))
-                      "' is not defined")
-                    ()))))
+                (lit %py-deleted)))
             (%py-name->sym (first names)))
           acc)))))
 
@@ -3306,12 +3353,14 @@
     ; before the body is walked: a read compiled ahead of the `del` that
     ; names it still has to carry the check
     (%set-first! %py-del-names (%py-del-targets %toks ()))
+    (%set-first! %py-scope-syms ())
     (def %targets (%py-dedupe () (%py-assign-targets %toks ()) ()))
-    (def %body (%py-check-escapes (first (%py-stmts (%py-semi->nl %toks) ()))))
     (def %undef
       (%py-undefined (%py-mentioned %toks ())
                      (%py-append (%py-bound-names %toks ()) (%py-param-names %toks ()))
                      ()))
+    (%set-first! %py-undef-names %undef)
+    (def %body (%py-check-escapes (first (%py-stmts (%py-semi->nl %toks) ()))))
     (%py-append (%py-shims %undef ())
       (%py-append (%py-decls %targets ()) %body))))
 
