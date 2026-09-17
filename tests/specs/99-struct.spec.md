@@ -54,3 +54,26 @@ Exception
 Exception
 ```
 
+
+### the float codes e, f and d
+
+```python
+(python-run "import struct, array\nclass F:\n    def __float__(self):\n        return 2.5\ndef show(label, f):\n    try:\n        print(label, repr(f()))\n    except Exception as e:\n        print(label, type(e).__name__, e)\nnan = float(\"nan\")\nshow(\"pack f 1e300\", lambda: struct.pack(\"<f\", 1e300))\nshow(\"pack e 65520\", lambda: struct.pack(\"<e\", 65520.0))\nshow(\"pack e 65519\", lambda: struct.pack(\"<e\", 65519.0))\nshow(\"pack f past max\", lambda: struct.pack(\"<f\", 3.4028235677973366e38))\nshow(\"pack f max\", lambda: struct.pack(\"<f\", 3.4028234663852886e38))\nshow(\"pack f int\", lambda: struct.pack(\"<f\", 3))\nshow(\"pack nans\", lambda: (struct.pack(\"<d\", nan), struct.pack(\"<f\", nan), struct.pack(\">e\", nan)))\nshow(\"pack zeros\", lambda: (struct.pack(\"<e\", -0.0), struct.pack(\">d\", -0.0), struct.pack(\"<f\", 0.0)))\nshow(\"pack tiny\", lambda: (struct.pack(\"<f\", 1e-46), struct.pack(\"<e\", 1e-7), struct.pack(\"<d\", 5e-324), struct.pack(\"<f\", 1e-40)))\nshow(\"unpack\", lambda: (struct.unpack(\"<f\", b\"\\x00\\x00\\x80\\x7f\"), struct.unpack(\"<d\", b\"\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\"), struct.unpack(\">e\", b\"\\xfc\\x00\"), struct.unpack(\"<f\", b\"\\x01\\x00\\x00\\x00\")))\nshow(\"calcsize\", lambda: (struct.calcsize(\"e\"), struct.calcsize(\"f\"), struct.calcsize(\"d\"), struct.calcsize(\"bd\"), struct.calcsize(\"<bd\")))\nshow(\"pack obj\", lambda: struct.pack(\"<f\", F()))\nshow(\"round trip f\", lambda: [struct.unpack(\"<f\", struct.pack(\"<f\", v))[0] for v in (0.1, 1 / 3, 16777217.0, -2.5e-38)])\nshow(\"round trip e\", lambda: [struct.unpack(\"<e\", struct.pack(\"<e\", v))[0] for v in (1.1, 65504.0, 0.000123, -3.14159)])")
+```
+---
+```output
+pack f 1e300 OverflowError float too large to pack with f format
+pack e 65520 OverflowError float too large to pack with e format
+pack e 65519 b'\xff{'
+pack f past max OverflowError float too large to pack with f format
+pack f max b'\xff\xff\x7f\x7f'
+pack f int b'\x00\x00@@'
+pack nans (b'\x00\x00\x00\x00\x00\x00\xf8\x7f', b'\x00\x00\xc0\x7f', b'~\x00')
+pack zeros (b'\x00\x80', b'\x80\x00\x00\x00\x00\x00\x00\x00', b'\x00\x00\x00\x00')
+pack tiny (b'\x00\x00\x00\x00', b'\x02\x00', b'\x01\x00\x00\x00\x00\x00\x00\x00', b'\xc2\x16\x01\x00')
+unpack ((inf,), (5e-324,), (-inf,), (1.401298464324817e-45,))
+calcsize (2, 4, 8, 16, 9)
+pack obj b'\x00\x00 @'
+round trip f [0.10000000149011612, 0.3333333432674408, 16777216.0, -2.4999999777439474e-38]
+round trip e [1.099609375, 65504.0, 0.00012302398681640625, -3.140625]
+```

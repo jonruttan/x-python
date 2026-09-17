@@ -2,10 +2,10 @@
 ;
 ; ## python/array.x -- the array module
 ;
-; @description array.array, a sequence of integers of one declared width.
-;   The values are kept as values; the byte layout is computed at the two
-;   seams that ask for it -- bytes(a), and construction from a buffer --
-;   through the same encoder int.to_bytes uses.
+; @description array.array, a sequence of integers or floats of one declared
+;   width.  The values are kept as values; the byte layout is computed at the
+;   two seams that ask for it -- bytes(a), and construction from a buffer --
+;   through the same encoder int.to_bytes uses, with a float's IEEE bits.
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan
 ; @license MIT No Attribution (MIT-0)
@@ -15,24 +15,94 @@
 ;     (   )
 ;      " "
 ;
-; Only the integer typecodes are here: b B h H i I l L q Q, at the widths
-; CPython uses on a 64-bit machine (l and L are eight bytes).  The float
-; codes f and d would need an IEEE encoder, which nothing else in this
-; runtime has yet, and `array('f')` says so rather than pretending.
+; The integer typecodes b B h H i I l L q Q, at the widths CPython uses on a
+; 64-bit machine (l and L are eight bytes), and the float typecodes f and d.
 
 ; Doubling rather than Num expt: a power costs tens of thousands of objects
 ; and this table is built at load.
 (def %py-arr-pow
   (fn (self n acc) (if (= n 0) acc (self (- n 1) (* acc 2)))))
 
-; (typecode size signed? low high)
+; --- IEEE 754 -----------------------------------------------------------------
+; A float's bit pattern at half, single or double width, and back, for the f and
+; d typecodes here and the e, f and d codes of python/struct.x.  Both directions
+; are exact arithmetic on the value: frexp finds the exponent, the significand
+; is scaled to an integer and rounded half to even by rint, and a carry out of
+; the fraction moves the exponent up.  A finite value past the width's range
+; comes back as the infinity's pattern, which struct refuses and array('f')
+; keeps, as CPython's cast does.  A NaN is the positive quiet NaN.
+
+; (size exponent-bits fraction-bits bias top one sign): top is the all-ones
+; exponent, one is 2**fraction-bits, and sign is the sign bit.
+(def %py-ieee-format
+  (fn (_ size ebits fbits)
+    (list size ebits fbits (- (%py-arr-pow (- ebits 1) 1) 1) (- (%py-arr-pow ebits 1) 1)
+      (%py-arr-pow fbits 1) (%py-arr-pow (+ ebits fbits) 1))))
+(def %py-ieee-half (%py-ieee-format 2 5 10))
+(def %py-ieee-single (%py-ieee-format 4 8 23))
+(def %py-ieee-double (%py-ieee-format 8 11 52))
+(def %py-ieee-fbits (fn (_ f) (first (rest (rest f)))))
+(def %py-ieee-bias (fn (_ f) (first (rest (rest (rest f))))))
+(def %py-ieee-top (fn (_ f) (first (rest (rest (rest (rest f)))))))
+(def %py-ieee-one (fn (_ f) (first (rest (rest (rest (rest (rest f))))))))
+(def %py-ieee-sign (fn (_ f) (first (rest (rest (rest (rest (rest (rest f)))))))))
+
+(def %py-ieee-inf (%py-float-of-str "inf"))
+(def %py-ieee-nan (%py-float-of-str "nan"))
+(def %py-ieee-pow2 (fn (_ k) (Float pow 2.0 (* k 1.0))))
+
+; The exponent and fraction fields of a finite a > 0.  A normal a is its
+; significand less the leading 1, scaled to an integer; a subnormal one is a
+; count of the smallest subnormal, scaled up in two halves so that neither power
+; of two overflows a double.  A carry lands in the exponent by the addition, and
+; a pattern at or past the all-ones exponent is the infinity's.
+(def %py-ieee-finite
+  (fn (_ a f)
+    (let ((fe (%py-mfrexp-pair a)) (bias (%py-ieee-bias f)) (fbits (%py-ieee-fbits f))
+          (inf (* (%py-ieee-top f) (%py-ieee-one f))))
+      (let ((be (+ (- (rest fe) 1) bias)))
+        (if (< 0 be)
+          (let ((n (+ (* be (%py-ieee-one f))
+                      (Float ->int
+                        (Float rint (* (- (* (first fe) 2.0) 1.0) (%py-ieee-pow2 fbits)))))))
+            (if (< n inf) n inf))
+          (let ((k (+ (- bias 1) fbits)))
+            (let ((h (Num quotient k 2)))
+              (Float ->int
+                (Float rint (* (* a (%py-ieee-pow2 h)) (%py-ieee-pow2 (- k h))))))))))))
+
+; The unsigned bit pattern of the float x at format f.
+(def %py-ieee-bits
+  (fn (_ x f)
+    (let ((inf (* (%py-ieee-top f) (%py-ieee-one f)))
+          (sign (if (if (< x 0.0) #t (if (= x 0.0) (< (/ 1.0 x) 0.0) #f)) (%py-ieee-sign f) 0)))
+      (match
+        ((Float nan? x) (+ inf (Num quotient (%py-ieee-one f) 2)))
+        ((Float inf? x) (+ sign inf))
+        ((= x 0.0) sign)
+        (#t (+ sign (%py-ieee-finite (Float abs x) f)))))))
+
+; The float the unsigned bit pattern n stands for at format f.
+(def %py-ieee-value
+  (fn (_ n f)
+    (let ((neg (not (< n (%py-ieee-sign f)))) (one (%py-ieee-one f))
+          (shift (+ (%py-ieee-bias f) (%py-ieee-fbits f))))
+      (let ((m (if neg (- n (%py-ieee-sign f)) n)))
+        (let ((be (Num quotient m one)) (frac (Num modulo m one)))
+          (let ((v (match
+                     ((= be (%py-ieee-top f)) (if (= frac 0) %py-ieee-inf %py-ieee-nan))
+                     ((= be 0) (* (* frac 1.0) (%py-ieee-pow2 (- 1 shift))))
+                     (#t (* (* (+ one frac) 1.0) (%py-ieee-pow2 (- be shift)))))))
+            (if neg (* %py-mminus-one v) v)))))))
+
+; (typecode size signed? low high float-format), the format nil for an integer
 (def %py-arr-entry
   (fn (_ tc size signed)
     (let ((span (%py-arr-pow (* 8 size) 1)))
       (if signed
         (let ((half (Num quotient span 2)))
-          (list tc size #t (- 0 half) (- half 1)))
-        (list tc size #f 0 (- span 1))))))
+          (list tc size #t (- 0 half) (- half 1) ()))
+        (list tc size #f 0 (- span 1) ())))))
 
 (def %py-arr-codes
   (list
@@ -40,7 +110,8 @@
     (%py-arr-entry "h" 2 #t) (%py-arr-entry "H" 2 #f)
     (%py-arr-entry "i" 4 #t) (%py-arr-entry "I" 4 #f)
     (%py-arr-entry "l" 8 #t) (%py-arr-entry "L" 8 #f)
-    (%py-arr-entry "q" 8 #t) (%py-arr-entry "Q" 8 #f)))
+    (%py-arr-entry "q" 8 #t) (%py-arr-entry "Q" 8 #f)
+    (list "f" 4 #f 0 0 %py-ieee-single) (list "d" 8 #f 0 0 %py-ieee-double)))
 
 (def %py-arr-find
   (fn (self tc rows)
@@ -52,6 +123,9 @@
 (def %py-arr-signed? (fn (_ e) (List ref 2 e)))
 (def %py-arr-low (fn (_ e) (List ref 3 e)))
 (def %py-arr-high (fn (_ e) (List ref 4 e)))
+; asked for every element, so read by first and rest rather than List ref, which
+; is a class method call
+(def %py-arr-format (fn (_ e) (first (rest (rest (rest (rest (rest e))))))))
 
 ; --- the value ---------------------------------------------------------------
 ; The elements sit behind a cell: an array is mutable, and every name bound
@@ -83,10 +157,18 @@
 
 ; --- elements ----------------------------------------------------------------
 
+; A float element is a real number, and an f array keeps it as the single
+; precision value its bits hold, so reading it back answers what was stored.
+(def %py-arr-float
+  (fn (_ f v)
+    (let ((x (%py-mfloat v)))
+      (if (same? f %py-ieee-double) x (%py-ieee-value (%py-ieee-bits x f) f)))))
+
 (def %py-arr-item
   (fn (_ e v)
     (let ((n (%py-boolnorm v)))
       (match
+        ((not (null? (%py-arr-format e))) (%py-arr-float (%py-arr-format e) v))
         ((not (eq? (%py-num-kind n) (lit int)))
           (Err raise (lit type) "array item must be an integer" ()))
         ((< n (%py-arr-low e))
@@ -103,7 +185,8 @@
 
 ; --- the byte layout ---------------------------------------------------------
 ; Little-endian, two's complement, which is what every machine this runs on
-; uses and what the corpus's to_bytes comparisons assume.
+; uses and what the corpus's to_bytes comparisons assume.  A float is its IEEE
+; bit pattern, written as an unsigned integer of the same width.
 
 (def %py-arr-bytes
   (fn (self e el acc)
@@ -111,7 +194,10 @@
       acc
       (self e (rest el)
         (%py-list-cat acc
-          (%py-int-encode (first el) (%py-arr-size e) "little" (%py-arr-signed? e)))))))
+          (if (null? (%py-arr-format e))
+            (%py-int-encode (first el) (%py-arr-size e) "little" (%py-arr-signed? e))
+            (%py-int-encode (%py-ieee-bits (first el) (%py-arr-format e))
+              (%py-arr-size e) "little" #f)))))))
 
 (def %py-take-n
   (fn (self l k acc)
@@ -125,9 +211,12 @@
       (let ((big (List reverse (%py-take-n bs (%py-arr-size e) ()))))
         (self e (%py-drop bs (%py-arr-size e))
           (pair
-            (if (if (%py-arr-signed? e) (>= (first big) 128) #f)
-              (- (- 0 (%py-int-join (%py-int-invert big ()))) 1)
-              (%py-int-join big))
+            (match
+              ((not (null? (%py-arr-format e)))
+                (%py-ieee-value (%py-int-join big) (%py-arr-format e)))
+              ((if (%py-arr-signed? e) (>= (first big) 128) #f)
+                (- (- 0 (%py-int-join (%py-int-invert big ()))) 1))
+              (#t (%py-int-join big)))
             acc))))))
 
 ; --- the constructor ---------------------------------------------------------
@@ -156,7 +245,7 @@
         (let ((e (%py-arr-info tc)))
           (if (null? e)
             (Err raise (lit value)
-              "bad typecode (must be b, B, h, H, i, I, l, L, q or Q)" ())
+              "bad typecode (must be b, B, h, H, i, I, l, L, q, Q, f or d)" ())
             (%py-arr-new tc (%py-arr-init e (rest a)))))))))
 
 ; --- the operations ----------------------------------------------------------
