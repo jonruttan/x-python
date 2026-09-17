@@ -71,3 +71,14 @@ True 3
 ```output
 C+B B who
 ```
+
+### a builtin class's method binds on an instance, and a builtin function a class holds does not
+
+```python
+(python-run "class C:\n    f = len\nclass K:\n    def __init__(self):\n        self.n = 1\nk = K()\nk.__init__()\nk.__setattr__(\"n\", 2)\ne = ValueError(\"boom\")\nclass E(Exception):\n    pass\nprint(C().f(\"abc\"), k.n, e.__str__(), e.__repr__(), E(\"x\").__str__())\nprint(type(C.__new__(C)).__name__, type(C().__new__(C)).__name__)")
+```
+---
+```output
+3 2 boom ValueError('boom') x
+C C
+```

@@ -765,6 +765,33 @@
             (fn (_ i) (%py-list-set! obj (%py-els-drop-at (%py-list-elems obj) (%py-list-norm-i n i)))))
           (#t (%py-class-row-attr %py-cls-list obj name "list")))))))
 
+; A tuple's count and index, read as a list's are, and the tuple class's rows
+; for any other name.
+(def %py-tuple-attr
+  (fn (_ t name)
+    (match
+      ((Str8 =? name "count")
+        (fn (_ . a)
+          (if (= (%py-length a) 1)
+            (%py-els-count (%py-tuple-elems t) (first a) 0)
+            (Err raise (lit type)
+              (Str8 append "tuple.count() takes exactly one argument ("
+                (Str8 append (%py-str (%py-length a)) " given)")) ()))))
+      ((Str8 =? name "index")
+        (fn (_ . a)
+          (if (null? a)
+            (Err raise (lit type) "index expected at least 1 argument, got 0" ())
+            (let ((els (%py-tuple-elems t)))
+              (let ((n (%py-length els)))
+                (let ((lo (%py-list-clamp n (%py-s-arg a 1) 0))
+                      (hi (%py-list-clamp n (%py-s-arg a 2) n)))
+                  (let ((i (%py-els-index (%py-drop els lo) lo hi (first a))))
+                    (if (< i 0)
+                      (error (%py-instantiate %py-exc-ValueError
+                               (list "tuple.index(x): x not in tuple")))
+                      i))))))))
+      (#t (%py-class-row-attr %py-cls-tuple t name "tuple")))))
+
 ; --- Dict helpers ------------------------------------------------------------
 (def %py-ditems
   (fn (self es)

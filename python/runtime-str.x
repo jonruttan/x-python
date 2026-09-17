@@ -56,6 +56,7 @@
       ((%py-barr-is obj) (%py-barr-attr obj name))
       ((%py-bytes-is obj) (%py-bytes-attr obj name))
       ((%py-set-is obj) (%py-set-attr obj name))
+      ((%py-tuple-is obj) (%py-tuple-attr obj name))
       ((%py-gen-is obj) (%py-gen-attr obj name))
       ((%py-bound-is obj) (%py-bound-attr obj name))
       ((%py-super-is obj) (%py-super-attr obj name))
@@ -200,6 +201,8 @@
                    (%py-unbound %py-cls-set %py-set-attr (%py-set-new #f ()) name))
                  ((%py-subclass? cls %py-cls-frozenset)
                    (%py-unbound %py-cls-frozenset %py-set-attr (%py-set-new #t ()) name))
+                 ((%py-subclass? cls %py-cls-tuple)
+                   (%py-unbound %py-cls-tuple %py-tuple-attr (%py-tuple-new ()) name))
                  (#t ())))))
       (if (null? m)
         (Err raise (lit attribute)
@@ -342,10 +345,19 @@
   (fn (_ a i) (let ((c (%py-s-opt a i ()))) (if (null? c) 32 (first (%py-s-cps c "fill"))))))
 
 (def %py-str-attr
-  (fn (_ v name) (%py-s-attr (%py-str-cps v) name)))
+  (fn (_ v name) (%py-s-attr (%py-str-cps v) name v)))
 
+; A name the str surface does not have, answered from str's class rows.  Every
+; caller of the surface applies what it answers, so a method comes back as a
+; closure over the value rather than as a bound method.
+(def %py-str-row-attr
+  (fn (_ v name)
+    (let ((m (%py-class-row-attr %py-cls-str v name "str")))
+      (if (%py-bound-is m) (%py-bind-method (%py-bound-fn m) v) m))))
+
+; l is the code points of the str v.
 (def %py-s-attr
-  (fn (_ l name)
+  (fn (_ l name v)
     (match
       ((Str8 =? name "upper")      (fn (_ . a) (%py-str-new (%pb-upper l))))
       ((Str8 =? name "lower")      (fn (_ . a) (%py-str-new (%pb-lower l))))
@@ -416,9 +428,7 @@
       ; are a plain list, so only the template crosses over.
       ((Str8 =? name "format")
         (fn (_ . a) (%py-str-of-x (%py-strformat (%ps->x l) a))))
-      (#t
-        (Err raise (lit attribute)
-          (Str8 append (Str8 append "'str' object has no attribute '" name) "'") ())))))
+      (#t (%py-str-row-attr v name)))))
 
 (def %py-s-triple
   (fn (_ t)

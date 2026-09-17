@@ -165,6 +165,45 @@ The sequences are the same and the types are not, which is Python's answer.
 ---
     True
 
+## methods
+
+### count and index
+
+```python
+(python-run "t = (1, 2, 3, 2)\nprint(t.count(2), t.count(9), t.index(2), t.index(2, 2), t.index(3, -2))\nb = (0, t, 0, t)\nprint(b.count(t), b.index(t))\nf = t.count\nprint(f(1))")
+```
+---
+```output
+2 0 1 3 2
+2 1
+1
+```
+
+### index raises for a value outside its range, and both check their arguments
+
+```python
+(python-run "t = (1, 2, 3)\ndef err(f):\n    try:\n        f()\n    except (AttributeError, TypeError, ValueError) as e:\n        print(type(e).__name__, e)\nerr(lambda: t.index(9))\nerr(lambda: t.index(3, 0, 2))\nerr(lambda: t.count())\nerr(lambda: t.index())\nerr(lambda: t.nosuch)")
+```
+---
+```output
+ValueError tuple.index(x): x not in tuple
+ValueError tuple.index(x): x not in tuple
+TypeError tuple.count() takes exactly one argument (0 given)
+TypeError index expected at least 1 argument, got 0
+AttributeError 'tuple' object has no attribute 'nosuch'
+```
+
+### count and index read off the class, a subclass and a namedtuple
+
+```python
+(python-run "from collections import namedtuple\nclass T(tuple):\n    pass\nP = namedtuple(\"P\", \"x y\")\nprint(tuple.count((1, 2, 1), 1), tuple.index((1, 2), 2), T.count(T((5, 5)), 5))\nprint(T((1, 2, 1)).count(1), T((1, 2)).index(2), P(1, 1).count(1), P(1, 2).index(2))")
+```
+---
+```output
+2 1 2
+2 1 2 1
+```
+
 ## unpacking
 
 This is what tuples are for: it is how a Python function returns two things.
