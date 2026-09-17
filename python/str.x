@@ -56,6 +56,7 @@
 
 (provide python/str
   %ps-of-x %ps->x %ps-write %ps-write-bytes-to %ps-nul? %ps-encode %ps-enc1 %ps-decode
+  %ps-decode-as %ps-encode-as
   %ps-repr %ps-upper %ps-lower %ps-swapcase %ps-capitalize %ps-title
   %ps-isspace %ps-isalpha %ps-isdigit %ps-isalnum %ps-isupper %ps-islower)
 
@@ -112,6 +113,151 @@
     (if (null? bs) (List reverse acc)
       (let ((r (%ps-dec1 bs)))
         (self (rest r) (pair (first r) acc))))))
+
+; --- Python's codecs ---------------------------------------------------------
+;
+; The decoder above is the READER'S door and not a codec: it takes what the
+; platform handed us, which the reader has already accepted, and a byte that
+; starts nothing as itself.  bytes.decode and str(b, encoding) ask the other
+; question -- is this valid utf-8, or valid ascii? -- and answer it three ways.
+;
+; strict raises, ignore drops, replace answers U+FFFD, one per MAXIMAL SUBPART:
+; the longest prefix of a sequence that was still valid.  So a truncated
+; three-byte start before a space is ONE replacement and three truncated starts
+; in a row are three, which is the count CPython reports.
+;
+; The message names a byte and a position, and the formatters for both are the
+; Python layer's -- this file has no number to text of its own, and a second
+; one is not worth the two it would save.
+
+(def %ps-repl 65533)
+(def %ps-qmark 63)
+
+; The codecs a program here can name, under the spellings it names them by.
+(def %ps-codec
+  (fn (_ name)
+    (match
+      ((Str8 =? name "utf-8") (lit utf-8))
+      ((Str8 =? name "utf8") (lit utf-8))
+      ((Str8 =? name "UTF-8") (lit utf-8))
+      ((Str8 =? name "ascii") (lit ascii))
+      ((Str8 =? name "us-ascii") (lit ascii))
+      (#t (Err raise (lit lookup) (Str8 append "unknown encoding: " name) ())))))
+
+; What a lead byte promises: how many continuations follow, the range the FIRST
+; of them may be in, and the payload it carries.  The narrow first ranges are
+; what refuse an overlong form, a surrogate and a code point past U+10FFFF;
+; nil is a byte that can start nothing.
+(def %ps-lead
+  (fn (_ b)
+    (match
+      ((< b 128) (list 0 0 0 b))
+      ((< b 194) ())
+      ((< b 224) (list 1 128 191 (- b 192)))
+      ((= b 224) (list 2 160 191 0))
+      ((= b 237) (list 2 128 159 13))
+      ((< b 240) (list 2 128 191 (- b 224)))
+      ((= b 240) (list 3 144 191 0))
+      ((< b 244) (list 3 128 191 (- b 240)))
+      ((= b 244) (list 3 128 143 4))
+      (#t ()))))
+
+; One sequence: its code point and what follows it, or nil and the bytes past
+; the maximal subpart -- the lead and the continuations that were still valid.
+(def %ps-utf8
+  (fn (_ bs)
+    (let ((l (%ps-lead (first bs))))
+      (if (null? l)
+        (pair () (rest bs))
+        (%ps-utf8-tail (rest bs) (first l) (first (rest l))
+          (first (rest (rest l))) (first (rest (rest (rest l)))))))))
+
+(def %ps-utf8-tail
+  (fn (self bs need lo hi cp)
+    (if (= need 0)
+      (pair cp bs)
+      (if (null? bs)
+        (pair () bs)
+        (let ((b (first bs)))
+          (if (if (>= b lo) (<= b hi) #f)
+            (self (rest bs) (- need 1) 128 191 (+ (* cp 64) (- b 128)))
+            (pair () bs)))))))
+
+; ascii is the same walk over a one-byte alphabet.
+(def %ps-ascii
+  (fn (_ bs)
+    (if (< (first bs) 128) (pair (first bs) (rest bs)) (pair () (rest bs)))))
+
+; The walk: a code point onto the answer, and `bad` says what a failure leaves
+; there -- nothing, a replacement, or an error.
+(def %ps-walk
+  (fn (self step bad bs acc)
+    (if (null? bs)
+      (List reverse acc)
+      (let ((r (step bs)))
+        (if (null? (first r))
+          (self step bad (rest r) (bad acc bs))
+          (self step bad (rest r) (pair (first r) acc)))))))
+
+(def %ps-handler!
+  (fn (_ errors)
+    (Err raise (lit lookup)
+      (Str8 append "unknown error handler name '" (Str8 append errors "'")) ())))
+
+(def %ps-dec-errors
+  (fn (_ errors name n)
+    (match
+      ((Str8 =? errors "strict")
+        (fn (_ acc bs)
+          (Err raise (lit unicode-decode)
+            (Str8 append "'"
+              (Str8 append name
+                (Str8 append "' codec can't decode byte 0x"
+                  (Str8 append (%py-hex2 (first bs))
+                    (Str8 append " in position " (%py-str (- n (%pb-len bs))))))))
+            ())))
+      ((Str8 =? errors "ignore") (fn (_ acc bs) acc))
+      ((Str8 =? errors "replace") (fn (_ acc bs) (pair %ps-repl acc)))
+      ; a name nothing here knows is an error only where it would have been
+      ; used, which is where CPython looks one up
+      (#t (fn (_ acc bs) (%ps-handler! errors))))))
+
+(def %ps-decode-as
+  (fn (_ bs name errors)
+    (%ps-walk (if (eq? (%ps-codec name) (lit ascii)) %ps-ascii %ps-utf8)
+      (%ps-dec-errors errors name (%pb-len bs)) bs ())))
+
+; The other direction, where only ascii can refuse: utf-8 takes every code
+; point there is.  Python's replacement on the way out is a question mark.
+(def %ps-enc-errors
+  (fn (_ errors name n)
+    (match
+      ((Str8 =? errors "strict")
+        (fn (_ acc cps)
+          (Err raise (lit unicode-encode)
+            (Str8 append "'"
+              (Str8 append name
+                (Str8 append "' codec can't encode character in position "
+                  (Str8 append (%py-str (- n (%pb-len cps)))
+                    ": ordinal not in range(128)"))))
+            ())))
+      ((Str8 =? errors "ignore") (fn (_ acc cps) acc))
+      ((Str8 =? errors "replace") (fn (_ acc cps) (pair %ps-qmark acc)))
+      (#t (fn (_ acc cps) (%ps-handler! errors))))))
+
+(def %ps-enc-ascii
+  (fn (self cps bad acc)
+    (if (null? cps)
+      (List reverse acc)
+      (if (< (first cps) 128)
+        (self (rest cps) bad (pair (first cps) acc))
+        (self (rest cps) bad (bad acc cps))))))
+
+(def %ps-encode-as
+  (fn (_ cps name errors)
+    (if (eq? (%ps-codec name) (lit ascii))
+      (%ps-enc-ascii cps (%ps-enc-errors errors name (%pb-len cps)) ())
+      (%ps-encode cps ()))))
 
 ; --- the boundary ------------------------------------------------------------
 (def %ps-of-x (fn (_ s) (%ps-decode (%pb-of-str s) ())))

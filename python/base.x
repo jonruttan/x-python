@@ -125,7 +125,8 @@
       ((%py-code-is src) (%py-code-forms src))
       ; a buffer is source too, read as the utf-8 it holds
       ((%py-buffer? src)
-        (%py-code-of (%py-str-new (%ps-decode (%py-buffer-bytes src) ())) mode))
+        (%py-code-of
+          (%py-str-new (%ps-decode-as (%py-buffer-bytes src) "utf-8" "strict")) mode))
       ((not (%py-str-is src))
         (Err raise (lit type) "eval()/exec() wants a string or a code object" ()))
       (#t

@@ -422,7 +422,11 @@
       ((Str8 =? name "isupper") (fn (_ . a) (%pb-isupper l)))
       ((Str8 =? name "islower") (fn (_ . a) (%pb-islower l)))
       ; ENCODE IS THE CODEC, and the one place str and bytes meet by design.
-      ((Str8 =? name "encode")  (fn (_ . a) (%py-bytes-new (%ps-encode l ()))))
+      ((Str8 =? name "encode")
+        (fn (_ . a)
+          (%py-bytes-new
+            (%ps-encode-as l (%py-codec-arg a 0 "utf-8")
+              (%py-codec-arg a 1 "strict")))))
       ; str.format is the BRACE engine (%py-strformat), not the percent one:
       ; `"{}".format(x)` and `"%s" % x` are different grammars that happen to
       ; share a spec scanner.  Its template is a platform string and its args
