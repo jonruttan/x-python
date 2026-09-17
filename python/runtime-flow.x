@@ -87,10 +87,8 @@
 ; carries the libm calls, so this is the translation layer and not an
 ; implementation of anything numeric.
 ;
-; NOT OFFERED: erf, erfc, gamma and lgamma.  The platform binds no libm entry
-; for them, and an approximation written here would answer digits CPython does
-; not -- which is worse than an AttributeError saying plainly that they are
-; missing.
+; The entries float.x does not bind -- erf, the hyperbolics, gamma among them --
+; are bound below through its own %libm-fn, so every function here is libm's.
 
 ; --- with ------------------------------------------------------------------
 ;
@@ -306,40 +304,25 @@
         ((Float inf? r) (if (= x 0.0) (%py-mdomain) (%py-mrange-error)))
         (#t r)))))
 
-; sinh, cosh, tanh and their inverses are not bound in the platform; sinh and
-; cosh are one line each of the exponential that is.
-(def %py-msinh
-  (fn (_ x) (Float / (Float - (Float exp x) (Float exp (Float - (%py-mfloat 0) x))) (%py-mfloat 2))))
-(def %py-mcosh
-  (fn (_ x) (Float / (Float + (Float exp x) (Float exp (Float - (%py-mfloat 0) x))) (%py-mfloat 2))))
+; --- the libm entries lib/x/num/float.x does not bind ---------------------------
+; Each is one row through that file's own %libm-fn, the way it binds sin and exp:
+; the address resolves once into a cell a state image re-resolves.  Nothing here
+; computes a function libm already has.
 
-; asinh and acosh past 2**28 are log(2x), where x*x would overflow or swamp the
-; 1; asinh is odd, which keeps a large negative x and -inf from cancelling.
-(def %py-mln2 (Float log 2.0))
-(def %py-masinh
-  (fn (self x)
-    (match
-      ((< x 0.0) (- 0.0 (self (- 0.0 x))))
-      ((< 268435456.0 x) (+ (Float log x) %py-mln2))
-      (#t (Float log (+ x (Float sqrt (+ (* x x) 1.0))))))))
-(def %py-macosh
-  (fn (_ x)
-    (if (< 268435456.0 x)
-      (+ (Float log x) %py-mln2)
-      (Float log (+ x (Float sqrt (- (* x x) 1.0)))))))
-(def %py-matanh
-  (fn (_ x) (/ (Float log (/ (+ 1.0 x) (- 1.0 x))) 2.0)))
-
-; --- erf, erfc, gamma and lgamma ------------------------------------------------
-; None of the four is bound in the platform either.  They are computed from the
-; functions that are, as CPython computes them where libm lacks them.  The float
-; arithmetic uses the generic operators, which cost a quarter of the Float
-; methods' allocation, and erfc runs a fifty-term fraction.
-
-(def %py-sqrtpi (Float sqrt (Float pi)))
-(def %py-logpi 1.144729885849400174143427351353058711647)
-; 1e-20, as a quotient since the reader takes no exponent here; 1e20 is exact
-(def %py-mtiny (/ 1.0 100000000000000000000.0))
+(def %py-ferf      (%libm-fn (lit %py-ferf)      "d->d"  "erf"))
+(def %py-ferfc     (%libm-fn (lit %py-ferfc)     "d->d"  "erfc"))
+(def %py-ftgamma   (%libm-fn (lit %py-ftgamma)   "d->d"  "tgamma"))
+(def %py-flgamma   (%libm-fn (lit %py-flgamma)   "d->d"  "lgamma"))
+(def %py-fsinh     (%libm-fn (lit %py-fsinh)     "d->d"  "sinh"))
+(def %py-fcosh     (%libm-fn (lit %py-fcosh)     "d->d"  "cosh"))
+(def %py-ftanh     (%libm-fn (lit %py-ftanh)     "d->d"  "tanh"))
+(def %py-fasinh    (%libm-fn (lit %py-fasinh)    "d->d"  "asinh"))
+(def %py-facosh    (%libm-fn (lit %py-facosh)    "d->d"  "acosh"))
+(def %py-fatanh    (%libm-fn (lit %py-fatanh)    "d->d"  "atanh"))
+(def %py-fexpm1    (%libm-fn (lit %py-fexpm1)    "d->d"  "expm1"))
+(def %py-flog1p    (%libm-fn (lit %py-flog1p)    "d->d"  "log1p"))
+(def %py-flogb     (%libm-fn (lit %py-flogb)     "d->d"  "logb"))
+(def %py-fcopysign (%libm-fn (lit %py-fcopysign) "dd->d" "copysign"))
 
 ; A result that overflowed a finite argument is Python's OverflowError.
 (def %py-mrange-error
@@ -347,172 +330,26 @@
 (def %py-mrange-check
   (fn (_ r) (if (Float inf? r) (%py-mrange-error) r)))
 
-; erf below 1.5 is a series, summed from its 25th term back.
-(def %py-merf-sum
-  (fn (self x2 i acc fk)
-    (if (= i 0)
-      acc
-      (self x2 (- i 1) (+ 2.0 (/ (* x2 acc) fk)) (- fk 1.0)))))
-(def %py-merf-series
-  (fn (_ x)
-    (let ((x2 (* x x)))
-      (/ (* (* (%py-merf-sum x2 25 0.0 25.5) x) (Float exp (- 0.0 x2))) %py-sqrtpi))))
-
-; erfc from 1.5 up is a continued fraction, which keeps erfc(8) at 1.1e-29 where
-; 1 - erf(8) would be 0; past 30 it is 0.
-(def %py-merfc-frac
-  (fn (self x2 i a da p p1 q q1)
-    (if (= i 0)
-      (/ p q)
-      (let ((a2 (+ a da)) (b (+ (+ da 2.0) x2)))
-        (self x2 (- i 1) a2 (+ da 2.0) (- (* b p) (* a2 p1)) p (- (* b q) (* a2 q1)) q)))))
-(def %py-merfc-contfrac
-  (fn (_ x)
-    (if (< x 30.0)
-      (let ((x2 (* x x)))
-        (/ (* (* (%py-merfc-frac x2 50 0.0 0.5 1.0 0.0 (+ 0.5 x2) 1.0) x)
-              (Float exp (- 0.0 x2)))
-           %py-sqrtpi))
-      0.0)))
-
-(def %py-merf
-  (fn (_ x)
-    (let ((ax (Float abs x)))
-      (match
-        ((Float nan? x) x)
-        ((< ax 1.5) (%py-merf-series x))
-        ((< 0.0 x) (- 1.0 (%py-merfc-contfrac ax)))
-        (#t (- (%py-merfc-contfrac ax) 1.0))))))
-(def %py-merfc
-  (fn (_ x)
-    (let ((ax (Float abs x)))
-      (match
-        ((Float nan? x) x)
-        ((< ax 1.5) (- 1.0 (%py-merf-series x)))
-        ((< 0.0 x) (%py-merfc-contfrac ax))
-        (#t (- 2.0 (%py-merfc-contfrac ax)))))))
-
-; Lanczos' approximation with g = 6.02468..., thirteen terms, the numerator and
-; denominator coefficients CPython uses.
-(def %py-lanczos-g 6.024680040776729583740234375)
-(def %py-lanczos-g-half 5.524680040776729583740234375)
-(def %py-lanczos-num
-  (list 23531376880.410759688572007674451636754734846804940
-        42919803642.649098768957899047001988850926355848959
-        35711959237.355668049440185451547166705960488635843
-        17921034426.037209699919755754458931112671403265390
-        6039542586.3520280050642916443072979210699388420708
-        1439720407.3117216736632230727949123939715485786772
-        248874557.86205415651146038641322942321632125127801
-        31426415.585400194380614231628318205362874684987640
-        2876370.6289353724412254090516208496135991145378768
-        186056.26539522349504029498971604569928220784236328
-        8071.6720023658162106380029022722506138218516325024
-        210.82427775157934587250973392071336271166969580291
-        2.5066282746310002701649081771338373386264310793408))
-(def %py-lanczos-den
-  (list 0.0 39916800.0 120543840.0 150917976.0 105258076.0 45995730.0
-        13339535.0 2637558.0 357423.0 32670.0 1925.0 66.0 1.0))
-(def %py-lanczos-num-rev (List reverse %py-lanczos-num))
-(def %py-lanczos-den-rev (List reverse %py-lanczos-den))
-
-; The sum is a ratio of polynomials in x below 5, and in 1/x from 5 up, where
-; the powers of x would overflow.
-(def %py-lanczos-in-x
-  (fn (self x ns ds num den)
-    (if (null? ns)
-      (/ num den)
-      (self x (rest ns) (rest ds) (+ (* num x) (first ns)) (+ (* den x) (first ds))))))
-(def %py-lanczos-in-1/x
-  (fn (self x ns ds num den)
-    (if (null? ns)
-      (/ num den)
-      (self x (rest ns) (rest ds) (+ (/ num x) (first ns)) (+ (/ den x) (first ds))))))
-(def %py-lanczos-sum
-  (fn (_ x)
-    (if (< x 5.0)
-      (%py-lanczos-in-x x %py-lanczos-num-rev %py-lanczos-den-rev 0.0 0.0)
-      (%py-lanczos-in-1/x x %py-lanczos-num %py-lanczos-den 0.0 0.0))))
-
-; sin(pi x) for a finite x, exact at the integers and half-integers.
-(def %py-msinpi
-  (fn (_ x)
-    (let ((y (%py-mfmod (Float abs x) 2.0)))
-      (let ((n (Float ->int (Float round (* 2.0 y)))))
-        (let ((r (match
-                   ((= n 0) (Float sin (* (Float pi) y)))
-                   ((= n 1) (Float cos (* (Float pi) (- y 0.5))))
-                   ((= n 2) (Float sin (* (Float pi) (- 1.0 y))))
-                   ((= n 3) (- 0.0 (Float cos (* (Float pi) (- y 1.5)))))
-                   (#t (Float sin (* (Float pi) (- y 2.0)))))))
-          (if (< x 0.0) (* (- 0.0 1.0) r) r))))))
-
-; gamma(1) through gamma(23), which are exact.
-(def %py-gamma-whole
-  (list 1.0 1.0 2.0 6.0 24.0 120.0 720.0 5040.0 40320.0 362880.0 3628800.0
-        39916800.0 479001600.0 6227020800.0 87178291200.0 1307674368000.0
-        20922789888000.0 355687428096000.0 6402373705728000.0
-        121645100408832000.0 2432902008176640000.0 51090942171709440000.0
-        1124000727777607680000.0))
-
-(def %py-mgamma-domain
-  (fn (_ x)
-    (%py-raise (%py-instantiate %py-exc-ValueError
-      (list (Str8 append "expected a noninteger or positive integer, got " (%py-repr-of x)))))))
-
-; y**(ax - 0.5) applied to r, split in two halves past 140, where one power
-; would overflow before the product did.
-(def %py-mgamma-pow
-  (fn (_ r y ax mul)
-    (if (< ax 140.0)
-      (let ((p (Float pow y (- ax 0.5)))) (if mul (* r p) (/ r p)))
-      (let ((s (Float pow y (- (/ ax 2.0) 0.25))))
-        (if mul (* (* r s) s) (/ (/ r s) s))))))
-
-; A negative x is reflected: gamma(x) = -pi / (sin(pi x) x gamma(-x)).
-(def %py-mgamma-lanczos
-  (fn (_ x ax)
-    (let ((y (+ ax %py-lanczos-g-half)))
-      (let ((z (/ (* (if (< %py-lanczos-g-half ax)
-                         (- (- y ax) %py-lanczos-g-half)
-                         (- (- y %py-lanczos-g-half) ax))
-                      %py-lanczos-g)
-                  y)))
-        (if (< x 0.0)
-          (let ((r (/ (* (/ (/ (- 0.0 (Float pi)) (%py-msinpi ax)) ax) (Float exp y))
-                      (%py-lanczos-sum ax))))
-            (%py-mgamma-pow (- r (* z r)) y ax #f))
-          (let ((r (/ (%py-lanczos-sum ax) (Float exp y))))
-            (%py-mgamma-pow (+ r (* z r)) y ax #t)))))))
-
+; gamma and lgamma are libm's.  Python refuses zero and the negative integers
+; before the call, where libm answers an infinity; lgamma takes the infinities,
+; which are no integers to refuse.
+(def %py-mgamma-refused?
+  (fn (_ v) (if (= (Float floor v) v) (not (< 0.0 v)) #f)))
+(def %py-mgamma-message "expected a noninteger or positive integer")
+(def %py-mgamma-1 (%py-math-1 %py-ftgamma #t %py-mgamma-message))
+(def %py-mlgamma-1 (%py-math-1 %py-flgamma #t %py-mgamma-message))
 (def %py-mgamma
   (fn (_ x)
-    (let ((ax (Float abs x)) (whole (= (Float floor x) x)))
-      (match
-        ((Float nan? x) x)
-        ((Float inf? x) (if (< 0.0 x) x (%py-mgamma-domain x)))
-        ((if whole (not (< 0.0 x)) #f) (%py-mgamma-domain x))
-        ((if whole (not (< 23.0 x)) #f) (List ref (- (Float ->int x) 1) %py-gamma-whole))
-        ((< ax %py-mtiny) (%py-mrange-check (/ 1.0 x)))
-        ((< 200.0 ax) (if (< x 0.0) (/ 0.0 (%py-msinpi x)) (%py-mrange-error)))
-        (#t (%py-mrange-check (%py-mgamma-lanczos x ax)))))))
-
+    (let ((v (%py-mfloat x)))
+      (if (%py-mgamma-refused? v)
+        (%py-mdomain-got %py-mgamma-message v)
+        (%py-mgamma-1 v)))))
 (def %py-mlgamma
   (fn (_ x)
-    (let ((ax (Float abs x)) (whole (= (Float floor x) x)))
-      (match
-        ((Float nan? x) x)
-        ((Float inf? x) ax)
-        ((if whole (not (< 0.0 x)) #f) (%py-mgamma-domain x))
-        ((if whole (not (< 2.0 x)) #f) 0.0)
-        ((< ax %py-mtiny) (- 0.0 (Float log ax)))
-        (#t
-          (let ((r (+ (- (Float log (%py-lanczos-sum ax)) %py-lanczos-g)
-                      (* (- ax 0.5) (- (Float log (- (+ ax %py-lanczos-g) 0.5)) 1.0)))))
-            (%py-mrange-check
-              (if (< x 0.0)
-                (- (- (- %py-logpi (Float log (Float abs (%py-msinpi ax)))) (Float log ax)) r)
-                r))))))))
+    (let ((v (%py-mfloat x)))
+      (if (if (Float finite? v) (%py-mgamma-refused? v) #f)
+        (%py-mdomain-got %py-mgamma-message v)
+        (%py-mlgamma-1 v)))))
 
 (def %py-mfactorial
   (fn (self n acc)
@@ -530,15 +367,6 @@
       ((if (Float inf? a) #t (= b 0.0)) (%py-mdomain))
       (#t (% a b)))))
 
-; copysign reads b's sign bit: -0.0 is negative, which 1/b tells apart from 0.0,
-; and multiplying by -1 keeps a zero's sign where subtracting from 0 would not.
-(def %py-mminus-one (- 0.0 1.0))
-(def %py-mcopysign
-  (fn (_ a b)
-    (let ((m (Float abs a)))
-      (if (if (< b 0.0) #t (if (= b 0.0) (< (/ 1.0 b) 0.0) #f))
-        (* %py-mminus-one m)
-        m))))
 
 ; ldexp doubles or halves x n times.  Past 2,200 steps either way the answer has
 ; overflowed or underflowed, so n is clamped there, and a finite x that overflows
@@ -556,41 +384,27 @@
       (%py-mrange-check
         (%py-mldexp-steps x (if (> n 2200) 2200 (if (< n -2200) -2200 n)))))))
 
-; frexp(x) is (m, e) with x = m * 2**e and 0.5 <= |m| < 1, found from log2 and
-; corrected by a step either way; zero, an infinity and a NaN are (x, 0).  A
-; subnormal x is scaled by 2**54 first, which keeps every 2**-e below a double's
-; largest power of two, so each 2**-e and each product is exact.
+; frexp(x) is (m, e) with x = m * 2**e and 0.5 <= |m| < 1, from the exponent
+; libm's logb answers; zero, an infinity and a NaN are (x, 0).  A subnormal is
+; scaled up by 2**54 first, so the 2**-e that normalises it is a double.
 (def %py-mmin-normal (Float pow 2.0 (- 0.0 1022.0)))
-(def %py-mfrexp-at
-  (fn (self x e shift)
-    (let ((m (* x (Float pow 2.0 (* (- 0 e) 1.0)))))
-      (match
-        ((not (< (Float abs m) 1.0)) (self x (+ e 1) shift))
-        ((< (Float abs m) 0.5) (self x (- e 1) shift))
-        (#t (pair m (+ e shift)))))))
-(def %py-mfrexp-scaled
-  (fn (_ x shift)
-    (%py-mfrexp-at x (+ (Float ->int (Float floor (Float log2 (Float abs x)))) 1) shift)))
-; (m . e), which the IEEE encoder in python/array.x reads too
-(def %py-mfrexp-pair
-  (fn (_ x)
-    (match
-      ((if (= x 0.0) #t (not (Float finite? x))) (pair x 0))
-      ((< (Float abs x) %py-mmin-normal) (%py-mfrexp-scaled (* x 18014398509481984.0) -54))
-      (#t (%py-mfrexp-scaled x 0)))))
 (def %py-mfrexp
   (fn (_ x)
-    (let ((p (%py-mfrexp-pair x))) (%py-tuple-new (list (first p) (rest p))))))
+    (if (if (= x 0.0) #t (not (Float finite? x)))
+      (%py-tuple-new (list x 0))
+      (let ((s (if (< (Float abs x) %py-mmin-normal) 54 0)))
+        (let ((y (if (= s 0) x (* x 18014398509481984.0))))
+          (let ((e (+ (Float ->int (%py-flogb y)) 1)))
+            (%py-tuple-new
+              (list (* y (Float pow 2.0 (* (- 0 e) 1.0))) (- e s)))))))))
 
 ; modf(x) is (fraction, whole part), both floats carrying x's sign.
 (def %py-mmodf
   (fn (_ x)
-    (match
-      ((Float nan? x) (%py-tuple-new (list x x)))
-      ((Float inf? x) (%py-tuple-new (list (%py-mcopysign 0.0 x) x)))
-      (#t
-        (let ((w (Float trunc x)))
-          (%py-tuple-new (list (%py-mcopysign (- x w) x) w)))))))
+    (if (Float inf? x)
+      (%py-tuple-new (list (%py-fcopysign 0.0 x) x))
+      (let ((w (Float trunc x)))
+        (%py-tuple-new (list (%py-fcopysign (- x w) x) w))))))
 
 ; isclose is CPython's: a negative tolerance is refused, equal values are close,
 ; which is how an infinity is close to itself, any other infinity is not, and
@@ -645,21 +459,14 @@
         (pair "pow" (fn (_ a b) (%py-mpow (%py-mfloat a) (%py-mfloat b))))
         (pair "fabs" (fn (_ x) (Float abs (%py-mfloat x))))
         (pair "fmod" (fn (_ a b) (%py-mfmod (%py-mfloat a) (%py-mfloat b))))
-        (pair "copysign" (fn (_ a b) (%py-mcopysign (%py-mfloat a) (%py-mfloat b))))
+        (pair "copysign" (fn (_ a b) (%py-fcopysign (%py-mfloat a) (%py-mfloat b))))
         (pair "ldexp" (fn (_ x n) (%py-mldexp (%py-mfloat x) (%py-boolnorm n))))
-        (pair "sinh" (%py-math-1 %py-msinh #t ()))
-        (pair "cosh" (%py-math-1 %py-mcosh #t ()))
-        ; past 20 the answer rounds to 1, and sinh and cosh would reach inf / inf
-        (pair "tanh"
-          (%py-math-1
-            (fn (_ v)
-              (if (< 20.0 (Float abs v))
-                (if (< v 0.0) %py-mminus-one 1.0)
-                (Float / (%py-msinh v) (%py-mcosh v))))
-            #f ()))
-        (pair "asinh" (%py-math-1 %py-masinh #f ()))
-        (pair "acosh" (%py-math-1 %py-macosh #f "expected argument value not less than 1"))
-        (pair "atanh" (%py-math-1 %py-matanh #f "expected a number between -1 and 1"))
+        (pair "sinh" (%py-math-1 %py-fsinh #t ()))
+        (pair "cosh" (%py-math-1 %py-fcosh #t ()))
+        (pair "tanh" (%py-math-1 %py-ftanh #f ()))
+        (pair "asinh" (%py-math-1 %py-fasinh #f ()))
+        (pair "acosh" (%py-math-1 %py-facosh #f "expected argument value not less than 1"))
+        (pair "atanh" (%py-math-1 %py-fatanh #f "expected a number between -1 and 1"))
         (pair "degrees"
           (fn (_ x) (Float / (Float * (%py-mfloat x) (%py-mfloat 180)) (Float pi))))
         (pair "radians"
@@ -683,13 +490,12 @@
         (pair "isclose"
           (%py-sig! (fn (_ a b . kw) (apply %py-misclose (pair (%py-mfloat a) (pair (%py-mfloat b) kw))))
             "isclose" (list "a" "b" "rel_tol" "abs_tol") 2 #f))
-        (pair "erf" (%py-math-1 %py-merf #f ()))
-        (pair "erfc" (%py-math-1 %py-merfc #f ()))
-        (pair "gamma" (fn (_ x) (%py-mgamma (%py-mfloat x))))
-        (pair "lgamma" (fn (_ x) (%py-mlgamma (%py-mfloat x))))
-        (pair "expm1" (%py-math-1 (fn (_ v) (- (Float exp v) 1.0)) #t ()))
-        (pair "log1p"
-          (%py-math-1 (fn (_ v) (Float log (+ 1.0 v))) #f "expected argument value > -1"))
+        (pair "erf" (%py-math-1 %py-ferf #f ()))
+        (pair "erfc" (%py-math-1 %py-ferfc #f ()))
+        (pair "gamma" %py-mgamma)
+        (pair "lgamma" %py-mlgamma)
+        (pair "expm1" (%py-math-1 %py-fexpm1 #t ()))
+        (pair "log1p" (%py-math-1 %py-flog1p #f "expected argument value > -1"))
         (pair "frexp" (fn (_ x) (%py-mfrexp (%py-mfloat x))))
         (pair "modf" (fn (_ x) (%py-mmodf (%py-mfloat x))))))))
 
