@@ -20,6 +20,23 @@ abc a\nb abc x\ty 2
 ' " \ AB \z
 ```
 
+### a second prefix letter: r with b or f
+
+```python
+(python-run "print(b\"123\", br\"12\\n3\", rb\"12\\n3\", Rb\"a\", bR\"a\", BR\"a\")\nprint(b'123', br'12\\n3', rb'12\\n3')\nprint(\"a\\tb\", r\"a\\tb\", R\"a\\tb\", u\"ab\", U\"ab\")\nn = 7\nprint(f\"n={n}\", rf\"n={n}\\t\", fr\"n={n}\\t\", F\"n={n}\", RF\"{n}\\d\")\nprint(b\"\"\"tri\\x41\"\"\", br\"\"\"tri\\x41\"\"\")\nprint(r'''raw\\ttri''', f'''f{n}''', rf'''{n}\\t''')\nprint(len(br\"\\\\\"), len(b\"\\\\\"), len(rb\"\\n\"), len(b\"\\n\"))\nbr = 5\nprint(br)")
+```
+---
+```output
+b'123' b'12\\n3' b'12\\n3' b'a' b'a' b'a'
+b'123' b'12\\n3' b'12\\n3'
+a	b a\tb a\tb ab ab
+n=7 n=7\t n=7\t n=7 7\d
+b'triA' b'tri\\x41'
+raw\ttri f7 7\t
+2 1 2 1
+5
+```
+
 ### a two-byte character is one character
 
 ```python

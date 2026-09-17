@@ -77,6 +77,17 @@ accepts, and a prefix that is not itself a keyword is a name.
 ---
     (('tok-kw "as") ('tok-kw "assert") ('tok-kw "async") ('tok-kw "await") ('tok-name "ass") ('tok-name "asx") ('tok-name "awai"))
 
+### a literal prefix pairs r with b or f, and nothing else pairs
+
+A pair Python does not make is not a prefix at all: the letters are a name,
+and the literal beside them is its own token.
+
+```python
+(%seq (write (python-tokenize "br'a' rb'a' bu'a' rr'a' b'a'")) (newline))
+```
+---
+    (('tok-bytes (97)) ('tok-bytes (97)) ('tok-name "bu") ('tok-string (97)) ('tok-name "rr") ('tok-string (97)) ('tok-bytes (97)))
+
 ### a keyword against punctuation and at the ends
 
 ```python
