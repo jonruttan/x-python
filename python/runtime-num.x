@@ -1190,7 +1190,7 @@
           ((%py-bytes-is v) (%py-barr-new (%py-bytes-list v)))
           ((%py-list? v) (%py-barr-new (%py-bytes-of-codes (%py-list-elems v) ())))
           ((%py-tuple-is v) (%py-barr-new (%py-bytes-of-codes (%py-tuple-elems v) ())))
-          ((%py-arr-is (%py-native-of v)) (%py-barr-new (%py-arr-buffer (%py-native-of v))))
+          ((%py-buffer? v) (%py-barr-new (%py-buffer-bytes v)))
           ((%py-num? v) (%py-barr-new (%py-bytes-zeros v ())))
           (#t (%py-barr-new (%py-bytes-of-codes (%py-iter-elems v) ()))))))))
 

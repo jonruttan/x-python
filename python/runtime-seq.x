@@ -67,7 +67,7 @@
       ; a memoryview compares by its elements against any buffer, and equals
       ; nothing else
       ((if (%py-mv-is a) #t (%py-mv-is b))
-        (if (if (%py-mv-buffer? a) (%py-mv-buffer? b) #f)
+        (if (if (%py-buffer? a) (%py-buffer? b) #f)
           (%py-eq (%py-list-new (%py-mv-in a)) (%py-list-new (%py-mv-in b)))
           #f))
       ((if (%py-dq-is a) #t (%py-dq-is b)) (%py-dq-eq a b))

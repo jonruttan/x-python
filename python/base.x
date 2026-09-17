@@ -123,6 +123,9 @@
   (fn (_ src mode)
     (match
       ((%py-code-is src) (%py-code-forms src))
+      ; a buffer is source too, read as the utf-8 it holds
+      ((%py-buffer? src)
+        (%py-code-of (%py-str-new (%ps-decode (%py-buffer-bytes src) ())) mode))
       ((not (%py-str-is src))
         (Err raise (lit type) "eval()/exec() wants a string or a code object" ()))
       (#t

@@ -284,7 +284,9 @@
               ((eq? v #t) 1)
               ((eq? v #f) 0)
               ((%py-str-is v) (%py-int-of-text (%ps->x (%py-str-cps v)) 10))
-              ((%py-bytes-is v) (%py-int-of-text (%py-bytes-str v) 10))
+              ; any buffer's text, which int() reads without a base; with one it
+              ; takes bytes and a bytearray only, as the arm above does
+              ((%py-buffer? v) (%py-int-of-text (%py-buffer-text v) 10))
               ((%py-obj-is v)
                 (let ((m (%py-dunder v "__int__")))
                   (if (null? m)
@@ -311,12 +313,13 @@
           ((eq? v #t) 1.0)
           ((eq? v #f) 0.0)
           ((%py-str-is v) (%py-float-of-str (%ps->x (%py-str-cps v))))
+          ; a buffer's own text, as int() reads one
+          ((%py-buffer? v) (%py-float-of-str (%py-buffer-text v)))
           ((%py-obj-is v)
             (let ((m (%py-dunder v "__float__")))
               (if (null? m)
                 (Err raise (lit type) "float() argument must be a number or string" ())
                 (m))))
-          ((%py-bytes-is v) (%py-float-of-str (%py-bytes-str v)))
           (#t
             (let ((k (%py-num-kind v)))
               (if (eq? k (lit float)) v
@@ -380,8 +383,7 @@
             (Str8 append "str expected at most 3 arguments, got " (%py-str (%py-length a)))
             ()))
         ((%py-str-is v) (Err raise (lit type) "decoding str is not supported" ()))
-        ((%py-bytes-is v) (%py-str-new (%ps-decode (%py-bytes-list v) ())))
-        ((%py-arr-is v) (%py-str-new (%ps-decode (%py-arr-buffer v) ())))
+        ((%py-buffer? v) (%py-str-new (%ps-decode (%py-buffer-bytes v) ())))
         (#t
           (Err raise (lit type)
             (Str8 append "decoding to str: need a bytes-like object, "
@@ -935,8 +937,8 @@
             (%py-bytes-new (%py-bytes-of-codes (%py-list-elems v) ())))
           ((%py-tuple-is v)
             (%py-bytes-new (%py-bytes-of-codes (%py-tuple-elems v) ())))
-          ; an array hands over its buffer, which is what it is
-          ((%py-arr-is (%py-native-of v)) (%py-bytes-new (%py-arr-buffer (%py-native-of v))))
+          ; an array or a view hands over its bytes, which is what it is
+          ((%py-buffer? v) (%py-bytes-new (%py-buffer-bytes v)))
           ((%py-num? v) (%py-bytes-new (%py-bytes-zeros v ())))
           ; a subclass instance converts as the value it carries
           ((if (%py-obj-is v) (not (null? (%py-obj-native v))) #f)
