@@ -71,6 +71,21 @@ except tuple: name 'Missing2' is not defined
 base: name 'NoBase' is not defined
 ```
 
+### a comprehension's first iterable is read in the enclosing scope
+
+```python
+(python-run "def err(f):\n    try:\n        f()\n    except NameError as e:\n        print(e)\nerr(lambda: [a for a in a])\nerr(lambda: {b for b in b})\nerr(lambda: {c: 1 for c in c})\nerr(lambda: list(d for d in d))\ndef f():\n    return [z for z in z]\nerr(f)\nx = [1, 2]\ndef g(w):\n    return [w for w in w]\nprint([x for x in x], [y for x in [[3]] for y in x], g([4]))")
+```
+---
+```output
+name 'a' is not defined
+name 'b' is not defined
+name 'c' is not defined
+name 'd' is not defined
+name 'z' is not defined
+[1, 2] [3] [4]
+```
+
 ## names bound
 
 ### an assigned name is not undefined
@@ -157,4 +172,15 @@ name 'counter' is not defined
 ```output
 None
 after
+```
+
+### __debug__ is True
+
+```python
+(python-run "print(__debug__, type(__debug__))\nif __debug__:\n    print(\"debug\")")
+```
+---
+```output
+True <class 'bool'>
+debug
 ```
