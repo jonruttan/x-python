@@ -82,3 +82,21 @@ decoding str is not supported
 decoding to str: need a bytes-like object, int found
 decoding to str: need a bytes-like object, list found
 ```
+
+### bytes encodes a str given an encoding, takes its arguments by keyword, and checks them
+
+```python
+(python-run "class S(str):\n    pass\nclass B(bytes):\n    pass\nprint(bytes(\"é\", \"utf-8\"), bytes(\"ab\", \"ascii\", \"strict\"), bytes(S(\"é\"), \"utf-8\"), B(\"é\", \"utf-8\"))\nprint(bytes(source=b\"x\"), bytes(source=\"é\", encoding=\"utf-8\"), bytes(source=[65]))\ndef err(f):\n    try:\n        f()\n    except TypeError as e:\n        print(e)\nerr(lambda: bytes(\"ab\"))\nerr(lambda: bytes(\"ab\", errors=\"strict\"))\nerr(lambda: bytes(encoding=\"utf-8\"))\nerr(lambda: bytes(b\"x\", \"utf-8\"))\nerr(lambda: bytes([1], errors=\"x\"))\nerr(lambda: bytes(nope=1))\nerr(lambda: bytes(1, 2, 3, 4))")
+```
+---
+```output
+b'\xc3\xa9' b'ab' b'\xc3\xa9' b'\xc3\xa9'
+b'x' b'\xc3\xa9' b'A'
+string argument without an encoding
+string argument without an encoding
+encoding without a string argument
+encoding without a string argument
+errors without a string argument
+bytes() got an unexpected keyword argument 'nope'
+bytes() takes at most 3 arguments (4 given)
+```
