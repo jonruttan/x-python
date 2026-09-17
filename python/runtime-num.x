@@ -1204,6 +1204,17 @@
         (Err raise (lit type) "errors without a string argument" ()))
       (#t v))))
 
+; A COUNT IS AN INTEGER, and a float is not one: bytes(5.5) asked for five and
+; a half zero bytes and got five, where CPython refuses the value outright.
+(def %py-bytes-count? (fn (_ v) (eq? (%py-num-kind (%py-boolnorm v)) (lit int))))
+
+; CPython's words for a value neither constructor can take.
+(def %py-bytes-refusal
+  (fn (_ v name)
+    (Str8 append "cannot convert '"
+      (Str8 append (%py-class-name (%py-type-of v))
+        (Str8 append "' object to " name)))))
+
 ; The bytes an argument stands for, whichever way it was written.
 ; bytearray(), bytearray(b'..'), bytearray('..', 'utf-8'), bytearray([..]),
 ; bytearray(n).  A count asks for that many zero bytes and now gets them.
@@ -1218,8 +1229,11 @@
           ((%py-list? v) (%py-barr-new (%py-bytes-of-codes (%py-list-elems v) ())))
           ((%py-tuple-is v) (%py-barr-new (%py-bytes-of-codes (%py-tuple-elems v) ())))
           ((%py-buffer? v) (%py-barr-new (%py-buffer-bytes v)))
-          ((%py-num? v) (%py-barr-new (%py-bytes-zeros v ())))
-          (#t (%py-barr-new (%py-bytes-of-codes (%py-iter-elems v) ()))))))))
+          ((%py-bytes-count? v) (%py-barr-new (%py-bytes-zeros v ())))
+          (#t
+            (%py-barr-new
+              (%py-bytes-of-codes
+                (%py-iter-elems v (%py-bytes-refusal v "bytearray")) ()))))))))
 
 (def %py-barr-bytes-of
   (fn (_ v)

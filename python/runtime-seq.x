@@ -545,8 +545,10 @@
 ; __next__ is called until it raises StopIteration -- materialized here into
 ; the element list every consumer already walks.  Without __iter__, the old
 ; sequence protocol: __getitem__ from 0 until IndexError.
+; `who` is %py-iter-elems' door, carried one hop further: an object with
+; neither dunder refuses in the caller's words too.
 (def %py-obj-elems
-  (fn (_ v)
+  (fn (_ v . who)
     (let ((it-m (%py-dunder v "__iter__")))
       (if (not (null? it-m))
         (let ((it (it-m)))
@@ -566,7 +568,8 @@
                 (go ())))))
         (let ((gi (%py-dunder v "__getitem__")))
           (if (null? gi)
-            (Err raise (lit type) "object is not iterable" ())
+            (Err raise (lit type)
+              (if (null? who) "object is not iterable" (first who)) ())
             (do
               (def go
                 (fn (self i acc)
@@ -582,7 +585,8 @@
 (def %py-iter-elems
   (fn (_ v . who)
     (match
-      ((%py-obj-is v) (%py-obj-elems v))
+      ((%py-obj-is v)
+        (if (null? who) (%py-obj-elems v) (%py-obj-elems v (first who))))
       ((%py-io-is v) (%py-io-drain! v))
       ((%py-arr-is v) (%py-arr-el v))
       ((%py-mv-is v) (%py-mv-elems v))
