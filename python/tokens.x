@@ -906,13 +906,19 @@
 (%py-tok-type! "PY-DQ" %py-t-dq)
 
 ; --- PY-PSQ / PY-PDQ: prefixed literals, r u b f in either case ---------------
-; ONE type per quote for every one-letter prefix: the prefix letter and the
-; quote are matched here, the BODY is the string types' own states reused
-; as-is -- escapes, terminators and scoring stay one implementation -- and
-; the READ handler reads the prefix back off the lexeme to decide what the
-; literal is: b a bytes value, f an f-string, r a RAW string (no escape
-; processing), u a plain string.  A bare letter followed by anything else
-; rejects, and PY-NAME's one-character match wins: `b = 1` still parses.
+; ONE type per quote for every prefix: the prefix letters and the quote are
+; matched here, the BODY is the string types' own states reused as-is --
+; escapes, terminators and scoring stay one implementation -- and the READ
+; handler reads the prefix back off the lexeme to decide what the literal is:
+; b a bytes value, f an f-string, r a RAW body (no escape processing), u a
+; plain string.  A letter followed by anything else rejects, and PY-NAME's
+; match wins: `b = 1` still parses, and so does `br = 1`.
+;
+; A SECOND LETTER IS WHAT PYTHON PAIRS, and only that: r with b or f, in
+; either case and either order.  The state after the first letter is the one
+; that says which second letters it takes, so br'' and rb'' lex and bu'' does
+; not -- a read handler cannot say so itself, because a raise crossing the C
+; reader loses its payload (see %py-note-ind-error!).
 ; After the prefix letter, a quote opens a body -- and a SECOND quote is
 ; either the empty literal (f'' -- accept, giving the next character back)
 ; or, with a third, a triple-quoted body.
@@ -921,47 +927,99 @@
     (if (= chr 39) %py-tsq-body (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
 (def %py-psq-q1
   (fn (_ buffer score chr) (if (= chr 39) %py-psq-q2 (%py-sq-body buffer score chr))))
-(def %py-bsq-start
+(def %py-psq-quote
   (fn (_ buffer score chr) (if (= chr 39) %py-psq-q1 ())))
+(def %py-psq-after-bf
+  (fn (_ buffer score chr)
+    (match
+      ((= chr 39) %py-psq-q1)
+      ((%py-prefix-r? chr) %py-psq-quote)
+      (#t ()))))
+(def %py-psq-after-r
+  (fn (_ buffer score chr)
+    (match
+      ((= chr 39) %py-psq-q1)
+      ((%py-prefix-bf? chr) %py-psq-quote)
+      (#t ()))))
+(def %py-psq-start
+  (fn (_ buffer score chr)
+    (match
+      ((%py-prefix-bf? chr) %py-psq-after-bf)
+      ((%py-prefix-r? chr) %py-psq-after-r)
+      ((%py-prefix-u? chr) %py-psq-quote)
+      (#t ()))))
 (def %py-pdq-q2
   (fn (_ buffer score chr)
     (if (= chr 34) %py-tdq-body (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
 (def %py-pdq-q1
   (fn (_ buffer score chr) (if (= chr 34) %py-pdq-q2 (%py-dq-body buffer score chr))))
-(def %py-bdq-start
+(def %py-pdq-quote
   (fn (_ buffer score chr) (if (= chr 34) %py-pdq-q1 ())))
+(def %py-pdq-after-bf
+  (fn (_ buffer score chr)
+    (match
+      ((= chr 34) %py-pdq-q1)
+      ((%py-prefix-r? chr) %py-pdq-quote)
+      (#t ()))))
+(def %py-pdq-after-r
+  (fn (_ buffer score chr)
+    (match
+      ((= chr 34) %py-pdq-q1)
+      ((%py-prefix-bf? chr) %py-pdq-quote)
+      (#t ()))))
+(def %py-pdq-start
+  (fn (_ buffer score chr)
+    (match
+      ((%py-prefix-bf? chr) %py-pdq-after-bf)
+      ((%py-prefix-r? chr) %py-pdq-after-r)
+      ((%py-prefix-u? chr) %py-pdq-quote)
+      (#t ()))))
 
+; The letters, and which may follow which: Python pairs r with b or f, in
+; either case and either order, and u pairs with nothing.
+(def %py-prefix-r? (fn (_ c) (if (= c 114) #t (= c 82))))
+(def %py-prefix-u? (fn (_ c) (if (= c 117) #t (= c 85))))
+(def %py-prefix-bf?
+  (fn (_ c)
+    (match ((= c 98) #t) ((= c 66) #t) ((= c 102) #t) (#t (= c 70)))))
 (def %py-prefix-char?
   (fn (_ c)
     (match
-      ((= c 98) #t)
-      ((= c 66) #t)
-      ((= c 102) #t)
-      ((= c 70) #t)
-      ((= c 114) #t)
-      ((= c 82) #t)
-      ((= c 117) #t)
-      (#t (= c 85)))))
+      ((%py-prefix-bf? c) #t)
+      ((%py-prefix-r? c) #t)
+      (#t (%py-prefix-u? c)))))
+
+; Is this letter in the prefix, in either case?
+(def %py-prefix-has?
+  (fn (self s n lo up)
+    (if (= n 0)
+      #f
+      (let ((c (%py-char->int (Str8 ref (- n 1) s))))
+        (if (if (= c lo) #t (= c up)) #t (self s (- n 1) lo up))))))
 
 (def %py-prefixed-read
   (fn (_ . args)
     (def raw (%buffer-token (first args)))
     (def len (Str8 length raw))
-    (def p (%py-char->int (Str8 ref 0 raw)))
-    ; one quote or three: a triple-quoted lexeme is at least seven long and
-    ; opens with three of the same quote
+    ; one prefix letter or two, and everything after it is measured from there
+    (def n (if (%py-prefix-char? (%py-char->int (Str8 ref 1 raw))) 2 1))
+    ; one quote or three: a triple-quoted lexeme is six quotes longer than its
+    ; prefix and opens with three of the same
     (def triple
-      (if (>= len 7)
-        (if (= (%py-char->int (Str8 ref 1 raw)) (%py-char->int (Str8 ref 2 raw)))
-          (= (%py-char->int (Str8 ref 2 raw)) (%py-char->int (Str8 ref 3 raw)))
+      (if (>= len (+ n 6))
+        (if (= (%py-char->int (Str8 ref n raw)) (%py-char->int (Str8 ref (+ n 1) raw)))
+          (= (%py-char->int (Str8 ref (+ n 1) raw)) (%py-char->int (Str8 ref (+ n 2) raw)))
           #f)
         #f))
     (def body
       (if triple
-        (%py-crlf->lf (Str8 sub 4 (- len 7) raw))
-        (Str8 sub 2 (- len 3) raw)))
+        (%py-crlf->lf (Str8 sub (+ n 3) (- len (+ n 6)) raw))
+        (Str8 sub (+ n 1) (- len (+ n 2)) raw)))
+    ; r says the body is its own text; b and f say what to make of it
+    (def asis? (%py-prefix-has? raw n 114 82))
     (match
-      ((if (= p 98) #t (= p 66)) (mk-tok-bytes (%py-unescape-bytes body)))
+      ((%py-prefix-has? raw n 98 66)
+        (mk-tok-bytes (if asis? (%pb-of-str body) (%py-unescape-bytes body))))
       ; AN f-STRING BODY LEAVES AS BYTES, like every other string token, even
       ; though its scanner wants a platform string and the parser hands it one.
       ; %py-unescape would build that string directly and is the shorter road,
@@ -969,19 +1027,19 @@
       ; there, along with the rest of the literal, which is the exact failure
       ; this carrier exists to end.  Going out as bytes means the parser's
       ; crossing REFUSES instead, and says which literal it was about.
-      ((if (= p 102) #t (= p 70)) (mk-tok-fstring (%py-unescape-cps body)))
-      ((if (= p 114) #t (= p 82)) (mk-tok-string (%pb-of-str body)))
-      (#t (mk-tok-string (%py-unescape-cps body))))))
+      ((%py-prefix-has? raw n 102 70)
+        (mk-tok-fstring (if asis? (%pb-of-str body) (%py-unescape-cps body))))
+      (#t (mk-tok-string (if asis? (%pb-of-str body) (%py-unescape-cps body)))))))
 
 (def %py-t-psq
   (list
     (pair (lit analyse)
-      (fn (_ buffer score chr) (if (%py-prefix-char? chr) %py-bsq-start ())))
+      %py-psq-start)
     (pair (lit read) %py-prefixed-read)))
 (def %py-t-pdq
   (list
     (pair (lit analyse)
-      (fn (_ buffer score chr) (if (%py-prefix-char? chr) %py-bdq-start ())))
+      %py-pdq-start)
     (pair (lit read) %py-prefixed-read)))
 (%py-tok-type! "PY-PSQ" %py-t-psq)
 (%py-tok-type! "PY-PDQ" %py-t-pdq)
