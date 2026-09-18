@@ -299,6 +299,25 @@
 ; last element, and an index past either end raises IndexError rather than
 ; returning nil -- a silent nil would propagate into arithmetic and surface far
 ; from the subscript that produced it.
+; A SEQUENCE'S INDEX IS AN INTEGER, and a bool is one: True indexes 1, as in
+; Python.  Anything else is refused in the sequence's own words -- CPython says
+; "string indices" for a str and "byte indices" for bytes, and names the rest.
+(def %py-seq-index
+  (fn (_ i what)
+    (let ((k (%py-boolnorm i)))
+      (if (eq? (%py-num-kind k) (lit int))
+        k
+        (Err raise (lit type)
+          (%py-seq-index-refusal what (%py-class-name (%py-type-of i))) ())))))
+(def %py-seq-index-refusal
+  (fn (_ what t)
+    (match
+      ((Str8 =? what "str")
+        (Str8 append "string indices must be integers, not '" (Str8 append t "'")))
+      ((Str8 =? what "bytes")
+        (Str8 append "byte indices must be integers or slices, not " t))
+      (#t (Str8 append what (Str8 append " indices must be integers or slices, not " t))))))
+
 (def %py-index
   (fn (_ v i)
     (match
@@ -309,29 +328,30 @@
       ((%py-mv-is v) (%py-mv-at v i))
       ((%py-dq-is v) (%py-dq-at v i))
       ((%py-str-is v)
-        (let ((l (%py-str-cps v)))
+        (let ((l (%py-str-cps v)) (j (%py-seq-index i "str")))
           (let ((n (%pb-len l)))
-            (let ((k (if (< i 0) (+ n i) i)))
+            (let ((k (if (< j 0) (+ n j) j)))
               (if (if (< k 0) #t (>= k n))
                 (Err raise (lit index) "string index out of range" ())
                 (%py-str-new (list (%pb-ref l k))))))))
       ; a bytes index is the byte's value, an int
       ((%py-bytes-is v)
-        (let ((l (%py-bytes-list v)))
+        (let ((l (%py-bytes-list v))
+              (j (%py-seq-index i (if (%py-barr-is v) "bytearray" "bytes"))))
           (let ((n (%pb-len l)))
-            (let ((k (if (< i 0) (+ n i) i)))
+            (let ((k (if (< j 0) (+ n j) j)))
               (if (if (< k 0) #t (>= k n))
                 (Err raise (lit index) "index out of range" ())
                 (%pb-ref l k))))))
       ; Subscripting a tuple and a dict are calls too -- see the list branch.
-      ((%py-tuple-is v) (v i))
+      ((%py-tuple-is v) (v (%py-seq-index i "tuple")))
       ((%py-dict? v) (v i))
       ((not (%py-list? v))
         (Err raise (lit type) "object is not subscriptable" ()))
       ; SUBSCRIPTING A LIST IS A CALL.  x dispatches `(v i)` through the type's
       ; `call` handler, so negative indices and IndexError are stated once in
       ; python/types.x rather than copied here.
-      (#t (v i)))))
+      (#t (v (%py-seq-index i "list"))))))
 
 ; Store into a list at an index.  Rebuilds the element list and hangs it back on
 ; the SAME tag pair, so every reference sees the store -- the identity argument
@@ -401,9 +421,9 @@
           (if (null? m)
             (Err raise (lit type) "object does not support item deletion" ())
             (m i))))
-      ((%py-barr-is v) (%py-barr-del! v i))
+      ((%py-barr-is v) (%py-barr-del! v (%py-seq-index i "bytearray")))
       ((%py-dict? v) (%py-ddel v i))
-      ((%py-list? v) ((%py-list-attr v "__delitem__") i))
+      ((%py-list? v) ((%py-list-attr v "__delitem__") (%py-seq-index i "list")))
       ((%py-dq-is v) (%py-dq-del! v i))
       (#t (Err raise (lit type) "object does not support item deletion" ())))))
 ; the indices a slice selects, as (lo . hi) on a step of 1; a stop before the
@@ -458,7 +478,7 @@
           (if (null? m)
             (Err raise (lit type) "object does not support item assignment" ())
             (m i v))))
-      ((%py-barr-is obj) (%py-barr-put! obj i v))
+      ((%py-barr-is obj) (%py-barr-put! obj (%py-seq-index i "bytearray") v))
       ((%py-arr-is obj) (%py-arr-put! obj i v))
       ((%py-mv-is obj) (%py-mv-put! obj i v))
       ((%py-dq-is obj) (%py-dq-put! obj i v))
@@ -466,8 +486,8 @@
       ((not (%py-list? obj))
         (Err raise (lit type) "object does not support item assignment" ()))
       (#t
-        (let ((n (%py-length (%py-list-elems obj))))
-          (let ((k (if (< i 0) (+ n i) i)))
+        (let ((n (%py-length (%py-list-elems obj))) (j (%py-seq-index i "list")))
+          (let ((k (if (< j 0) (+ n j) j)))
             (if (if (< k 0) #t (>= k n))
               (Err raise (lit index) "list assignment index out of range" ())
               (%py-list-set! obj (%py-set-nth (%py-list-elems obj) k v)))))))))

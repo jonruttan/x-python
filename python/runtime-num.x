@@ -618,12 +618,17 @@
       (if (eq? (%py-num-kind x) (lit int))
         (if (= x 0) #t (if (= x 1) #t (= x (- 0 1))))
         #f))))
+; A bool negates as the int it is, and a value that is no number is refused, as
+; unary + and ~ below already had it.
 (def %py-neg
   (fn (_ a)
     (if (%py-obj-is a)
       (let ((m (%py-dunder a "__neg__")))
         (if (null? m) (Err raise (lit type) "bad operand type for unary -" ()) (m)))
-      (- 0 a))))
+      (let ((w (%py-boolnorm a)))
+        (if (null? (%py-num-kind w))
+          (Err raise (lit type) "bad operand type for unary -" ())
+          (- 0 w))))))
 
 ; Unary + is a no-op on numbers and a TypeError on everything else; unary ~
 ; is exact two's complement on integers and a TypeError on floats -- both
