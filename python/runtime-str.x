@@ -357,6 +357,21 @@
     (let ((m (%py-class-row-attr %py-cls-str v name "str")))
       (if (%py-bound-is m) (%py-bind-method (%py-bound-fn m) v) m))))
 
+; startswith and endswith: the needle, or any of a tuple of them, against the
+; window from start to end.  An end before the start is a window nothing fits,
+; the empty string included -- CPython's rule -- though the needle is still
+; checked for its type.
+(def %py-s-affix
+  (fn (_ l a who test)
+    (let ((s (%py-s-start l a 1)) (e (%py-s-end l a 2)))
+      (let ((w (if (< e s) () (%pb-sub l s (- e s)))))
+        (%py-s-any? (first a) who (fn (_ n) (if (< e s) #f (test w n))))))))
+
+; A str a strip left whole IS the answer -- `s.strip() is s` -- as it is for
+; bytes (%py-b-kept) and in CPython.
+(def %py-s-kept
+  (fn (_ v l r) (if (= (%pb-len r) (%pb-len l)) v (%py-str-new r))))
+
 ; l is the code points of the str v.
 (def %py-s-attr
   (fn (_ l name v)
@@ -367,11 +382,11 @@
       ((Str8 =? name "capitalize") (fn (_ . a) (%py-str-new (%pb-capitalize l))))
       ((Str8 =? name "title")      (fn (_ . a) (%py-str-new (%pb-title l))))
       ((Str8 =? name "strip")
-        (fn (_ . a) (%py-str-new (%pb-strip l (%py-s-set a 0 "strip") #t #t))))
+        (fn (_ . a) (%py-s-kept v l (%pb-strip l (%py-s-set a 0 "strip") #t #t))))
       ((Str8 =? name "lstrip")
-        (fn (_ . a) (%py-str-new (%pb-strip l (%py-s-set a 0 "lstrip") #t #f))))
+        (fn (_ . a) (%py-s-kept v l (%pb-strip l (%py-s-set a 0 "lstrip") #t #f))))
       ((Str8 =? name "rstrip")
-        (fn (_ . a) (%py-str-new (%pb-strip l (%py-s-set a 0 "rstrip") #f #t))))
+        (fn (_ . a) (%py-s-kept v l (%pb-strip l (%py-s-set a 0 "rstrip") #f #t))))
       ((Str8 =? name "split")
         (fn (_ . a) (%py-s-parts (%pb-split l (%py-s-sep a 0 "split") (%py-s-opt a 1 (- 0 1))) ())))
       ((Str8 =? name "rsplit")
@@ -397,15 +412,8 @@
         (fn (_ . a)
           (let ((s (%py-s-start l a 1)))
             (%pb-count (%pb-sub l s (- (%py-s-end l a 2) s)) (%py-s-cps (first a) "count") 0))))
-      ((Str8 =? name "startswith")
-        (fn (_ . a)
-          (let ((w (%pb-drop (%py-s-start l a 1) l)))
-            (%py-s-any? (first a) "startswith" (fn (_ n) (%pb-starts? w n))))))
-      ((Str8 =? name "endswith")
-        (fn (_ . a)
-          (let ((s (%py-s-start l a 1)))
-            (let ((w (%pb-sub l s (- (%py-s-end l a 2) s))))
-              (%py-s-any? (first a) "endswith" (fn (_ n) (%pb-ends? w n)))))))
+      ((Str8 =? name "startswith") (fn (_ . a) (%py-s-affix l a "startswith" %pb-starts?)))
+      ((Str8 =? name "endswith") (fn (_ . a) (%py-s-affix l a "endswith" %pb-ends?)))
       ((Str8 =? name "partition")
         (fn (_ . a) (%py-s-triple (%pb-partition l (%py-s-cps1 (first a) "partition")))))
       ((Str8 =? name "rpartition")
@@ -443,6 +451,16 @@
             (%py-str-new (first (rest (rest t))))))))
 
 (def %py-int->char (prim-ref (lit int) (lit ->char)))
+; %c and {:c}: the character a code point names, refused past U+10FFFF as the
+; OverflowError both formats raise, in their own words -- where chr() says
+; ValueError about the same number.
+(def %py-fmt-char
+  (fn (_ v)
+    (let ((n (%py-boolnorm v)))
+      (if (if (eq? (%py-num-kind n) (lit int)) (if (< n 0) #t (> n 1114111)) #f)
+        (Err raise (lit overflow) "%c arg not in range(0x110000)" ())
+        (%py-chr v)))))
+
 (def %py-chr
   (fn (_ n0)
     (def n (%py-boolnorm n0))
@@ -638,7 +656,7 @@
                   ; chr() answers a str and the padding below is Str8's, so the
                   ; character crosses over -- which also means '{:c}'.format(0)
                   ; refuses, like every other crossing into a platform string.
-                  (%py-spec-pad (%ps->x (%py-str-cps (%py-chr w)))
+                  (%py-spec-pad (%ps->x (%py-str-cps (%py-fmt-char w)))
                     width fill align ">" "")))
               ((if (eq? kind (lit int))
                   (match

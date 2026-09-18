@@ -1061,6 +1061,14 @@
       ((> i 0) (self (rest a) (- i 1) dflt))
       (#t (%py-codec-name (first a) dflt)))))
 
+; startswith and endswith over the window from start to end, which nothing fits
+; when the end is before the start -- the rule %py-s-affix states for str.
+(def %py-b-affix
+  (fn (_ l a test)
+    (let ((s (%py-b-start l a 1)) (e (%py-b-end l a 2)))
+      (let ((n (%py-b-arg (first a))))
+        (if (< e s) #f (test (%pb-sub l s (- e s)) n))))))
+
 ; A bytes a strip left whole IS the answer, as CPython has it -- `s.strip() is s`
 ; -- since nothing can tell a copy from it but its identity; a bytearray is
 ; mutable, so it always answers a new one.
@@ -1179,12 +1187,8 @@
         (fn (_ . a)
           (let ((s (%py-b-start l a 1)))
             (%pb-count (%pb-sub l s (- (%py-b-end l a 2) s)) (%py-b-needle (first a)) 0))))
-      ((Str8 =? name "startswith")
-        (fn (_ . a) (%pb-starts? (%pb-drop (%py-b-start l a 1) l) (%py-b-arg (first a)))))
-      ((Str8 =? name "endswith")
-        (fn (_ . a)
-          (let ((s (%py-b-start l a 1)))
-            (%pb-ends? (%pb-sub l s (- (%py-b-end l a 2) s)) (%py-b-arg (first a))))))
+      ((Str8 =? name "startswith") (fn (_ . a) (%py-b-affix l a %pb-starts?)))
+      ((Str8 =? name "endswith") (fn (_ . a) (%py-b-affix l a %pb-ends?)))
       ((Str8 =? name "upper")      (fn (_ . a) (mk (%pb-upper l))))
       ((Str8 =? name "lower")      (fn (_ . a) (mk (%pb-lower l))))
       ((Str8 =? name "swapcase")   (fn (_ . a) (mk (%pb-swapcase l))))
