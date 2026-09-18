@@ -1053,6 +1053,101 @@
       ((> i 0) (self (rest a) (- i 1) dflt))
       (#t (%py-codec-name (first a) dflt)))))
 
+; --- hex and fromhex ---------------------------------------------------------
+;
+; x.hex(sep, bytes_per_sep): two digits a byte, and one separator character
+; between groups of that many bytes -- counted from the right, or from the left
+; when the count is negative, and not at all when it is zero, which is CPython's
+; rule.  The answer is built as code points, so it never becomes a platform
+; string on the way.
+(def %py-hex-code (fn (_ d) (if (< d 10) (+ 48 d) (+ 87 d))))
+
+(def %py-hex-sep
+  (fn (_ a)
+    (if (if (null? a) #t (null? (first a)))
+      ()
+      (let ((s (%py-native-of (first a))))
+        (let ((cs (match
+                    ((%py-str-is s) (%py-str-cps s))
+                    ((%py-bytes-is s) (%py-bytes-list s))
+                    (#t (Err raise (lit type)
+                          (Str8 append "object of type '"
+                            (Str8 append (%py-class-name (%py-type-of s)) "' has no len()"))
+                          ())))))
+          (match
+            ((not (= (%py-length cs) 1))
+              (Err raise (lit value) "sep must be length 1." ()))
+            ((> (first cs) 127) (Err raise (lit value) "sep must be ASCII." ()))
+            (#t (first cs))))))))
+
+; Does the separator go before byte i of n, in groups of k?
+(def %py-hex-cut?
+  (fn (_ i n k)
+    (match
+      ((= i 0) #f)
+      ((= k 0) #f)
+      ((> k 0) (= 0 (% (- n i) k)))
+      (#t (= 0 (% i (- 0 k)))))))
+
+(def %py-hex-walk
+  (fn (self l i n k sep acc)
+    (if (null? l)
+      (List reverse acc)
+      (let ((acc2 (if (if (null? sep) #f (%py-hex-cut? i n k)) (pair sep acc) acc)))
+        (self (rest l) (+ i 1) n k sep
+          (pair (%py-hex-code (% (first l) 16))
+            (pair (%py-hex-code (Num quotient (first l) 16)) acc2)))))))
+
+(def %py-bytes-hex
+  (fn (_ l a)
+    (%py-str-new (%py-hex-walk l 0 (%pb-len l) (%py-b-opt a 1 1) (%py-hex-sep a) ()))))
+
+; bytes.fromhex(s): a pair of digits a byte, with whitespace allowed BETWEEN
+; pairs and nowhere else.  CPython names the position of the first character
+; that is not a digit where one was due, and says so differently when the
+; string simply ran out in the middle of a pair.
+(def %py-hex-space?
+  (fn (_ c)
+    (match ((= c 32) #t) ((= c 9) #t) ((= c 10) #t) ((= c 13) #t) ((= c 11) #t) (#t (= c 12)))))
+
+(def %py-fromhex-bad!
+  (fn (_ i)
+    (Err raise (lit value)
+      (Str8 append "non-hexadecimal number found in fromhex() arg at position " (%py-str i))
+      ())))
+
+(def %py-fromhex-walk
+  (fn (self cs i acc)
+    (match
+      ((null? cs) (List reverse acc))
+      ((%py-hex-space? (first cs)) (self (rest cs) (+ i 1) acc))
+      ((null? (%py-hexval (first cs))) (%py-fromhex-bad! i))
+      ((null? (rest cs))
+        (Err raise (lit value)
+          "fromhex() arg must contain an even number of hexadecimal digits" ()))
+      ((null? (%py-hexval (first (rest cs)))) (%py-fromhex-bad! (+ i 1)))
+      (#t
+        (self (rest (rest cs)) (+ i 2)
+          (pair (+ (* (%py-hexval (first cs)) 16) (%py-hexval (first (rest cs)))) acc))))))
+
+; A classmethod on both classes: the class says which to answer, and a subclass
+; is called with the bytes.  The argument is a str or, as of 3.14, any buffer.
+(def %py-bytes-fromhex
+  (fn (_ cls s)
+    (let ((v (%py-native-of s)))
+      (let ((l (%py-fromhex-walk
+                 (match
+                   ((%py-str-is v) (%py-str-cps v))
+                   ((%py-buffer? v) (%py-buffer-bytes v))
+                   (#t (Err raise (lit type)
+                         (Str8 append "fromhex() argument must be str or bytes-like, not "
+                           (%py-class-name (%py-type-of v))) ())))
+                 0 ())))
+        (match
+          ((same? cls %py-cls-bytes) (%py-bytes-new l))
+          ((same? cls %py-cls-bytearray) (%py-barr-new l))
+          (#t (%py-instantiate cls (list (%py-bytes-new l)))))))))
+
 (def %py-b-attr
   (fn (_ l mk name v)
     (match
@@ -1107,6 +1202,7 @@
       ((Str8 =? name "isalnum") (fn (_ . a) (%pb-isalnum l)))
       ((Str8 =? name "isupper") (fn (_ . a) (%pb-isupper l)))
       ((Str8 =? name "islower") (fn (_ . a) (%pb-islower l)))
+      ((Str8 =? name "hex") (fn (_ . a) (%py-bytes-hex l a)))
       (#t
         (if (%py-barr-is v)
           (%py-class-row-attr %py-cls-bytearray v name "bytearray")

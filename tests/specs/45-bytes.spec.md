@@ -56,6 +56,30 @@ ValueError negative count
 TypeError string argument without an encoding
 ```
 
+### hex and fromhex, with separators and in both directions
+
+```python
+(python-run "print(b\"\".hex(), b\"\\x00\\x7f\\x80\\xff\".hex(), bytearray(b\"AB\").hex(), memoryview(b\"ab\").hex())\nprint(b\"\\x00\\x01\\x02\".hex(\":\"), b\"\\x00\\x01\\x02\".hex(\":\", 2), b\"\\x00\\x01\\x02\".hex(\":\", -2))\nprint(b\"\\x00\\x01\\x02\".hex(b\"-\"), b\"\\x00\\x01\\x02\".hex(\":\", 0), memoryview(b\"\\x01\\x02\").hex(\".\"))\nprint(bytes.fromhex(\"0001 7f\\tff\\n\"), bytearray.fromhex(\"ab cd\"), bytes.fromhex(b\"41\"))\nprint(b\"\".fromhex(\"01\"), bytes.fromhex(\"\"), bytes.fromhex(\" ab cd ef \"))\n\n\nclass B(bytes):\n    pass\n\n\nprint(repr(B.fromhex(\"41\")), type(B.fromhex(\"41\")).__name__)\n\n\ndef err(f):\n    try:\n        f()\n    except (TypeError, ValueError) as e:\n        print(type(e).__name__, e)\n\n\nerr(lambda: b\"x\".hex(\"ab\"))\nerr(lambda: b\"x\".hex(\"\"))\nerr(lambda: b\"x\".hex(chr(233)))\nerr(lambda: b\"x\".hex(5))\nerr(lambda: bytes.fromhex(5))\nerr(lambda: bytes.fromhex(\"abcde\"))\nerr(lambda: bytes.fromhex(\"a b\"))\nerr(lambda: bytes.fromhex(\"abga\"))\nerr(lambda: bytes.fromhex(\"ab cd e f \"))")
+```
+---
+```output
+ 007f80ff 4142 6162
+00:01:02 00:0102 0001:02
+00-01-02 000102 01.02
+b'\x00\x01\x7f\xff' bytearray(b'\xab\xcd') b'A'
+b'\x01' b'' b'\xab\xcd\xef'
+b'A' B
+ValueError sep must be length 1.
+ValueError sep must be length 1.
+ValueError sep must be ASCII.
+TypeError object of type 'int' has no len()
+TypeError fromhex() argument must be str or bytes-like, not int
+ValueError fromhex() arg must contain an even number of hexadecimal digits
+ValueError non-hexadecimal number found in fromhex() arg at position 1
+ValueError non-hexadecimal number found in fromhex() arg at position 2
+ValueError non-hexadecimal number found in fromhex() arg at position 7
+```
+
 ### bytes values
 
 ```python

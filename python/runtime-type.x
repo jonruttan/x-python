@@ -1006,6 +1006,7 @@
 (def %py-bytes-methods
   (list
     (pair "%ctor" (%py-sig! %py-bytes-ctor "bytes" (list "source" "encoding" "errors") 0 #f))
+    (pair "fromhex"      (%py-desc-new (lit classmethod) %py-bytes-fromhex))
     (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
     (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
     (pair "__iter__"     (fn (_ self) (%py-native-of self)))
@@ -1050,6 +1051,7 @@
     (pair "%ctor"
       (%py-sig! %py-bytearray-ctor "bytearray" (list "source" "encoding" "errors") 0 #f))
     (pair "__init__"     %py-bytearray-init)
+    (pair "fromhex"      (%py-desc-new (lit classmethod) %py-bytes-fromhex))
     (pair "__len__"      (fn (_ self) (%py-len (%py-native-of self))))
     (pair "__getitem__"  (fn (_ self i) (%py-index (%py-native-of self) i)))
     (pair "__iter__"     (fn (_ self) (%py-native-of self)))

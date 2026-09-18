@@ -204,6 +204,8 @@
     (pair "__getitem__" (fn (_ o i) (%py-mv-at (%py-native-of o) i)))
     (pair "__setitem__" (fn (_ o i x) (%py-mv-put! (%py-native-of o) i x)))
     (pair "__iter__" (fn (_ o) (%py-list-new (%py-mv-elems (%py-native-of o)))))
+    ; the bytes it covers, as bytes.hex writes them
+    (pair "hex" (fn (_ o . a) (%py-bytes-hex (%py-mv-bytes (%py-native-of o)) a)))
     (pair "__contains__"
       (fn (_ o x) (%py-in x (%py-list-new (%py-mv-elems (%py-native-of o))))))
     (pair "__eq__"
