@@ -113,8 +113,23 @@
 (def %py-code-is   (fn (_ v) (if (pair? v) (eq? (first v) (lit %py-code)) #f)))
 (def %py-code-forms (fn (_ c) (first (rest (rest c)))))
 
-; Source to forms.  `eval` mode is ONE EXPRESSION -- python-parse-expr answers
-; (form . rest) and the rest is the newline that ended it.
+; `eval` mode is ONE EXPRESSION and nothing after it but the newlines that end
+; its lines.  python-parse-expr answers (form . rest), and a rest holding
+; anything else is CPython's SyntaxError -- `eval("1 2")` and `eval("x = 1")`
+; answered 1 and x while the rest was dropped unread.
+(def %py-eval-expr
+  (fn (_ toks)
+    (let ((r (python-parse-expr toks)))
+      (if (%py-newlines-only? (rest r))
+        (first r)
+        (Err raise (lit syntax) "invalid syntax" ())))))
+(def %py-newlines-only?
+  (fn (self toks)
+    (if (null? toks)
+      #t
+      (if (eq? (%py-tag (first toks)) (lit tok-newline)) (self (rest toks)) #f))))
+
+; Source to forms.
 ; THE SOURCE ARRIVES AS A str AND THE LEXER TAKES A PLATFORM STRING, so this
 ; is a crossing like any other: `str?` asks the platform whether it holds one
 ; of ITS strings, which a Python str is no longer, so the test is %py-str-is
@@ -132,7 +147,7 @@
       (#t
         (let ((x (%ps->x (%py-str-cps src))))
           (if (Str8 =? mode "eval")
-            (list (first (python-parse-expr (python-lex x))))
+            (list (%py-eval-expr (python-lex x)))
             (python-parse x)))))))
 
 (def %py-code-run

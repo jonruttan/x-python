@@ -224,3 +224,25 @@ why `dir` of a Python class above is complete and this one is not.
 False
 True
 ```
+
+### eval takes one expression and nothing after it
+
+```python
+(python-run "x = 0\nfor s in ['1 2', '1;2', '1\\n2', 'x = 1', '  1', '1 # c', '1\\n', '(1,\\n2)', '1 if 1 else 2', '[x for x in (1, 2)]', '']:\n    try:\n        print(repr(s), '->', repr(eval(s)))\n    except SyntaxError as e:\n        print(repr(s), '-> SyntaxError')\nc = compile('3 4', '<s>', 'exec') if False else None\ntry:\n    compile('3 4', '<s>', 'eval')\nexcept SyntaxError:\n    print('compile SyntaxError')\nprint(eval(compile('5', '<s>', 'eval')))")
+```
+---
+```output
+'1 2' -> SyntaxError
+'1;2' -> SyntaxError
+'1\n2' -> SyntaxError
+'x = 1' -> SyntaxError
+'  1' -> 1
+'1 # c' -> 1
+'1\n' -> 1
+'(1,\n2)' -> (1, 2)
+'1 if 1 else 2' -> 1
+'[x for x in (1, 2)]' -> [1, 2]
+'' -> SyntaxError
+compile SyntaxError
+5
+```
