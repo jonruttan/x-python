@@ -196,13 +196,15 @@
 (def %py-name-rest?
   (fn (_ c) (if (%py-name-start? c) #t (%py-digit? c))))
 
-; --- PY-WS: spaces and tabs WITHIN a line ------------------------------------
+; --- PY-WS: spaces, tabs and form feeds WITHIN a line ------------------------
 ; Not newlines: line structure is Python's grammar, not its whitespace, so
-; PY-NL owns them.  Negative score -- matched and discarded.
+; PY-NL owns them.  A form feed is whitespace to CPython too.  Negative score
+; -- matched and discarded.
+(def %py-ws? (fn (_ c) (match ((= c 32) #t) ((= c 9) #t) (#t (= c 12)))))
 (def %py-ws-continue ())
 (set! %py-ws-continue
   (fn (_ buffer score chr)
-    (if (if (= chr #\space) #t (= chr #\tab))
+    (if (%py-ws? chr)
       %py-ws-continue
       (%seq (%buffer-unread buffer) (%score-set score (- 0 1) buffer)))))
 
@@ -210,7 +212,7 @@
   (list
     (pair (lit analyse)
       (fn (_ buffer score chr)
-        (if (if (= chr #\space) #t (= chr #\tab))
+        (if (%py-ws? chr)
           (%seq (%score-set score (- 0 1) buffer) %py-ws-continue)
           ())))))
 (%py-tok-type! "PY-WS" %py-t-ws)
@@ -730,7 +732,31 @@
       (fn (_ . args)
         (let ((text (%buffer-token (first args))))
           (let ((k (%py-read-variant args)))
-            (mk-tok-number text (if (null? k) (%py-variant-of-text text) k))))))))
+            (let ((v (if (null? k) (%py-variant-of-text text) k)))
+              (%seq (%py-leading-zeros! text v) (mk-tok-number text v)))))))))
+
+; A DECIMAL INTEGER MAY NOT OPEN WITH A ZERO unless it is all zeros: 01 is a
+; SyntaxError in Python 3, where 00 and 0_0 are 0.  A float, an imaginary and a
+; based literal may, so only variant 1 is asked.
+(def %py-leading-zeros!
+  (fn (_ text v)
+    (if (if (= v 1) (%py-zero-led? text) #f)
+      (%py-lex-refuse!
+        "leading zeros in decimal integer literals are not permitted; use an 0o prefix for octal integers")
+      ())))
+(def %py-zero-led?
+  (fn (_ s)
+    (let ((n (%py-byte-len s)))
+      (let ((i (let ((c0 (%py-code-at s 0))) (if (if (= c0 45) #t (= c0 43)) 1 0))))
+        (if (if (< i n) (= (%py-code-at s i) 48) #f)
+          (%py-nonzero-digit? s (+ i 1) n)
+          #f)))))
+(def %py-nonzero-digit?
+  (fn (self s i n)
+    (if (>= i n)
+      #f
+      (let ((c (%py-code-at s i)))
+        (if (if (>= c 49) (<= c 57) #f) #t (self s (+ i 1) n))))))
 (%py-tok-type! "PY-NUMBER" %py-t-number)
 
 ; --- PY-STRING: 'single' and "double" ----------------------------------------
@@ -902,23 +928,27 @@
       (match
         ((null? v)
           (%py-esc-refused s i
-            (if (= k 4) "truncated \\uXXXX escape" "truncated \\UXXXXXXXX escape")))
-        ((> v 1114111) (%py-esc-refused s i "illegal Unicode character"))
+            (%py-unicode-escape
+              (if (= k 4) "truncated \\uXXXX escape" "truncated \\UXXXXXXXX escape"))))
+        ((> v 1114111)
+          (%py-esc-refused s i (%py-unicode-escape "illegal Unicode character")))
         (#t (pair (+ i (+ 2 k)) (%py-esc-cp v #f)))))))
 
-; A MALFORMED \u OR \U IS PARKED, as an indentation error is: a read handler
-; cannot raise (see %py-note-ind-error!), so the escape records the first
-; refusal and reads on as the two characters it was, and python-tokenize
-; raises the SyntaxError CPython raises once reading is over.
-(def %py-esc-error (pair () ()))
+; A REFUSAL IN A READ HANDLER IS PARKED, as an indentation error is: a read
+; handler cannot raise (see %py-note-ind-error!), so the first refusal is
+; recorded here and python-tokenize raises it as the SyntaxError CPython raises
+; once reading is over.  A malformed escape, a bad number and a character no
+; type takes all come this way.
+(def %py-lex-error (pair () ()))
+(def %py-lex-refuse!
+  (fn (_ msg)
+    (if (null? (first %py-lex-error)) (%set-first! %py-lex-error msg) ())))
+
+; A malformed escape reads on as the two characters it was, and is refused.
 (def %py-esc-refused
-  (fn (_ s i why)
-    (%seq
-      (if (null? (first %py-esc-error))
-        (%set-first! %py-esc-error
-          (Str8 append "(unicode error) 'unicodeescape' codec can't decode bytes: " why))
-        ())
-      (pair (+ i 2) (Str8 sub i 2 s)))))
+  (fn (_ s i msg) (%seq (%py-lex-refuse! msg) (pair (+ i 2) (Str8 sub i 2 s)))))
+(def %py-unicode-escape
+  (fn (_ why) (Str8 append "(unicode error) 'unicodeescape' codec can't decode bytes: " why)))
 
 (def %py-esc-at
   (fn (_ s i len raw?)
@@ -941,8 +971,12 @@
       ((= code 120)
         (let ((h1 (if (< (+ i 2) len) (%py-hexval (at (+ i 2))) ()))
               (h2 (if (< (+ i 3) len) (%py-hexval (at (+ i 3))) ())))
+          ; fewer than two hex digits is refused, each literal kind in its words
           (if (if (null? h1) #t (null? h2))
-            (simple "\\x")
+            (%py-esc-refused s i
+              (if raw?
+                "(value error) invalid \\x escape"
+                (%py-unicode-escape "truncated \\xXX escape")))
             (let ((v (+ (* h1 16) h2)))
               (pair (+ i 4) (%py-esc-cp v raw?))))))
       ; \u with four hex digits and \U with eight name a code point in a str
@@ -1431,7 +1465,7 @@
     (def wsc
       (jc
         (lit (fn (me buffer score chr)
-          (if (or (= chr 32) (= chr 9))
+          (if (or (= chr 32) (= chr 9) (= chr 12))
             me
             (%seq (%buffer-unread buffer) (%score-set score -1 buffer)))))
         (list (pair (lit u) 1))))
@@ -1546,7 +1580,7 @@
     (def e-ws
       (jc
         (lit (fn (_ buffer score chr)
-          (if (or (= chr 32) (= chr 9))
+          (if (or (= chr 32) (= chr 9) (= chr 12))
             (%seq (%score-set score -1 buffer) k)
             ())))
         (list (pair (lit k) wsc))))
@@ -1615,6 +1649,11 @@
             (%score-set score 1 buffer)
             ())))
         (list (pair (lit u) 1))))
+    ; every character, one long: it runs at every token start, so it is native
+    (def e-bad
+      (jc
+        (lit (fn (_ buffer score chr) (if (= chr 10) () (%score-set score -1 buffer))))
+        (list (pair (lit u) 1))))
     ; -- the second base, same registration order as the interpreted one --
     (def b (Base make-tok))
     (def reg
@@ -1651,6 +1690,7 @@
     (Base make-type b "PY-OP" %py-t-op)
     (reg "PY-CLOSE" e-close %py-t-close)
     (reg "PY-OPEN" e-open %py-t-open)
+    (reg "PY-BAD" e-bad %py-t-bad)
     (%set-first! %py-cbase b)
     (%set-first! %py-active-raw (Base raw-of b))))
 
@@ -1680,22 +1720,40 @@
 ; space is safe: PY-WS discards it.
 ; The indentation stack is per-RUN state, so it is reset here rather than at
 ; load: two tokenize calls in one process must not share a stack.
+; CARRIAGE RETURNS ARE NEWLINES in a source, as CPython reads one: \r\n and a
+; lone \r both become \n before anything is lexed, string literals included --
+; a CR inside '...' ends its line there too.  One pass over the bytes, packed
+; once, and none at all for a source without a CR.
+(def %py-source-lf
+  (fn (_ s)
+    (if (null? (Str8 index-of (%py-cp->str 13) s))
+      s
+      (%pb->str (%py-lf-bytes (%pb-of-str s) ())))))
+(def %py-lf-bytes
+  (fn (self l acc)
+    (match
+      ((null? l) (List reverse acc))
+      ((= (first l) 13)
+        (self (if (if (null? (rest l)) #f (= (first (rest l)) 10)) (rest (rest l)) (rest l))
+          (pair 10 acc)))
+      (#t (self (rest l) (pair (first l) acc))))))
+
 (def python-tokenize
   (fn (_ input)
     (%py-jit-tick! (Str8 length input))
     (%py-ind-reset!)
-    (%set-first! %py-esc-error ())
+    (%set-first! %py-lex-error ())
     (let ((toks (%py-token-read-string (first %py-active-raw)
-                  (Str8 append input " "))))
+                  (Str8 append (%py-source-lf input) " "))))
       ; Reading is over and x is driving again, so this is where a parked
-      ; error can finally be raised: an indentation error, or a \u or \U
-      ; escape that named no code point.
+      ; error can finally be raised: an indentation error, or a refusal a read
+      ; handler recorded (%py-lex-refuse!).
       (match
         ((not (null? (first %py-ind-error)))
           (Err raise (lit indent)
             "unindent does not match any outer indentation level" ()))
-        ((not (null? (first %py-esc-error)))
-          (Err raise (lit syntax) (first %py-esc-error) ()))
+        ((not (null? (first %py-lex-error)))
+          (Err raise (lit syntax) (first %py-lex-error) ()))
         (#t toks)))))
 
 ; --- PY-OPEN / PY-CLOSE: brackets are READ AS GROUPS -------------------------
@@ -1763,6 +1821,40 @@
           (%set-first! %py-in-group (- (first %py-in-group) 1))
           (mk-tok-group open (first r) (rest r)))))))
 (%py-tok-type! "PY-OPEN" %py-t-open)
+
+; --- PY-BAD: a character no other type takes --------------------------------
+; The fallback the sexp reader's symbol type is: it takes any one character,
+; with a NEGATIVE score, so every positive match beats it, and registered LAST,
+; so a whitespace or comment match as long as it wins the tie.  What is left is
+; a character nothing else takes -- a control character, `$`, `?`, a backquote,
+; a backslash that ends no line.  Without it such a character ended the read
+; without a word, and a program ran without the rest of its source.  Its read
+; refuses the character in CPython's words; a negative score still reads, since
+; only a type with no read handler is discarded.
+;
+; A NEWLINE IT LEAVES ALONE.  The last one in a source has only the space
+; python-tokenize appends after it, which no type takes, and the read ends
+; there -- where the source ends anyway.  Every other newline is PY-NL's.
+(def %py-t-bad
+  (list
+    (pair (lit analyse)
+      (fn (_ buffer score chr)
+        (if (= chr 10) () (%score-set score (- 0 1) buffer))))
+    (pair (lit read)
+      (fn (_ . args)
+        (let ((c (%py-char->int (Str8 ref 0 (%buffer-token (first args))))))
+          (%seq (%py-lex-refuse! (%py-bad-char c)) (mk-tok-op "?")))))))
+(%py-tok-type! "PY-BAD" %py-t-bad)
+
+(def %py-bad-char
+  (fn (_ c)
+    (match
+      ((if (< c 32) #t (= c 127))
+        (Str8 append "invalid non-printable character U+00"
+          (Str8 append (Str8 sub (Num quotient c 16) 1 "0123456789ABCDEF")
+            (Str8 sub (% c 16) 1 "0123456789ABCDEF"))))
+      ((= c 92) "unexpected character after line continuation character")
+      (#t "invalid syntax"))))
 
 ; --- the base itself: made here, and remade after an image load -------------
 ; One door.  The image writer runs the transient thunk in the child (the
