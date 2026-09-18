@@ -152,3 +152,27 @@ TypeError
 TypeError
 AttributeError
 ```
+
+### a subscript with a comma is a tuple, and its colons make slices
+
+```python
+(python-run "d = {(1, 2): \"x\", (1,): \"y\"}\nprint(d[1, 2], d[1,])\nd[3, 4] = \"z\"\nprint(d[(3, 4)], (3, 4) in d)\ndel d[3, 4]\nprint((3, 4) in d)\n\n\nclass A:\n    def __getitem__(self, i):\n        print(\"get\", i)\n        return i\n\n    def __setitem__(self, i, v):\n        print(\"set\", i, v)\n\n    def __delitem__(self, i):\n        print(\"del\", i)\n\n\na = A()\na[1, 2]\na[1:2, 4:5, 7:8]\na[1, 4:5, 7:8, 2]\na[1:2, a[3:4], 5:6]\na[::2, 1] = 9\ndel a[1:, :2]\nprint(A()[1 : A()[A()[2:3:4] : 5]])\nprint([1, 2, 3][1:], \"abc\"[::-1], [1, 2, 3][1])")
+```
+---
+```output
+x y
+z True
+False
+get (1, 2)
+get (slice(1, 2, None), slice(4, 5, None), slice(7, 8, None))
+get (1, slice(4, 5, None), slice(7, 8, None), 2)
+get slice(3, 4, None)
+get (slice(1, 2, None), slice(3, 4, None), slice(5, 6, None))
+set (slice(None, None, 2), 1) 9
+del (slice(1, None, None), slice(None, 2, None))
+get slice(2, 3, 4)
+get slice(slice(2, 3, 4), 5, None)
+get slice(1, slice(slice(2, 3, 4), 5, None), None)
+slice(1, slice(slice(2, 3, 4), 5, None), None)
+[2, 3] cba 2
+```
