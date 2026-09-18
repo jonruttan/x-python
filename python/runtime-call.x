@@ -434,6 +434,17 @@
 ; backslash, the three named controls, and anything below space as \xhh --
 ; which is how a NUL shows, now that one can be here.  Everything from space
 ; up goes out as its utf-8, so a repr keeps its accents and its emoji.
+; The characters below 256 a repr writes as \xhh: C0 and DEL, which the note
+; above names, and past them the C1 controls, the no-break space and the soft
+; hyphen -- the Latin-1 half of what str.isprintable() refuses.
+(def %py-repr-hidden?
+  (fn (_ c)
+    (match
+      ((< c 32) #t)
+      ((< c 127) #f)
+      ((<= c 160) #t)
+      (#t (= c 173)))))
+
 (def %py-str-repr-go
   (fn (self l q acc)
     (if (null? l) acc
@@ -450,7 +461,12 @@
               ; always said so ("any other control character (and DEL) as
               ; \xhh") -- the test just read `< 32` and let 0x7f through as
               ; itself, which prints as nothing at all.
-              ((if (< c 32) #t (= c 127)) (Str8 append "\\x" (%py-hex2 c)))
+              ((%py-repr-hidden? c) (Str8 append "\\x" (%py-hex2 c)))
+              ; a lone surrogate prints as nothing a terminal can show, so
+              ; Python writes the \u escape that names it
+              ((if (>= c 55296) (<= c 57343) #f)
+                (Str8 append "\\u"
+                  (Str8 append (%py-hex2 (Num quotient c 256)) (%py-hex2 (% c 256)))))
               (#t (%pb->str (%ps-enc1 c))))))))))
 
 ; <function NAME at 0xADDR>: the name is the signature's, the address is the
