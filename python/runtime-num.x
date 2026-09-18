@@ -293,6 +293,13 @@
 (def %py-format-str
   (fn (_ a b) (%py-str-of-x (%py-format (%ps->x (%py-str-cps a)) b))))
 
+; b"..." % args: the same engine over the template's bytes, answering the type
+; the template was -- a bytearray formats to a bytearray.
+(def %py-format-bytes
+  (fn (_ a b)
+    ((if (%py-barr-is a) %py-barr-new %py-bytes-new)
+      (%pb-of-str (%py-format (%pb->str (%py-bytes-list a)) b #t)))))
+
 ; `a @ b` means nothing here except to an object with __matmul__.
 (def %py-matmul
   (fn (_ a b)
@@ -532,6 +539,7 @@
     ; ask the object for __rmod__
     (match
       ((%py-str-is a) (%py-format-str a b))
+      ((%py-bytes-is a) (%py-format-bytes a b))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__mod__" "__rmod__" "%"))
       ((if (%py-complex-is a) #t (%py-complex-is b))
@@ -1053,6 +1061,13 @@
       ((> i 0) (self (rest a) (- i 1) dflt))
       (#t (%py-codec-name (first a) dflt)))))
 
+; A bytes a strip left whole IS the answer, as CPython has it -- `s.strip() is s`
+; -- since nothing can tell a copy from it but its identity; a bytearray is
+; mutable, so it always answers a new one.
+(def %py-b-kept
+  (fn (_ v mk l r)
+    (if (if (%py-barr-is v) #f (= (%pb-len r) (%pb-len l))) v (mk r))))
+
 ; --- hex and fromhex ---------------------------------------------------------
 ;
 ; x.hex(sep, bytes_per_sep): two digits a byte, and one separator character
@@ -1175,9 +1190,12 @@
       ((Str8 =? name "swapcase")   (fn (_ . a) (mk (%pb-swapcase l))))
       ((Str8 =? name "capitalize") (fn (_ . a) (mk (%pb-capitalize l))))
       ((Str8 =? name "title")      (fn (_ . a) (mk (%pb-title l))))
-      ((Str8 =? name "strip")  (fn (_ . a) (mk (%pb-strip l (%py-b-set a) #t #t))))
-      ((Str8 =? name "lstrip") (fn (_ . a) (mk (%pb-strip l (%py-b-set a) #t #f))))
-      ((Str8 =? name "rstrip") (fn (_ . a) (mk (%pb-strip l (%py-b-set a) #f #t))))
+      ((Str8 =? name "strip")
+        (fn (_ . a) (%py-b-kept v mk l (%pb-strip l (%py-b-set a) #t #t))))
+      ((Str8 =? name "lstrip")
+        (fn (_ . a) (%py-b-kept v mk l (%pb-strip l (%py-b-set a) #t #f))))
+      ((Str8 =? name "rstrip")
+        (fn (_ . a) (%py-b-kept v mk l (%pb-strip l (%py-b-set a) #f #t))))
       ((Str8 =? name "split")
         (fn (_ . a) (%py-b-parts mk (%pb-split l (%py-b-split-sep a) (%py-b-opt a 1 (- 0 1))) ())))
       ((Str8 =? name "rsplit")

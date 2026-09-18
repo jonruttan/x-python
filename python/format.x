@@ -298,16 +298,90 @@
         (%set-first! cell (rest (first cell)))
         v))))
 
+; A BYTES TEMPLATE'S TEXT CONVERSIONS, each as the platform string of the bytes
+; it inserts.  s and b take a buffer's own bytes, or what __bytes__ answers, and
+; refuse a str; c takes a byte, as an int or a one-byte bytes; r and a are the
+; ascii() of the value, which is its repr with every character past ASCII
+; escaped.
+(def %py-fmt-bytes-text
+  (fn (_ conv v)
+    (match
+      ((if (= conv 114) #t (= conv 97)) (%py-ascii-of v))
+      ((= conv 99) (%py-fmt-bytes-char v))
+      ((%py-buffer? v) (%pb->str (%py-buffer-bytes v)))
+      (#t
+        (let ((m (if (%py-obj-is v) (%py-dunder v "__bytes__") ())))
+          (if (null? m)
+            (Err raise (lit type)
+              (Str8 append
+                "%b requires a bytes-like object, or an object that implements __bytes__, not '"
+                (Str8 append (%py-class-name (%py-type-of v)) "'")) ())
+            (%pb->str (%py-bytes-list (m)))))))))
+
+(def %py-fmt-bytes-char
+  (fn (_ v)
+    (match
+      ((if (%py-bytes-is v) (= (%pb-len (%py-bytes-list v)) 1) #f)
+        (%pb->str (%py-bytes-list v)))
+      ((eq? (%py-num-kind (%py-boolnorm v)) (lit int))
+        (if (if (< v 0) #t (> v 255))
+          (Err raise (lit overflow) "%c arg not in range(256)" ())
+          (%pb->str (list v))))
+      (#t
+        (Err raise (lit type)
+          (Str8 append "%c requires an integer in range(256) or a single byte, not "
+            (if (%py-bytes-is v)
+              (Str8 append "a bytes object of length " (%py-str (%pb-len (%py-bytes-list v))))
+              (%py-class-name (%py-type-of v)))) ())))))
+
+; ascii(v): the repr, with each character past ASCII written as the escape
+; Python's repr would use for an unprintable one -- \xhh, \uhhhh or \Uhhhhhhhh.
+(def %py-ascii-of
+  (fn (_ v) (%ps->x (%py-ascii-cps (%ps-of-x (%py-repr-of v)) ()))))
+(def %py-ascii-cps
+  (fn (self cps acc)
+    (if (null? cps)
+      (List reverse acc)
+      (self (rest cps)
+        (if (< (first cps) 128)
+          (pair (first cps) acc)
+          (%py-ascii-push (%py-ascii-escape (first cps)) acc))))))
+(def %py-ascii-push
+  (fn (self l acc) (if (null? l) acc (self (rest l) (pair (first l) acc)))))
+(def %py-ascii-escape
+  (fn (_ c)
+    (match
+      ((< c 256) (pair 92 (pair 120 (%py-ascii-hex c 2 ()))))
+      ((< c 65536) (pair 92 (pair 117 (%py-ascii-hex c 4 ()))))
+      (#t (pair 92 (pair 85 (%py-ascii-hex c 8 ())))))))
+; the low `k` hex digits of c, as code points, most significant first
+(def %py-ascii-hex
+  (fn (self c k acc)
+    (if (= k 0)
+      acc
+      (self (Num quotient c 16) (- k 1) (pair (%py-hex-code (% c 16)) acc)))))
+
+; The text conversions: s, r and c, and in a bytes template b and a too.
+(def %py-fmt-text?
+  (fn (_ conv bytes?)
+    (match
+      ((= conv 115) #t)
+      ((= conv 114) #t)
+      ((= conv 99) #t)
+      (bytes? (if (= conv 98) #t (= conv 97)))
+      (#t #f))))
+
 ; One parsed conversion, fully rendered and padded.  A separate global
 ; rather than a frame-local of %py-format: a closure sees only the frame
 ; locals that exist when it is BUILT, so the walker below forward-declares
 ; nothing it can define first.
 (def %py-fmt-one
-  (fn (_ conv v left plus space zero alt width prec bad)
+  (fn (_ conv v left plus space zero alt width prec bad bytes?)
     ; s and r: text, precision truncates, zero pads with spaces; c is the
-    ; character of a code point, or a one-character string as itself
+    ; character of a code point, or a one-character string as itself.  A bytes
+    ; template also has b, which is its s, and a, which is its r.
     (match
-      ((if (= conv 115) #t (if (= conv 114) #t (= conv 99)))
+      ((%py-fmt-text? conv bytes?)
         (do
           ; EVERYTHING HERE IS A PLATFORM STRING: this engine pads and measures
           ; with Str8, so each branch hands back one of those rather than a str.
@@ -318,12 +392,14 @@
           ; crossing refuses, because the rest of this pipeline is a C string.
           ; Building a str with chr(0) and printing it is the way to emit one.
           (def s0
-            (if (= conv 99)
-              (if (%py-str-is v)
-                (if (= (%py-len v) 1) (%ps->x (%py-str-cps v))
-                  (Err raise (lit type) "%c requires an int or a unicode char, not a string of length other than 1" ()))
-                (%ps->x (%py-str-cps (%py-chr v))))
-              (if (= conv 115) (%py-str v) (%py-repr-of v))))
+            (match
+              (bytes? (%py-fmt-bytes-text conv v))
+              ((= conv 99)
+                (if (%py-str-is v)
+                  (if (= (%py-len v) 1) (%ps->x (%py-str-cps v))
+                    (Err raise (lit type) "%c requires an int or a unicode char, not a string of length other than 1" ()))
+                  (%ps->x (%py-str-cps (%py-chr v)))))
+              (#t (if (= conv 115) (%py-str v) (%py-repr-of v)))))
           (def s (if (if (>= prec 0) (> (Str8 length s0) prec) #f)
             (Str8 sub 0 prec s0) s0))
           (%py-fmt-pad "" s width left #f)))
@@ -399,8 +475,12 @@
       j
       (if (= (%py-char-code (%str-ref fmt j)) 37) j (self fmt n (+ j 1))))))
 
+; A BYTES TEMPLATE IS THE SAME ENGINE with one flag, given as a third argument:
+; its text arrives as the platform string of its bytes and leaves as one, so
+; only what a conversion inserts can differ, and %py-fmt-one says what does.
 (def %py-format
-  (fn (_ fmt arg)
+  (fn (_ fmt arg . mode)
+    (def bytes? (not (null? mode)))
     ; a tuple SUBCLASS spreads too: "%d %d" % namedtuple_instance takes its
     ; fields as the arguments, which is what makes a namedtuple a tuple here
     (def args
@@ -459,8 +539,13 @@
             ; "bar"}` raised KeyError about a key that is plainly there (and
             ; said `"foo"`, with the platform string's double quotes, which is
             ; the tell).
+            ; A bytes template's keys are bytes, as its mapping's are.
             (%set-first! cell
-              (list (%py-dget mapping (%py-str-of-x (rest keyed)))))))
+              (list
+                (%py-dget mapping
+                  (if bytes?
+                    (%py-bytes-new (%pb-of-str (rest keyed)))
+                    (%py-str-of-x (rest keyed))))))))
         (def fl (flags (if (null? keyed) j0 (first keyed)) #f #f #f #f #f))
         (def j1 (first fl))
         (def left (first (rest fl)))
@@ -499,7 +584,7 @@
                 "%"
                 (%py-fmt-one conv (%py-fmt-take! cell)
                   left plus space zero alt width prec
-                  (fn (_) (spec-err j3)))))
+                  (fn (_) (spec-err j3)) bytes?)))
             (go (+ j3 1) (Str8 append acc out))))))
     (set! go
       (fn (_ i acc)
