@@ -515,12 +515,7 @@
                       (rest (rest more))))))
           ; Subscript binds like a call: left-associative, same level.
           ((%py-group? (if (null? more) () (first more)) "[")
-            (self
-              (if (%py-slice-group? (%py-group-of (first more)))
-                (%py-slice-form acc (%py-group-of (first more)))
-                (list (lit %py-index) acc
-                  (%py-expr-of (%py-group-of (first more)))))
-              (rest more)))
+            (self (%py-subscript-form acc (%py-group-of (first more))) (rest more)))
           (#t (pair acc more)))))
     (%go (first %a) (rest %a))))
 
@@ -925,16 +920,48 @@
 (def %py-slice-part
   (fn (_ seg) (if (null? seg) () (%py-expr-of seg))))
 
-(def %py-slice-form
-  (fn (_ acc elems)
+; The three part forms of a slice -- start, stop, step -- whether they go to
+; %py-slice with the sequence or into a slice object.
+(def %py-slice-args
+  (fn (_ elems)
     (let ((segs (%py-slice-segs elems () ())))
-      (list (lit %py-slice) acc
+      (list
         (%py-slice-part (first segs))
         (%py-slice-part (if (null? (rest segs)) () (first (rest segs))))
         (%py-slice-part
           (if (null? (rest segs)) ()
             (if (null? (rest (rest segs))) ()
               (first (rest (rest segs))))))))))
+
+(def %py-slice-form
+  (fn (_ acc elems) (pair (lit %py-slice) (pair acc (%py-slice-args elems)))))
+
+; A SUBSCRIPT IS ONE EXPRESSION OR A TUPLE OF THEM.  With a top-level comma it
+; is a tuple -- `d[1, 2]` looks up the key (1, 2), and `d[1,]` the key (1,) --
+; and each part of it that has a colon of its own is a slice OBJECT, since only
+; a class's __getitem__ or a dict's lookup ever receives one: `a[1:2, 4:5]`
+; hands __getitem__ a tuple of two slices.  Without a comma it is the slice a
+; sequence walks, or a plain index, as before.
+(def %py-subscript-form
+  (fn (_ acc elems)
+    (match
+      ((%py-has-comma? elems)
+        (list (lit %py-index) acc
+          (pair (lit %py-mktuple)
+            (%py-subscript-parts (%py-comma-split elems () ()) ()))))
+      ((%py-slice-group? elems) (%py-slice-form acc elems))
+      (#t (list (lit %py-index) acc (%py-expr-of elems))))))
+
+(def %py-subscript-parts
+  (fn (self parts acc)
+    (if (null? parts)
+      (%py-reverse acc)
+      (self (rest parts)
+        (pair
+          (if (%py-slice-group? (first parts))
+            (pair (lit %py-sl-new) (%py-slice-args (first parts)))
+            (%py-expr-of (first parts)))
+          acc)))))
 
 (def %py-top-colon?
   (fn (self toks)
