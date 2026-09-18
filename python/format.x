@@ -398,7 +398,7 @@
                 (if (%py-str-is v)
                   (if (= (%py-len v) 1) (%ps->x (%py-str-cps v))
                     (Err raise (lit type) "%c requires an int or a unicode char, not a string of length other than 1" ()))
-                  (%ps->x (%py-str-cps (%py-chr v)))))
+                  (%ps->x (%py-str-cps (%py-fmt-char v)))))
               (#t (if (= conv 115) (%py-str v) (%py-repr-of v)))))
           (def s (if (if (>= prec 0) (> (Str8 length s0) prec) #f)
             (Str8 sub 0 prec s0) s0))

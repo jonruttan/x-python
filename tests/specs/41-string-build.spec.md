@@ -67,3 +67,23 @@ AttributeError
 ```
 ---
     before
+
+### startswith and endswith windows, strip identity, and %c past U+10FFFF
+
+```python
+(python-run "print(\"1foobar\".startswith(\"foo\", 1, 3), \"foobar\".startswith(\"foo\", None, 2), \"1foobar\".startswith(\"foo\", 1, 4))\nprint(\"1foobar\".startswith(\"o\", 5, 4), \"abc\".startswith(\"\", 3, 2), \"abc\".startswith(\"\", 1, 2), \"abc\".endswith(\"\", 3, 2))\nprint(\"foobar\".startswith((\"x\", \"fo\"), 0, 2), b\"1foobar\".startswith(b\"foo\", 1, 3), b\"1foobar\".startswith(b\"foo\", 1, 4))\ns = \"abc\"\nprint(s.strip() is s, s.lstrip(\"x\") is s, s.rstrip() is s, s.strip(\"a\") is s, s.strip(\"a\"))\nprint(\"%c\" % 0x10FFFF == chr(0x10FFFF), \"{:c}\".format(0x3BC), \"%c%c\" % (65, 0x4E00))\nfor f in (lambda: \"%c\" % 0x110000, lambda: \"{:c}\".format(0x200000), lambda: \"%c\" % -1, lambda: chr(0x110000)):\n    try:\n        f()\n    except (OverflowError, ValueError) as e:\n        print(type(e).__name__, e)\nprint(b\"abc\".startswith(b\"\", 3, 2), b\"abc\".endswith(b\"\", 3, 2), b\"abc\".endswith(b\"c\", 0, 3), b\"abc\".endswith(b\"c\", 0, 2))\ntry:\n    \"abc\".startswith(5, 3, 2)\nexcept TypeError:\n    print(\"TypeError\")")
+```
+---
+```output
+False False True
+False False True False
+True False True
+True True True False bc
+True μ A一
+OverflowError %c arg not in range(0x110000)
+OverflowError %c arg not in range(0x110000)
+OverflowError %c arg not in range(0x110000)
+ValueError chr() arg not in range(0x110000)
+False False True False
+TypeError
+```
