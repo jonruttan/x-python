@@ -215,6 +215,23 @@
           ())))))
 (%py-tok-type! "PY-WS" %py-t-ws)
 
+; --- PY-CONT: a backslash that ends a line joins the next one to it ----------
+; That newline is not line structure, so this takes it before PY-NL can, and
+; the next line's leading spaces with it: their column is not an indentation.
+; Negative score, like PY-WS -- matched and discarded.  A backslash followed by
+; anything else is not this, and no other analyser takes one outside a string.
+(def %py-cont-nl
+  (fn (_ buffer score chr)
+    (if (= chr #\newline)
+      (%seq (%score-set score (- 0 1) buffer) %py-ws-continue)
+      ())))
+
+(def %py-t-cont
+  (list
+    (pair (lit analyse)
+      (fn (_ buffer score chr) (if (= chr 92) %py-cont-nl ())))))
+(%py-tok-type! "PY-CONT" %py-t-cont)
+
 ; --- PY-COMMENT: # to end of line, discarded ---------------------------------
 ; The newline is given back, because it is a NEWLINE token and a comment must
 ; not swallow the line structure it sits on.
@@ -1608,6 +1625,8 @@
               (list (pair (lit analyse) e))
               (list (pair (lit analyse) e) (pair (lit read) r)))))))
     (reg "PY-WS" e-ws %py-t-ws)
+    ; a line continuation is rare and two characters long: interpreted here too
+    (Base make-type b "PY-CONT" %py-t-cont)
     (reg "PY-COMMENT" e-comment %py-t-comment)
     (reg "PY-BLANK" e-blank %py-t-blank)
     (reg "PY-NL" e-nl %py-t-nl)

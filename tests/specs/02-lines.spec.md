@@ -154,6 +154,34 @@ reaches the indenter.
 ---
     (('tok-name "f") ('tok-group "(" (('tok-number "1" 1)) ")") ('tok-block (('tok-name "x"))))
 
+## lines backslash
+
+A backslash that ends a line joins the next one to it.  The newline is not line
+structure then, and the next line's column is no indentation, so PY-CONT takes
+both before PY-NL could see them.
+
+### a backslash continuation is whitespace, and opens no block
+
+```python
+(%seq (write (python-lex "x = 1 + \\\n    2\nif x and \\\n   y:\n    z = 3\nb")) (newline))
+```
+---
+    (('tok-name "x") ('tok-op "=") ('tok-number "1" 1) ('tok-op "+") ('tok-number "2" 1) ('tok-newline) ('tok-kw "if") ('tok-name "x") ('tok-kw "and") ('tok-name "y") ('tok-op ":") ('tok-block (('tok-name "z") ('tok-op "=") ('tok-number "3" 1))) ('tok-name "b"))
+
+### the joined lines run as one
+
+```python
+(python-run "x = 1 + \\\n    2\nprint(x, \"a\" \\\n    \"b\")\nif 1 and \\\n   2:\n    print(\"y\")\ndef f():\n    return 1 + \\\n2\nprint(f())\n# a comment ending in a backslash \\\nz = 5\nprint(z, [1, \\\n  2])\ns = 'ab' + \\\n'cd'\nprint(s)")
+```
+---
+```output
+3 ab
+y
+3
+5 [1, 2]
+abcd
+```
+
 ## lines errors
 
 ### a dedent matching no open level raises
