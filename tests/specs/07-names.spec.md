@@ -184,3 +184,16 @@ after
 True <class 'bool'>
 debug
 ```
+
+### a name may hold characters past ASCII
+
+```python
+(python-run "α = 1\nαβγ = 2\nbβ = 3\nβb = 4\nprint(α, αβγ, bβ, βb)\n\n\ndef f(β, γ):\n    δ = β + γ\n    return δ\n\n\nclass φ:\n    def δ(self, ϵ):\n        return ϵ * 2\n\n\nprint(f(1, 2), f(β=3, γ=4), φ().δ(ϵ=5), hasattr(φ(), \"δ\"), getattr(φ(), \"δ\")(6))\nprint(\"{α}\".format(α=7), \"{0}{α}\".format(8, α=9))\nnaïve = \"x\"\nforα = 10\nprint(naïve, forα, [k for k in (\"é\", \"a\")], type(φ()).__name__)")
+```
+---
+```output
+1 2 3 4
+3 7 10 True 12
+7 89
+x 10 ['é', 'a'] φ
+```
