@@ -4,11 +4,12 @@ through the platform's assembler lane, and the swap is lazy: nothing happens
 until `%py-jit-threshold` bytes of source have passed through
 `python-tokenize`, then one guarded attempt pins `active` or `failed`.
 
-EVERY CASE HERE HOLDS ON EVERY PLATFORM. On a platform whose `compile-asm`
-cannot forward fvars the attempt refuses and the interpreted states carry on;
-the stdout is the same either way, which is what makes the fallback a
-contract rather than a hope. The one thing a spec cannot pin platform-wide is
-`active` itself.
+Every case here holds on every platform. Where the lane cannot compile an
+analyser state the attempt refuses and the interpreted states carry on; the
+stdout is the same either way, which is what makes the fallback a contract
+rather than a hope. Which of `active` and `failed` is due is asked of the lane
+directly, apart from the attempt, so a refusal the attempt's guard swallows
+still fails a case here.
 
 ## the threshold
 
@@ -57,6 +58,34 @@ true, and the attempt has pinned itself out of the way.
 ```output
 #t
 #f
+```
+
+### the attempt pins active wherever the lane compiles an analyser
+
+The lane is asked directly whether it compiles one analyser state, with the
+mode declared and nothing taken from the attempt. Where it does, the attempt
+must pin `active`; where it does not, `failed`. On a disagreement the case
+prints the attempt's refusal.
+
+```python
+(%seq
+  (do
+    (def %lane
+      (guard (_ #f)
+        (%seq
+          (compile-asm (lit (fn (me buffer score chr) (if (= chr 32) me ()))) () #t)
+          #t)))
+    (%set-first! %py-jit-threshold 0)
+    (python-tokenize "x = 1\n")
+    (write
+      (if (eq? (first %py-jit) (if %lane (lit active) (lit failed)))
+        #t
+        (guard (e e) (%py-jit-compile!)))))
+  (newline))
+```
+---
+```output
+#t
 ```
 
 ### python still runs end to end after the attempt
