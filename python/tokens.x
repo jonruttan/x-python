@@ -1347,10 +1347,8 @@
 ; COMPILED SOURCES ARE INTEGER-ONLY.  Raw codepoints (32, not #\space); LITERAL
 ; signs (-1, never the house-style (- 0 1)) -- a compiled %score-set sign must
 ; be a literal integer.  A looping state returns its own self param (me ...),
-; resolved as arg slot 0; a platform too old for that also refuses the
-; fvar-forwarding gate below, which is the property the gate actually tests.
-; The unused fvar `u` forces analyser mode on states with no real free
-; variable.
+; resolved as arg slot 0.  The unused fvar `u` forces analyser mode on states
+; with no real free variable.
 (import x/tool/compile)
 
 (def %py-jit (pair (lit off) ()))        ; off | active | failed
@@ -1398,11 +1396,14 @@
 
 (def %py-jit-compile!
   (fn (_)
-    ; THE GATE.  On a platform that cannot forward fvars this compile itself
-    ; raises, and the guard in %py-jit-tick! pins `failed` before anything is
-    ; built.  The result is never called -- a direct call to an fvar-compiled
-    ; function is outside the contract.
-    (compile-asm (lit (fn (_ x) (+ x k))) (list (pair (lit k) 1)))
+    ; The gate: one state in the form every state below takes -- analyser mode,
+    ; a loop through the self param, a handoff through an fvar.  A platform that
+    ; cannot compile it raises here, and the guard in %py-jit-tick! pins `failed`
+    ; before anything is built.  The result is never called -- a direct call to
+    ; an analyser state is outside the contract.
+    (compile-asm
+      (lit (fn (me buffer score chr) (if (= chr 32) me k)))
+      (list (pair (lit k) 1)))
     ; each state rooted as it is made -- see %py-jit-states
     (def jc (fn (_ form fvars) (%py-jit-keep! (compile-asm form fvars))))
     ; can this lane spell a variant?  (probed, never called -- see %py-jit-variants)
