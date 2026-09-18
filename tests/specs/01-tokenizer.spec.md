@@ -168,10 +168,10 @@ Python's int is arbitrary-precision and its float IEEE 754; which one a literal
 denotes belongs to the evaluator, not here.
 
 ```python
-(%seq (write (python-tokenize "007")) (newline))
+(%seq (write (python-tokenize "1_000")) (newline))
 ```
 ---
-    (('tok-number "007" 1))
+    (('tok-number "1_000" 1))
 
 ## tokenizer strings
 
@@ -390,3 +390,36 @@ input, not yet a complaint about it.
 ```
 ---
     (('tok-group "(" (('tok-number "1" 1)) ()))
+
+## tokenizer line endings and refusals
+
+A CR or CRLF is a newline before anything is lexed, as CPython reads a source,
+and a form feed is whitespace.  What no type takes -- a control character, `$`,
+a short `\x` escape, a decimal integer with a leading zero -- is refused as the
+SyntaxError CPython raises, where it used to end the read without a word.
+
+### line endings, and what the lexer refuses
+
+```python
+(python-run "def t(label, f):\n    try:\n        r = f()\n        print(label, \"->\", repr(r))\n    except (SyntaxError, ValueError) as e:\n        print(label, \"->\", type(e).__name__)\nt(\"cr-exec\", lambda: exec(\"\\rprint(2)\"))\nt(\"crlf-exec\", lambda: exec(\"\\r\\nprint(3)\"))\nt(\"cr-eval\", lambda: eval(\"12\\r\"))\nt(\"cont-cr\", lambda: eval(\"'123' \\\\\\r '456'\"))\nt(\"cont-crlf\", lambda: eval(\"'123'\\\\\\r\\n'456'\"))\nt(\"x0-str\", lambda: eval(r\"'\\x0'\"))\nt(\"x0-bytes\", lambda: eval(r\"b'\\x0'\"))\nt(\"00\", lambda: eval(\"00\"))\nt(\"01\", lambda: eval(\"01\"))\nt(\"007\", lambda: eval(\"007\"))\nt(\"01.5\", lambda: eval(\"01.5\"))\nt(\"byte1\", lambda: eval(b\"123\" + bytes([1])))\nt(\"byte9\", lambda: eval(b\"123\" + bytes([9])))\nt(\"dollar\", lambda: eval(\"1 $ 2\"))\nt(\"formfeed\", lambda: eval(\"1 +\\x0c 2\"))")
+```
+---
+```output
+2
+cr-exec -> None
+3
+crlf-exec -> None
+cr-eval -> 12
+cont-cr -> '123456'
+cont-crlf -> '123456'
+x0-str -> SyntaxError
+x0-bytes -> SyntaxError
+00 -> 0
+01 -> SyntaxError
+007 -> SyntaxError
+01.5 -> 1.5
+byte1 -> SyntaxError
+byte9 -> 123
+dollar -> SyntaxError
+formfeed -> 3
+```
