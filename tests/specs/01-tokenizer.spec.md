@@ -88,6 +88,17 @@ and the literal beside them is its own token.
 ---
     (('tok-bytes (97)) ('tok-bytes (97)) ('tok-name "bu") ('tok-string (97)) ('tok-name "rr") ('tok-string (97)) ('tok-bytes (97)))
 
+### a name may hold bytes past ASCII, and a keyword before one is no keyword
+
+The reader hands such a byte over as a negative number; a name takes it, where
+before no analyser did and the read stopped there without a word.
+
+```python
+(%seq (write (python-tokenize "α = bβ forα if α")) (newline))
+```
+---
+    (('tok-name "α") ('tok-op "=") ('tok-name "bβ") ('tok-name "forα") ('tok-kw "if") ('tok-name "α"))
+
 ### a keyword against punctuation and at the ends
 
 ```python

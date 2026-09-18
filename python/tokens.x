@@ -172,11 +172,26 @@
 (def %py-digit?
   (fn (_ c) (if (>= c 48) (<= c 57) #f)))
 
+; A NAME MAY HOLD ANY CHARACTER PAST ASCII.  The analyser reads bytes, so every
+; byte of a utf-8 sequence is one: α is a lead byte and a continuation byte,
+; both past 127 -- and the reader hands such a byte over SIGNED, as a negative
+; number, which is why the test is `< 0`; `>= 128` is the same byte from a
+; reader that does not.  A byte no analyser takes ends the read without a
+; word, so until names took these, a program stopped at its first non-ASCII
+; name and ran what came before it.
+;
+; Python narrows the set to the letters and marks Unicode calls identifier
+; characters; taking every one lexes each program Python accepts exactly as
+; Python does, and accepts a few names Python would refuse.  The compiled
+; twins say the same (%py-kw-namechar-form, and the name states in
+; %py-jit-compile!).
 (def %py-name-start?
   (fn (_ c)
-    (if (if (>= c 97) (<= c 122) #f) #t
-      (if (if (>= c 65) (<= c 90) #f) #t
-        (= c 95)))))
+    (match
+      ((>= c 97) (if (<= c 122) #t (>= c 128)))
+      ((= c 95) #t)
+      ((>= c 65) (<= c 90))
+      (#t (< c 0)))))
 
 (def %py-name-rest?
   (fn (_ c) (if (%py-name-start? c) #t (%py-digit? c))))
@@ -501,7 +516,9 @@
 (def %py-kw-namechar-form
   (lit (or (and (>= chr 97) (<= chr 122))
            (and (>= chr 65) (<= chr 90))
-           (or (= chr 95) (and (>= chr 48) (<= chr 57))))))
+           (or (= chr 95) (and (>= chr 48) (<= chr 57)))
+           (< chr 0)
+           (>= chr 128))))
 (def %py-kw-accept-form
   (lit (%seq (%buffer-unread buffer) (%score-set score 1 buffer))))
 (def %py-kw-fvar-names (lit (a b c d e f g h i j k l m n o p)))
@@ -1422,7 +1439,9 @@
           (if (or (and (>= chr 97) (<= chr 122))
                   (and (>= chr 65) (<= chr 90))
                   (= chr 95)
-                  (and (>= chr 48) (<= chr 57)))
+                  (and (>= chr 48) (<= chr 57))
+                  (< chr 0)
+                  (>= chr 128))
             me
             (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
         (list (pair (lit u) 1))))
@@ -1535,7 +1554,9 @@
         (lit (fn (_ buffer score chr)
           (if (or (and (>= chr 97) (<= chr 122))
                   (and (>= chr 65) (<= chr 90))
-                  (= chr 95))
+                  (= chr 95)
+                  (< chr 0)
+                  (>= chr 128))
             k
             ())))
         (list (pair (lit k) nb))))
