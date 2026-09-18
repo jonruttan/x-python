@@ -80,6 +80,28 @@ ValueError non-hexadecimal number found in fromhex() arg at position 2
 ValueError non-hexadecimal number found in fromhex() arg at position 7
 ```
 
+### percent formatting of bytes, and a strip that keeps its object
+
+```python
+(python-run "print(b\"%%\" % (), b\"\" % (), b\"=%d=\" % 1, b\"=%d=%d=\" % (1, 2))\nprint(b\"=%s=\" % b\"str\", b\"=%r=\" % b\"str\", b\"%b\" % b\"x\", b\"%s\" % memoryview(b\"mv\"))\nprint(b\"%c%c\" % (65, b\"B\"), b\"%5s|\" % b\"ab\", b\"%-5s|\" % b\"ab\", b\"%.1s\" % b\"ab\")\nprint(b\"%(k)s\" % {b\"k\": b\"v\"}, b\"%x %o %e %.2f\" % (255, 8, 1.5, 2.25))\nprint(bytearray(b\"%d\") % 5, b\"%a\" % chr(233), b\"%r\" % chr(0x1F600), b\"%a\" % 1.5)\n\n\nclass HasBytes:\n    def __bytes__(self):\n        return b\"hb\"\n\n\nprint(b\"<%s>\" % HasBytes())\n\n\ndef err(f):\n    try:\n        f()\n    except (TypeError, ValueError, OverflowError) as e:\n        print(type(e).__name__, e)\n\n\nerr(lambda: b\"%s\" % \"x\")\nerr(lambda: b\"%c\" % 256)\nerr(lambda: b\"%c\" % \"a\")\nerr(lambda: b\"%c\" % b\"ab\")\nerr(lambda: b\"%d %d\" % 1)\ns = b\"abc\"\nprint(s.strip() is s, s.lstrip() is s, s.rstrip(b\"x\") is s, s.strip(b\"a\") is s)\nt = bytearray(b\"abc\")\nprint(t.strip() is t)")
+```
+---
+```output
+b'%' b'' b'=1=' b'=1=2='
+b'=str=' b"=b'str'=" b'x' b'mv'
+b'AB' b'   ab|' b'ab   |' b'a'
+b'v' b'ff 10 1.500000e+00 2.25'
+bytearray(b'5') b"'\\xe9'" b"'\\U0001f600'" b'1.5'
+b'<hb>'
+TypeError %b requires a bytes-like object, or an object that implements __bytes__, not 'str'
+OverflowError %c arg not in range(256)
+TypeError %c requires an integer in range(256) or a single byte, not str
+TypeError %c requires an integer in range(256) or a single byte, not a bytes object of length 2
+TypeError not enough arguments for format string
+True True True False
+False
+```
+
 ### bytes values
 
 ```python
