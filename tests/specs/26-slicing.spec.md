@@ -114,10 +114,41 @@ hello
 ---
     Error: #<err:value slice step cannot be zero>
 
-### a dict does not slice, with Python's own complaint
+### a dict does not slice: the slice is a key, and usually a missing one
+
+Python 3.12 made a slice hashable, so this is a KeyError naming the key rather
+than the TypeError older Pythons raised; 3.14 is what the corpus is generated
+against.
 
 ```python
-(python-run "print({'a': 1}[1:2])")
+(python-run "d = {'a': 1}\ntry:\n    d[1:2]\nexcept KeyError as e:\n    print('KeyError', e.args)\nd[1:2] = 5\nprint(list(d.items()), d[1:2])")
 ```
 ---
-    Error: #<err:type unhashable type: 'slice'>
+```output
+KeyError (slice(1, 2, None),)
+[('a', 1), (slice(1, 2, None), 5)] 5
+```
+
+### a slice is an object, with attributes and indices()
+
+```python
+(python-run "class A:\n    def __getitem__(self, idx):\n        return idx\n\n    def __setitem__(self, idx, value):\n        print('set', idx, value)\n\n    def __delitem__(self, idx):\n        print('del', idx)\n\n\ns = A()[1:2:3]\nprint(s, type(s) is slice, s.start, s.stop, s.step)\nprint(A()[1:2], A()[:], A()[::-1], A()[5:])\nA()[4:5:6] = 7\ndel A()[7:8:9]\nprint(slice(3), slice(1, 5), slice(1, 5, 2))\nprint(slice(1, 2) == slice(1, 2), slice(1, 2) == slice(1, 3), slice(1, 2) == 5)\nprint(A()[:].indices(10), A()[2:].indices(10), A()[:7].indices(10))\nprint(A()[2:7:2].indices(10), A()[2:7:-2].indices(10), A()[7:2:2].indices(10))\nprint(A()[2:7:2].indices(5), A()[2:7:-2].indices(5), A()[7:2:-2].indices(5))\n\n\ndef err(f):\n    try:\n        f()\n    except (TypeError, ValueError, AttributeError) as e:\n        print(type(e).__name__)\n\n\nerr(lambda: A()[::].indices(None))\nerr(lambda: A()[::].indices(-1))\nerr(lambda: A()[::0].indices(5))\nerr(lambda: slice())\nerr(lambda: slice(1, 2, 3, 4))\nerr(lambda: A()[:].__setattr__('start', 0))")
+```
+---
+```output
+slice(1, 2, 3) True 1 2 3
+slice(1, 2, None) slice(None, None, None) slice(None, None, -1) slice(5, None, None)
+set slice(4, 5, 6) 7
+del slice(7, 8, 9)
+slice(None, 3, None) slice(1, 5, None) slice(1, 5, 2)
+True False False
+(0, 10, 1) (2, 10, 1) (0, 7, 1)
+(2, 7, 2) (2, 7, -2) (7, 2, 2)
+(2, 5, 2) (2, 4, -2) (4, 2, -2)
+TypeError
+ValueError
+ValueError
+TypeError
+TypeError
+AttributeError
+```

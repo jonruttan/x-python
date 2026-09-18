@@ -50,6 +50,7 @@
       ((%py-io-is obj) (%py-io-attr obj name))
       ((%py-arr-is obj) (%py-arr-attr obj name))
       ((%py-mv-is obj) (%py-mv-attr obj name))
+      ((%py-sl-is obj) (%py-sl-attr obj name))
       ((%py-dq-is obj) (%py-dq-attr obj name))
       ((%py-list? obj) (%py-list-attr obj name))
       ((%py-dict? obj) (%py-dict-attr obj name))
