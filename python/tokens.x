@@ -742,8 +742,8 @@
 ; THE CONVERSION CANNOT RUN INSIDE A READ HANDLER -- (%cvt l %string) hands
 ; back nil there (the reason the old decoder was built on Str8 appends) --
 ; so the 256 one-character strings a byte-sized code point can name are
-; built ONCE, here, at load time, and the decoder indexes them.  Larger code
-; points (\u escapes, unsupported) fall back to the conversion.
+; built ONCE, here, at load time, and the decoder indexes them.  A larger code
+; point has no string to index; %py-esc-cp hands over its utf-8 instead.
 (def %py-cp-strs
   (do
     (def go
@@ -751,11 +751,7 @@
         (if (< n 0) acc
           (self (- n 1) (pair (%py-list->string (list (%py-int->char n))) acc)))))
     (go 255 ())))
-(def %py-cp->str
-  (fn (_ n)
-    (if (< n 256)
-      (List ref n %py-cp-strs)
-      (%py-list->string (list (%py-int->char n))))))
+(def %py-cp->str (fn (_ n) (List ref n %py-cp-strs)))
 (def %py-hexval
   (fn (_ c)
     (match
@@ -790,11 +786,17 @@
 ; drops a NUL and everything after it in the same literal.  b'\x00\x01' was
 ; b'' and 'a\x00b' was 'ab', with nothing said.  docs/nul-and-the-string-layer.md
 ; is why that is the end of it and not the start of a fix.
+;
+; A CODE POINT PAST A BYTE LEAVES AS ITS UTF-8, a byte list the literal's
+; accumulator takes as it is: there is no one-character string to index, and
+; the conversion that would build one answers nil in a read handler.
 (def %py-esc-cp
   (fn (_ v raw?)
-    (if (= v 0)
-      (list 0)
-      (if raw? (%py-byte->str v) (%py-cp->str v)))))
+    (match
+      ((= v 0) (list 0))
+      (raw? (%py-byte->str v))
+      ((< v 256) (%py-cp->str v))
+      (#t (%ps-enc1 v)))))
 
 ; raw? decodes \xhh and octal escapes to raw bytes (bytes literals) rather
 ; than code points (str literals)
@@ -848,6 +850,42 @@
     (%go 0 "")))
 
 ; One escape at index i (which holds the backslash): (next-index . text).
+; The value of k hex digits starting at j, or nil when fewer than k are there.
+(def %py-hex-run
+  (fn (self s j end k acc)
+    (match
+      ((= k 0) acc)
+      ((>= j end) ())
+      (#t
+        (let ((d (%py-hexval (%py-char->int (Str8 ref j s)))))
+          (if (null? d) () (self s (+ j 1) end (- k 1) (+ (* acc 16) d))))))))
+
+; \u or \U at i: the escape's code point and where the literal resumes, or the
+; two characters as written when the digits are short or name no code point.
+(def %py-esc-hexcp
+  (fn (_ s i len k)
+    (let ((v (%py-hex-run s (+ i 2) len k 0)))
+      (match
+        ((null? v)
+          (%py-esc-refused s i
+            (if (= k 4) "truncated \\uXXXX escape" "truncated \\UXXXXXXXX escape")))
+        ((> v 1114111) (%py-esc-refused s i "illegal Unicode character"))
+        (#t (pair (+ i (+ 2 k)) (%py-esc-cp v #f)))))))
+
+; A MALFORMED \u OR \U IS PARKED, as an indentation error is: a read handler
+; cannot raise (see %py-note-ind-error!), so the escape records the first
+; refusal and reads on as the two characters it was, and python-tokenize
+; raises the SyntaxError CPython raises once reading is over.
+(def %py-esc-error (pair () ()))
+(def %py-esc-refused
+  (fn (_ s i why)
+    (%seq
+      (if (null? (first %py-esc-error))
+        (%set-first! %py-esc-error
+          (Str8 append "(unicode error) 'unicodeescape' codec can't decode bytes: " why))
+        ())
+      (pair (+ i 2) (Str8 sub i 2 s)))))
+
 (def %py-esc-at
   (fn (_ s i len raw?)
     (def at (fn (_ k) (%py-char->int (Str8 ref k s))))
@@ -873,6 +911,12 @@
             (simple "\\x")
             (let ((v (+ (* h1 16) h2)))
               (pair (+ i 4) (%py-esc-cp v raw?))))))
+      ; \u with four hex digits and \U with eight name a code point in a str
+      ; literal; in a bytes literal neither is an escape, and falls to the last
+      ; arm with every other unknown one.  A short or out-of-range escape is a
+      ; SyntaxError, parked until reading is over (%py-esc-refused).
+      ((if raw? #f (= code 117)) (%py-esc-hexcp s i len 4))
+      ((if raw? #f (= code 85)) (%py-esc-hexcp s i len 8))
       ((if (>= code 48) (<= code 55) #f)
         (let ((d1 (- code 48)))
           (let ((n2 (if (if (< (+ i 2) len) (if (>= (at (+ i 2)) 48) (<= (at (+ i 2)) 55) #f) #f) 1 0)))
@@ -1599,16 +1643,19 @@
   (fn (_ input)
     (%py-jit-tick! (Str8 length input))
     (%py-ind-reset!)
+    (%set-first! %py-esc-error ())
     (let ((toks (%py-token-read-string (first %py-active-raw)
                   (Str8 append input " "))))
-      ; Reading is over and x is driving again, so this is where an
-      ; indentation error can finally be raised.  A NUL named by an escape
-      ; used to be parked and raised here too; both literal kinds carry one
-      ; now, so there is nothing left to park.
-      (if (not (null? (first %py-ind-error)))
-        (Err raise (lit indent)
-          "unindent does not match any outer indentation level" ())
-        toks))))
+      ; Reading is over and x is driving again, so this is where a parked
+      ; error can finally be raised: an indentation error, or a \u or \U
+      ; escape that named no code point.
+      (match
+        ((not (null? (first %py-ind-error)))
+          (Err raise (lit indent)
+            "unindent does not match any outer indentation level" ()))
+        ((not (null? (first %py-esc-error)))
+          (Err raise (lit syntax) (first %py-esc-error) ()))
+        (#t toks)))))
 
 ; --- PY-OPEN / PY-CLOSE: brackets are READ AS GROUPS -------------------------
 ;

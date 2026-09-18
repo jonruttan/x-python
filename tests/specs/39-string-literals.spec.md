@@ -37,6 +37,23 @@ raw\ttri f7 7\t
 5
 ```
 
+### \u and \U escapes, their refusals, and the reprs that write them
+
+```python
+(python-run "a = \"\\u00e9\"\nb = \"\\u4e00\\U0001f600\\U0001F600\"\nprint(len(a), ord(a), len(b), [hex(ord(c)) for c in b])\nprint(\"x\\u0041y\", f\"<\\u00e9>\", \"\\u00e9\\u00e8\", '\\u0027', \"\\400\" == chr(256))\nprint(repr(r\"\\u00e9\"), len(r\"\\u00e9\"), \"\\u00e9\" == chr(233), \"\\ud800\" == chr(0xd800))\nfor src in ['\"\\\\U00110000\"', '\"\\\\u00\"', '\"\\\\U0001\"', '\"\\\\u00e9\"']:\n    try:\n        print(repr(eval(src)))\n    except SyntaxError:\n        print(\"SyntaxError\")\nprint(repr(chr(0xD800)), repr(chr(0xDFFF)), repr(chr(0x85)), repr(chr(0x9F) + chr(0xA0)))")
+```
+---
+```output
+1 233 3 ['0x4e00', '0x1f600', '0x1f600']
+xAy <é> éè ' True
+'\\u00e9' 6 True True
+SyntaxError
+SyntaxError
+SyntaxError
+'é'
+'\ud800' '\udfff' '\x85' '\x9f\xa0'
+```
+
 ### a two-byte character is one character
 
 ```python
