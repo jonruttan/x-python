@@ -176,3 +176,27 @@ get slice(1, slice(slice(2, 3, 4), 5, None), None)
 slice(1, slice(slice(2, 3, 4), 5, None), None)
 [2, 3] cba 2
 ```
+
+### an index is an integer, and a bool is one
+
+```python
+(python-run "t = ((30, 63, 127), (62, 63, 127))\nprint(t[True][False], [1, 2][True], \"ab\"[True], b\"ab\"[True], bytearray(b\"ab\")[True], t[-True])\nl = [1, 2, 3]\nl[True] = 9\ndel l[False]\nprint(l)\nba = bytearray(b\"abc\")\nba[True] = 66\ndel ba[False]\nprint(ba)\n\n\ndef err(f):\n    try:\n        f()\n    except (TypeError, IndexError) as e:\n        print(type(e).__name__, e)\n\n\nerr(lambda: [1][1.5])\nerr(lambda: (1,)[\"a\"])\nerr(lambda: \"a\"[1.5])\nerr(lambda: \"\"[\"\"])\nerr(lambda: b\"a\"[1.5])\nerr(lambda: bytearray(b\"a\")[None])\nerr(lambda: [1][None])\nerr(lambda: [1][5])\nerr(lambda: \"ab\"[2])\n\n\ndef store():\n    l[1.5] = 0\n\n\ndef drop():\n    del l[None]\n\n\nerr(store)\nerr(drop)\nprint({True: \"t\"}[1], {1: \"one\"}[True])")
+```
+---
+```output
+62 2 b 98 98 (62, 63, 127)
+[9, 3]
+bytearray(b'Bc')
+TypeError list indices must be integers or slices, not float
+TypeError tuple indices must be integers or slices, not str
+TypeError string indices must be integers, not 'float'
+TypeError string indices must be integers, not 'str'
+TypeError byte indices must be integers or slices, not float
+TypeError bytearray indices must be integers or slices, not NoneType
+TypeError list indices must be integers or slices, not NoneType
+IndexError list index out of range
+IndexError string index out of range
+TypeError list indices must be integers or slices, not float
+TypeError list indices must be integers or slices, not NoneType
+t one
+```
