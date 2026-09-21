@@ -68,8 +68,8 @@
     (match
       ((= u 0) 0.0)
       ((= u %py-ieee-2p63) %py-ieee-neg-zero)
-      ((< u %py-ieee-2p63) (%make-instance %float u))
-      (#t (%make-instance %float (%py-sub u %py-f-2p64))))))
+      ((< u %py-ieee-2p63) (%make-instance %py-th-float u))
+      (#t (%make-instance %py-th-float (%py-sub u %py-f-2p64))))))
 
 ; m / 2**k rounded half to even, which is how a narrower format takes the bits
 ; it cannot keep.

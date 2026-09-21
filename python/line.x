@@ -420,7 +420,7 @@
           (List sort (fn (_ a b) (Str8 <? a b))
             (List distinct
               (List filter (fn (_ name) (Str8 starts? word name))
-                (%append %pp-names %py-session-names)))))))))
+                (List append %pp-names %py-session-names)))))))))
 
 ; --- installation ------------------------------------------------------------
 ;
@@ -441,7 +441,7 @@
     (set! %pp-bi-get (method-ref %pp-bi get-or))
     (set! %pp-memo-get (method-ref %pp-memo get-or))
     (set! %pp-memo-set (method-ref %pp-memo set!))
-    (set! %pp-names (%append %py-keywords (List map (fn (_ row) (first row)) %py-builtins)))
+    (set! %pp-names (List append %py-keywords (List map (fn (_ row) (first row)) %py-builtins)))
     (set! %pp-rst (Ansi reset))
     (set! %pp-pal
       (list (%pp-append (Ansi bold) (Ansi magenta)) ; keyword, as x's constructs
@@ -456,7 +456,9 @@
             ""))                                    ; plain
     (set! %pp-depth (list (Ansi yellow) (Ansi magenta) (Ansi cyan)))
     (set! %pp-lone (Ansi bold-red))
-    (set! %pp-focus (%sgr "7"))
+    ; Inverse video, from the Ansi class where it carries it.  The pinned
+    ; release's Ansi has no inverse, and there the platform's %sgr answers.
+    (set! %pp-focus (guard (_ (%sgr "7")) (Ansi inverse)))
     (set! %pp-last-in ())
     (set! %pp-last-out ())
     (set! %pp-last-marks ())
