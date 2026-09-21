@@ -1,6 +1,7 @@
 # x-python -- the Python lang for x-lang
 #
 #   make test          the bundle's own spec suite
+#   make test-boot     one program through `x -l python`, on the declared dialect
 #   make conformance   score against the MicroPython-derived suite
 #   make install       into the x on PATH
 #
@@ -36,6 +37,10 @@ uninstall: ## Remove it again
 .PHONY: test
 test: ## Run the bundle's own spec suite
 	X="$(X)" sh tests/spec-runner.sh
+
+.PHONY: test-boot
+test-boot: ## Run a program through `x -l python`, on the declared dialect
+	X="$(X)" sh tests/boot.sh
 
 .PHONY: fetch
 fetch: ## Fetch and verify the pinned upstream test corpus

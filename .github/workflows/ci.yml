@@ -84,6 +84,35 @@ jobs:
       - name: Run the Python specs (shard ${{ matrix.shard }} of 4)
         run: SPEC_SHARD="${{ matrix.shard }}/4" X="$PWD/.x-lang/x.sh" sh tests/spec-runner.sh
 
+  boot:
+    # The specs load the bundle on the full-tower amalgam, which binds more
+    # names than the dialect lang.xon declares.  This job boots the way a user
+    # does -- the wrapper, the declared dialect, run.x -- and runs a program,
+    # so a platform name the bundle reads and never binds stops it here.  Both
+    # legs, for the reasons the specs job gives, and main may fail likewise.
+    name: boots under -l python @ x-lang ${{ matrix.x-lang }}
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.x-lang == 'main' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        x-lang: ['v0.14.0', 'main']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out x-lang
+        uses: actions/checkout@v4
+        with:
+          repository: jonruttan/x-lang
+          ref: ${{ matrix.x-lang }}
+          path: .x-lang
+      - name: Build the platform
+        working-directory: .x-lang
+        run: |
+          make engine
+          make
+      - name: Run a program through x -l python
+        run: X="$PWD/.x-lang/x.sh" sh tests/boot.sh
+
   if-ladders:
     # `match` IS THE PRIMITIVE, and a decision with four or more arms written
     # as nested ifs says the same thing one indent deeper per arm.  The check
