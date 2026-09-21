@@ -674,10 +674,9 @@
                     ())
                   (def m
                     (match
-                      ((if (= tc 120) #t (= tc 88))
-                        (%py-fmt-base w 16 (if (= tc 88) "0123456789ABCDEF" "0123456789abcdef")))
-                      ((= tc 111) (%py-fmt-base w 8 "01234567"))
-                      ((= tc 98) (%py-fmt-base w 2 "01"))
+                      ((if (= tc 120) #t (= tc 88)) (%py-fmt-base w 16 (= tc 88)))
+                      ((= tc 111) (%py-fmt-base w 8 #f))
+                      ((= tc 98) (%py-fmt-base w 2 #f))
                       (#t (%py-fmt-int-mag w))))
                   ; _ groups binary, octal and hex digits by four
                   (def grp

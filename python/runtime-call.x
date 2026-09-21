@@ -567,10 +567,10 @@
 ; the bigint path are stated once.  The SIGN GOES BEFORE THE PREFIX:
 ; bin(-15) is -0b1111, not 0b-1111.
 (def %py-based-str
-  (fn (_ v base tbl pfx)
+  (fn (_ v base pfx)
     (if (not (eq? (%py-num-kind (%py-boolnorm v)) (lit int)))
       (Err raise (lit type) "an integer is required" ())
-      (let ((m (%py-fmt-base (%py-boolnorm v) base tbl)))
+      (let ((m (%py-fmt-base (%py-boolnorm v) base #f)))
         ; bin/hex/oct ARE PYTHON-FACING and answer strs -- its only three
         ; callers are those builtins.  `bin(b)[:20]` slices the result, and a
         ; platform string is not a str, so the subscript fell past the string
@@ -578,9 +578,9 @@
         ; about a perfectly ordinary slice.
         (%py-str-of-x
           (Str8 append (if (first m) "-" "") (Str8 append pfx (rest m))))))))
-(def %py-bin (fn (_ v) (%py-based-str v 2 "01" "0b")))
-(def %py-hex (fn (_ v) (%py-based-str v 16 "0123456789abcdef" "0x")))
-(def %py-oct (fn (_ v) (%py-based-str v 8 "01234567" "0o")))
+(def %py-bin (fn (_ v) (%py-based-str v 2 "0b")))
+(def %py-hex (fn (_ v) (%py-based-str v 16 "0x")))
+(def %py-oct (fn (_ v) (%py-based-str v 8 "0o")))
 
 (def %py-num? (fn (_ v) (not (null? (%py-num-kind (%py-boolnorm v))))))
 (def %py-divmod

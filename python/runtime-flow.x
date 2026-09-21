@@ -261,12 +261,24 @@
                      ((eq? k (lit ceil)) (Float ceil v))
                      (#t (Float trunc v)))))
             ; from 2**62 up a double is already whole but past what ->int
-            ; answers, so it converts through int()'s exact digits
+            ; answers, so its integer is read off its bits
             (if (if (< w %py-mwhole-high) (< %py-mwhole-low w) #f)
               (Float ->int w)
-              (%py-int-ctor w))))))))
+              (%py-mwhole-bits w))))))))
 (def %py-mwhole-high 4611686018427387904.0)
 (def %py-mwhole-low (- 0.0 4611686018427387904.0))
+; A double from 2**62 up is its 52-bit mantissa with the hidden bit, times two
+; to what its exponent says -- at that size 2**10 or more -- so its integer is
+; exact arithmetic on the pattern %py-ieee-raw reads.
+(def %py-f-2p52 4503599627370496)
+(def %py-mwhole-bits
+  (fn (_ w)
+    (let ((u (%py-ieee-raw w)))
+      (let ((neg (>= u %py-ieee-2p63)))
+        (let ((low (if neg (- u %py-ieee-2p63) u)))
+          (let ((mag (* (+ %py-f-2p52 (% low %py-f-2p52))
+                        (Num expt 2 (- (Num quotient low %py-f-2p52) 1075)))))
+            (if neg (- 0 mag) mag)))))))
 
 ; log, log2 and log10.  An int argument is checked before it converts, as
 ; CPython checks it, so its message names no float.

@@ -296,11 +296,8 @@
                 (let ((k (%py-num-kind v)))
                   (if (eq? k (lit int)) v
                   (if (eq? k (lit float))
-                    ; toward zero through the EXACT DIGITS, so int(1e19) and
-                    ; int(2.0 ** 100) answer bigints instead of a wrapped int64
-                    (let ((m (%py-fmt-int-mag v)))
-                      (let ((n (%py-int-of-str (rest m))))
-                        (if (first m) (- 0 n) n)))
+                    ; toward zero, as math.trunc takes it
+                    (%py-mwhole v (lit trunc))
                     (Err raise (lit type) "int() argument must be a number or string" ()))))))))))
     "int" (list "x" "base") 0 #f))
 
