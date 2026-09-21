@@ -528,10 +528,10 @@
 ; The compiled states: the same trie, one native state per node, generated
 ; as forms for compile-asm.  A node's children are its free variables, named
 ; from %py-kw-fvar-names in order (sixteen: the root's count).  The 31 leaves
-; are ONE compiled state shared by all -- a terminal has no free variable, so
-; it carries the unused `u` that forces analyser mode.  Nested ifs, not match:
-; the assembler lane has no match and refuses the form, which is also why the
-; number states in %py-jit-compile! are spelled that way.
+; are ONE compiled state shared by all, with an empty fvar table: a terminal
+; has no free variable.  Nested ifs, not match: the assembler lane has no
+; match and refuses the form, which is also why the number states in
+; %py-jit-compile! are spelled that way.
 (def %py-kw-namechar-form
   (lit (or (and (>= chr 97) (<= chr 122))
            (and (>= chr 65) (<= chr 90))
@@ -574,7 +574,8 @@
           (compile-asm
             (list (lit fn) (lit (_ buffer score chr))
               (%py-kw-dispatch-form kids %py-kw-fvar-names (%py-kw-tail-form (first node))))
-            (%py-kw-fvars kids %py-kw-fvar-names ())))))))
+            (%py-kw-fvars kids %py-kw-fvar-names ())
+            #t))))))
 
 ; --- PY-NAME: identifiers ------------------------------------------------------
 ; Keywords are PY-KEYWORD's, above, and take the tie by registration order;
@@ -1398,8 +1399,8 @@
 ; COMPILED SOURCES ARE INTEGER-ONLY.  Raw codepoints (32, not #\space); LITERAL
 ; signs (-1, never the house-style (- 0 1)) -- a compiled %score-set sign must
 ; be a literal integer.  A looping state returns its own self param (me ...),
-; resolved as arg slot 0.  The unused fvar `u` forces analyser mode on states
-; with no real free variable.
+; resolved as arg slot 0.  Every compile declares analyser mode (compile-asm's
+; third argument), so a state with no free variable passes an empty fvar table.
 (import x/tool/compile)
 
 (def %py-jit (pair (lit off) ()))        ; off | active | failed
@@ -1454,13 +1455,14 @@
     ; an analyser state is outside the contract.
     (compile-asm
       (lit (fn (me buffer score chr) (if (= chr 32) me k)))
-      (list (pair (lit k) 1)))
+      (list (pair (lit k) 1))
+      #t)
     ; each state rooted as it is made -- see %py-jit-states
-    (def jc (fn (_ form fvars) (%py-jit-keep! (compile-asm form fvars))))
+    (def jc (fn (_ form fvars) (%py-jit-keep! (compile-asm form fvars #t))))
     ; can this lane spell a variant?  (probed, never called -- see %py-jit-variants)
     (%set-first! %py-jit-variants
       (guard (e #f)
-        (%seq (jc (lit (fn (_ buffer score chr) (%score-variant! score 1))) (list (pair (lit u) 1))) #t)))
+        (%seq (jc (lit (fn (_ buffer score chr) (%score-variant! score 1))) ()) #t)))
     ; -- body states --
     (def wsc
       (jc
@@ -1468,14 +1470,14 @@
           (if (or (= chr 32) (= chr 9) (= chr 12))
             me
             (%seq (%buffer-unread buffer) (%score-set score -1 buffer)))))
-        (list (pair (lit u) 1))))
+        ()))
     (def cb
       (jc
         (lit (fn (me buffer score chr)
           (if (= chr 10)
             (%seq (%buffer-unread buffer) (%score-set score -1 buffer))
             me)))
-        (list (pair (lit u) 1))))
+        ()))
     (def bws
       (jc
         (lit (fn (me buffer score chr)
@@ -1484,7 +1486,7 @@
             (if (or (= chr 10) (= chr 35))
               (%seq (%buffer-unread buffer) (%score-set score -1 buffer))
               ()))))
-        (list (pair (lit u) 1))))
+        ()))
     (def nb
       (jc
         (lit (fn (me buffer score chr)
@@ -1496,7 +1498,7 @@
                   (>= chr 128))
             me
             (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
-        (list (pair (lit u) 1))))
+        ()))
     (def nexpd
       (jc
         (list (lit fn) (lit (me buffer score chr))
@@ -1505,7 +1507,7 @@
             (list (lit if) (lit (or (= chr 106) (= chr 74)))
               (%py-jit-accept 3)
               (%py-jit-unread-accept 2))))
-        (list (pair (lit u) 1))))
+        ()))
     (def nexpf
       (jc
         (lit (fn (_ buffer score chr)
@@ -1641,19 +1643,19 @@
           (if (or (= chr 41) (= chr 93) (= chr 125))
             (%score-set score 1 buffer)
             ())))
-        (list (pair (lit u) 1))))
+        ()))
     (def e-open
       (jc
         (lit (fn (_ buffer score chr)
           (if (or (= chr 40) (= chr 91) (= chr 123))
             (%score-set score 1 buffer)
             ())))
-        (list (pair (lit u) 1))))
+        ()))
     ; every character, one long: it runs at every token start, so it is native
     (def e-bad
       (jc
         (lit (fn (_ buffer score chr) (if (= chr 10) () (%score-set score -1 buffer))))
-        (list (pair (lit u) 1))))
+        ()))
     ; -- the second base, same registration order as the interpreted one --
     (def b (Base make-tok))
     (def reg
@@ -1673,7 +1675,7 @@
     (%set-first! %py-kw-leaf
       (jc
         (list (lit fn) (lit (_ buffer score chr)) (%py-kw-tail-form #t))
-        (list (pair (lit u) 1))))
+        ()))
     (def e-kw (%py-kw-compile %py-kw-trie))
     (reg "PY-KEYWORD" e-kw %py-t-kw)
     (reg "PY-NAME" e-name %py-t-name)
