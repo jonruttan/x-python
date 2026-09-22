@@ -68,32 +68,9 @@
       (#t ""))))
 
 ; --- Integer magnitudes ------------------------------------------------------
-; The decimal spelling of the integer part of any numeric operand: ints by
-; their own printer, a value past the machine word fourteen digits per
-; division, bools as 1/0, floats TRUNCATED through the exact digits (never
-; through a lossy int64 door).
-
-; 10^14 is the largest power of ten under 2^48, so a chunk is a fixnum and
-; its digits are the platform's own; a division of a value past the machine
-; word costs tens of thousands of objects, one per digit did too.
-(def %py-dec-chunk 100000000000000)
-(def %py-fmt-lead0
-  (fn (_ s k)
-    (if (>= (Str8 length s) k) s (Str8 append (%py-fmt-zeros (- k (Str8 length s))) s))))
-(def %py-fmt-big-dec
-  (fn (_ v)
-    ; the chunks of a non-negative v, most significant first
-    (def chunks
-      (fn (self n acc)
-        (if (= n 0) acc
-          (let ((q (Num quotient n %py-dec-chunk)))
-            (self q (pair (- n (* q %py-dec-chunk)) acc))))))
-    (def join
-      (fn (self cs acc)
-        (if (null? cs) acc
-          (self (rest cs) (Str8 append acc (%py-fmt-lead0 (%py-str (first cs)) 14))))))
-    (let ((cs (chunks v ())))
-      (if (null? cs) "0" (join (rest cs) (%py-str (first cs)))))))
+; The decimal spelling of the integer part of any numeric operand: ints and
+; bigints by the platform's printer, whose bigints are base-10^9 limbs and so
+; print without a division, bools as 1/0, floats truncated as int() truncates.
 
 (def %py-fmt-int-mag
   (fn (_ v)
@@ -101,71 +78,50 @@
     (match
       ((eq? v #t) (pair #f "1"))
       ((eq? v #f) (pair #f "0"))
-      ((%py-float-is v)
-        (do
-          (def ex (%py-f-exact v))
-          (def kind (first ex))
-          (if (not (eq? kind (lit num)))
-            (Err raise (lit value) "cannot convert float infinity or nan to integer" ())
-            (do
-              (def D (first (rest (rest ex))))
-              (def x10 (first (rest (rest (rest ex)))))
-              (def neg (Str8 =? (first (rest ex)) "-"))
-              ; truncation toward zero can leave nothing: %d of -0.5 is
-              ; 0, not -0
-              (if (< x10 0)
-                (pair #f "0")
-                (do
-                  (def keep (+ x10 1))
-                  (def got (Str8 length D))
-                  (def mag
-                    (if (>= got keep)
-                      (Str8 sub 0 keep D)
-                      (Str8 append D (%py-fmt-zeros (- keep got)))))
-                  (pair (if (Str8 =? mag "0") #f neg) mag)))))))
-      ((eq? (%py-typeof-prim v) %py-th-big)
-        (pair (< v 0) (%py-fmt-big-dec (if (< v 0) (- 0 v) v))))
+      ; toward zero as int() takes it, so %d of -0.5 is 0 and not -0
+      ((%py-float-is v) (%py-fmt-int-mag (%py-mwhole v (lit trunc))))
       (#t
         (let ((s (%py-str v)))
           (if (Str8 =? (Str8 sub 0 1 s) "-")
             (pair #t (Str8 sub 1 (- (Str8 length s) 1) s))
             (pair #f s)))))))
 
-; Base conversion for %o %x %X and bin/hex/oct.  The digits come off the
-; value a chunk at a time: the largest base^k under 2^48 per division, so a
-; value past the machine word pays a few divisions rather than one a digit.
+; Base conversion for %o %x %X and bin/hex/oct.  The digits are the platform's
+; own (%number->str with a radix).  A bigint's limbs are decimal, so it gives
+; up its low chunk to a division by the largest base^k under 10^9 -- inside one
+; limb, a division in one pass -- until what is left is a machine int, the top
+; chunk.  A chunk below the top is exactly k digits: those of base^k + r, less
+; the leading 1.
 (def %py-fmt-chunk-of
   (fn (_ base)
     ; (pow . k)
     (def go
       (fn (self p k)
-        (if (> (* p base) 281474976710656) (pair p k) (self (* p base) (+ k 1)))))
+        (if (>= (* p base) 1000000000) (pair p k) (self (* p base) (+ k 1)))))
     (go base 1)))
+(def %py-fmt-chunk-2 (%py-fmt-chunk-of 2))
+(def %py-fmt-chunk-8 (%py-fmt-chunk-of 8))
+(def %py-fmt-chunk-16 (%py-fmt-chunk-of 16))
 (def %py-fmt-base
-  (fn (_ v0 base tbl)
+  (fn (_ v0 base upper)
     (def v (%py-boolnorm v0))
-    (def ck (%py-fmt-chunk-of base))
-    ; k digits of the fixnum r, zero-padded, in front of acc
-    (def padded
-      (fn (self r k acc)
-        (if (eq? k 0) acc
-          (self (Num quotient r base) (- k 1) (Str8 append (Str8 sub (% r base) 1 tbl) acc)))))
-    ; the digits of the top chunk, without leading zeros
-    (def top
-      (fn (self r acc)
-        (if (= r 0) acc
-          (self (Num quotient r base) (Str8 append (Str8 sub (% r base) 1 tbl) acc)))))
+    (def ck
+      (match
+        ((= base 2) %py-fmt-chunk-2)
+        ((= base 8) %py-fmt-chunk-8)
+        (#t %py-fmt-chunk-16)))
     (def go
       (fn (self n acc)
-        (let ((q (Num quotient n (first ck))))
-          (let ((r (- n (* q (first ck)))))
-            (if (= q 0)
-              (Str8 append (top r "") acc)
-              (self q (Str8 append (padded r (rest ck) "") acc)))))))
+        (if (Num int? n)
+          (Str8 append (%number->str n base) acc)
+          (let ((qr (Num divmod n (first ck))))
+            (let ((d (%number->str (+ (first ck) (first (rest qr))) base)))
+              (self (first qr) (Str8 append (Str8 sub 1 (rest ck) d) acc)))))))
     (if (%py-float-is v)
       (Err raise (lit type) "%x format: an integer is required, not float" ())
-      (let ((n (if (< v 0) (- 0 v) v)))
-        (pair (< v 0) (if (= n 0) "0" (go n "")))))))
+      (let ((neg (< v 0)))
+        (let ((s (go (if neg (- 0 v) v) "")))
+          (pair neg (if upper (Str8 upcase s) s)))))))
 
 ; --- Float digit machinery ---------------------------------------------------
 ; Everything below speaks (D x10): every digit, and the power of ten of the
@@ -417,8 +373,7 @@
       ((if (= conv 111) #t (if (= conv 120) #t (= conv 88)))
         (do
           (def b (if (= conv 111) 8 16))
-          (def tbl (if (= conv 88) "0123456789ABCDEF" "0123456789abcdef"))
-          (def m (%py-fmt-base v b tbl))
+          (def m (%py-fmt-base v b (= conv 88)))
           (def pfx
             (if alt
               (if (= conv 111) "0o" (if (= conv 88) "0X" "0x"))

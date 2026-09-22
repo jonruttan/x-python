@@ -221,6 +221,7 @@
             (Err raise (lit type) "this callable takes no keyword arguments" ())
             (apply (%py-bound-fn f)
               (pair (%py-bound-self f) (%py-kw-args (%py-sig-shift sig) pos kws))))))
+      ((not (if (%py-fn-is f) #t (%py-obj-is f))) (%py-call-refuse f))
       (#t
         (let ((sig (%py-sig-of f)))
           (if (null? sig)
@@ -567,10 +568,10 @@
 ; the bigint path are stated once.  The SIGN GOES BEFORE THE PREFIX:
 ; bin(-15) is -0b1111, not 0b-1111.
 (def %py-based-str
-  (fn (_ v base tbl pfx)
+  (fn (_ v base pfx)
     (if (not (eq? (%py-num-kind (%py-boolnorm v)) (lit int)))
       (Err raise (lit type) "an integer is required" ())
-      (let ((m (%py-fmt-base (%py-boolnorm v) base tbl)))
+      (let ((m (%py-fmt-base (%py-boolnorm v) base #f)))
         ; bin/hex/oct ARE PYTHON-FACING and answer strs -- its only three
         ; callers are those builtins.  `bin(b)[:20]` slices the result, and a
         ; platform string is not a str, so the subscript fell past the string
@@ -578,16 +579,15 @@
         ; about a perfectly ordinary slice.
         (%py-str-of-x
           (Str8 append (if (first m) "-" "") (Str8 append pfx (rest m))))))))
-(def %py-bin (fn (_ v) (%py-based-str v 2 "01" "0b")))
-(def %py-hex (fn (_ v) (%py-based-str v 16 "0123456789abcdef" "0x")))
-(def %py-oct (fn (_ v) (%py-based-str v 8 "01234567" "0o")))
+(def %py-bin (fn (_ v) (%py-based-str v 2 "0b")))
+(def %py-hex (fn (_ v) (%py-based-str v 16 "0x")))
+(def %py-oct (fn (_ v) (%py-based-str v 8 "0o")))
 
-(def %py-num? (fn (_ v) (not (null? (%py-num-kind (%py-boolnorm v))))))
 (def %py-divmod
   (fn (_ a b)
     (if (if (%py-num? a) (%py-num? b) #f)
       (%py-tuple-new (list (%py-floordiv a b) (%py-mod a b)))
-      (Err raise (lit type) "unsupported operand type(s) for divmod()" ()))))
+      (%py-op-refuse "divmod()" a b))))
 
 ; A CLOSURE HAS NO PREDICATE, so its type handle is taken from one built
 ; here and compared -- the same trick the arithmetic seams use for float.
@@ -601,6 +601,32 @@
       ((%py-class-is v) #t)
       ((%py-obj-is v) (not (null? (%py-dunder v "__call__"))))
       (#t #f))))
+
+; Every call goes through one door.  The engine applies a closure, and an
+; instance through its type's call handler -- but anything else it answers as
+; data: `1()` was the list (1), and a list called with no argument reached the
+; handler that subscripts it and died on the missing index.  So a call asks
+; first, and refuses in CPython's words.  Each callable kind is applied by its
+; own arm: `apply` takes a closure only, and crashes on an instance.
+(def %py-apply-any
+  (fn (_ f args)
+    (match
+      ((%py-fn-is f) (apply f args))
+      ((%py-class-is f) (%py-instantiate f args))
+      ; the object's own door, which asks __call__ or names the class
+      ((%py-obj-is f) (%py-obj-call f args))
+      ; a bound method: the receiver goes first, then the arguments
+      ((%py-bound-is f) (apply (%py-bound-fn f) (pair (%py-bound-self f) args)))
+      (#t (%py-call-refuse f)))))
+; the plain call the parser emits
+(def %py-call
+  (fn (_ f . args) (%py-apply-any f args)))
+(def %py-call-refuse
+  (fn (_ f)
+    (Err raise (lit type)
+      (Str8 append (Str8 append "'" (%py-class-name (%py-type-of f)))
+        "' object is not callable")
+      ())))
 
 ; id() is an IDENTITY TABLE, not an address: the engine hands out no
 ; addresses, and what Python promises is only that the number is unique and
@@ -879,8 +905,7 @@
   (fn (_ a b op body)
     (if (if (%py-set-is a) (%py-set-is b) #f)
       (%py-set-new (%py-set-frozen? a) (body (%py-set-elems a) (%py-set-elems b)))
-      (Err raise (lit type)
-        (Str8 append (Str8 append "unsupported operand type(s) for " op) ": set") ()))))
+      (%py-op-refuse op a b))))
 (def %py-set-or  (fn (_ a b) (%py-set-binop a b "|" (fn (_ x y) (%py-set-fold x y)))))
 (def %py-set-and (fn (_ a b) (%py-set-binop a b "&" (fn (_ x y) (%py-set-keep x y)))))
 (def %py-set-sub (fn (_ a b) (%py-set-binop a b "-" (fn (_ x y) (%py-set-minus x y)))))
@@ -900,7 +925,7 @@
           ((Str8 =? op ">=") (%py-set-subset? y x))
           ((%py-set-subset? y x) (> (%py-length x) (%py-length y)))
           (#t #f)))
-      (%py-ord-refuse op))))
+      (%py-ord-refuse op a b))))
 
 ; The set methods that change the set, which a frozenset does not have.
 (def %py-set-mutator?

@@ -27,6 +27,39 @@ TypeError
 -4 -4 1 -1 (-4, -1) -4.0 3
 ```
 
+### bases past the machine word, and the format specs that share them
+
+```python
+(python-run "for n in (0, 7, -255, 2 ** 29 - 1, 2 ** 29, 10 ** 9, 2 ** 63 - 1, -(2 ** 63), 2 ** 64, 3 ** 40, True):\n    print(bin(n), oct(n), hex(n))\n    print(\"%x %X %o %#x %#o\" % (n, n, n, n, n), f\"{n:b} {n:X} {n:#_x} {n:08x}\")\nbig = 2 ** 200 + 12345\nprint(hex(big), oct(-big))\nprint(bin(big).count(\"1\"), len(bin(big)), [len(bin(2 ** i)) - 3 for i in (28, 29, 30, 58, 63, 64, 88)])")
+```
+---
+```output
+0b0 0o0 0x0
+0 0 0 0x0 0o0 0 0 0x0 00000000
+0b111 0o7 0x7
+7 7 7 0x7 0o7 111 7 0x7 00000007
+-0b11111111 -0o377 -0xff
+-ff -FF -377 -0xff -0o377 -11111111 -FF -0xff -00000ff
+0b11111111111111111111111111111 0o3777777777 0x1fffffff
+1fffffff 1FFFFFFF 3777777777 0x1fffffff 0o3777777777 11111111111111111111111111111 1FFFFFFF 0x1fff_ffff 1fffffff
+0b100000000000000000000000000000 0o4000000000 0x20000000
+20000000 20000000 4000000000 0x20000000 0o4000000000 100000000000000000000000000000 20000000 0x2000_0000 20000000
+0b111011100110101100101000000000 0o7346545000 0x3b9aca00
+3b9aca00 3B9ACA00 7346545000 0x3b9aca00 0o7346545000 111011100110101100101000000000 3B9ACA00 0x3b9a_ca00 3b9aca00
+0b111111111111111111111111111111111111111111111111111111111111111 0o777777777777777777777 0x7fffffffffffffff
+7fffffffffffffff 7FFFFFFFFFFFFFFF 777777777777777777777 0x7fffffffffffffff 0o777777777777777777777 111111111111111111111111111111111111111111111111111111111111111 7FFFFFFFFFFFFFFF 0x7fff_ffff_ffff_ffff 7fffffffffffffff
+-0b1000000000000000000000000000000000000000000000000000000000000000 -0o1000000000000000000000 -0x8000000000000000
+-8000000000000000 -8000000000000000 -1000000000000000000000 -0x8000000000000000 -0o1000000000000000000000 -1000000000000000000000000000000000000000000000000000000000000000 -8000000000000000 -0x8000_0000_0000_0000 -8000000000000000
+0b10000000000000000000000000000000000000000000000000000000000000000 0o2000000000000000000000 0x10000000000000000
+10000000000000000 10000000000000000 2000000000000000000000 0x10000000000000000 0o2000000000000000000000 10000000000000000000000000000000000000000000000000000000000000000 10000000000000000 0x1_0000_0000_0000_0000 10000000000000000
+0b1010100010111000101101000101001000101001000111111110100000100001 0o1242705505105107764041 0xa8b8b452291fe821
+a8b8b452291fe821 A8B8B452291FE821 1242705505105107764041 0xa8b8b452291fe821 0o1242705505105107764041 1010100010111000101101000101001000101001000111111110100000100001 A8B8B452291FE821 0xa8b8_b452_291f_e821 a8b8b452291fe821
+0b1 0o1 0x1
+1 1 1 0x1 0o1 1 1 0x1 00000001
+0x100000000000000000000000000000000000000000000003039 -0o4000000000000000000000000000000000000000000000000000000000000030071
+7 203 [28, 29, 30, 58, 63, 64, 88]
+```
+
 ### callable and id
 
 ```python
@@ -42,6 +75,35 @@ True
 False True
 True
 True
+```
+
+### calling a non-callable is a TypeError naming its type, and callable() agrees
+
+```python
+(python-run "def err(f):\n    try:\n        print(\"no error\", repr(f()))\n    except TypeError as e:\n        print(e)\n\n\nx = 1\nlst = [1]\n\n\ndef deco(f):\n    return 1\n\n\nerr(lambda: 1())\nerr(lambda: x())\nerr(lambda: x(2))\nerr(lambda: x(*[2]))\nerr(lambda: x(k=2))\nerr(lambda: None())\nerr(lambda: 1.5())\nerr(lambda: \"a\"())\nerr(lambda: lst())\nerr(lambda: lst(0))\nerr(lambda: {}())\nerr(lambda: (1,)())\nerr(lambda: b\"a\"())\nerr(lambda: True())\nerr(lambda: {1}())\nerr(lambda: (1 << 70)())\n\n\nclass A:\n    pass\n\n\nclass B:\n    def __call__(self, z):\n        return z * 2\n\n\nerr(lambda: A()())\nerr(lambda: B()(4))\nprint(callable(A()), callable(B()), callable(x), callable(lst))\n\n\n@deco\ndef f():\n    pass\n\n\nerr(lambda: f())")
+```
+---
+```output
+'int' object is not callable
+'int' object is not callable
+'int' object is not callable
+'int' object is not callable
+'int' object is not callable
+'NoneType' object is not callable
+'float' object is not callable
+'str' object is not callable
+'list' object is not callable
+'list' object is not callable
+'dict' object is not callable
+'tuple' object is not callable
+'bytes' object is not callable
+'bool' object is not callable
+'set' object is not callable
+'int' object is not callable
+'A' object is not callable
+no error 8
+False True False False
+'int' object is not callable
 ```
 
 ### attributes and class bodies

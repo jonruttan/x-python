@@ -261,12 +261,24 @@
                      ((eq? k (lit ceil)) (Float ceil v))
                      (#t (Float trunc v)))))
             ; from 2**62 up a double is already whole but past what ->int
-            ; answers, so it converts through int()'s exact digits
+            ; answers, so its integer is read off its bits
             (if (if (< w %py-mwhole-high) (< %py-mwhole-low w) #f)
               (Float ->int w)
-              (%py-int-ctor w))))))))
+              (%py-mwhole-bits w))))))))
 (def %py-mwhole-high 4611686018427387904.0)
 (def %py-mwhole-low (- 0.0 4611686018427387904.0))
+; A double from 2**62 up is its 52-bit mantissa with the hidden bit, times two
+; to what its exponent says -- at that size 2**10 or more -- so its integer is
+; exact arithmetic on the pattern %py-ieee-raw reads.
+(def %py-f-2p52 4503599627370496)
+(def %py-mwhole-bits
+  (fn (_ w)
+    (let ((u (%py-ieee-raw w)))
+      (let ((neg (>= u %py-ieee-2p63)))
+        (let ((low (if neg (- u %py-ieee-2p63) u)))
+          (let ((mag (* (+ %py-f-2p52 (% low %py-f-2p52))
+                        (Num expt 2 (- (Num quotient low %py-f-2p52) 1075)))))
+            (if neg (- 0 mag) mag)))))))
 
 ; log, log2 and log10.  An int argument is checked before it converts, as
 ; CPython checks it, so its message names no float.
@@ -799,11 +811,12 @@
         (first args)
         (%py-instantiate e args))
       e)))
-; raising what was thrown: a class instantiates, an instance is itself,
-; anything else is Python's TypeError
+; raising what was thrown, or what a raise statement names: a class derived
+; from BaseException instantiates, an instance of one is itself, anything
+; else -- 1, int, an ordinary object -- is Python's TypeError
 (def %py-raise-any
   (fn (_ e)
-    (if (if (%py-class-is e) #t (if (%py-obj-is e) (%py-subclass? (%py-obj-class e) %py-exc-BaseException) #f))
+    (if (%py-thrown-is? e %py-exc-BaseException)
       (error (%py-exc-instance e ()))
       (Err raise (lit type) "exceptions must derive from BaseException" ()))))
 ; is a thrown value (class or instance) of this exception class?
@@ -1011,20 +1024,8 @@
     (go (%py-iter-elems it) (if (null? st) 0 (first st)))))
 
 ; map(f, it) is LAZY -- a generator pulling from its source -- so a
-; StopIteration raised by f ends it where a yield from expects
-; APPLY WANTS A CLOSURE: a class is called through its own door, so
-; map(tuple, ...) and sorted(key=SomeClass) work like any other callable.
-(def %py-apply-any
-  (fn (_ f args)
-    (match
-      ((%py-class-is f) (%py-instantiate f args))
-      ((%py-obj-is f)
-        (let ((m (%py-dunder f "__call__")))
-          (if (null? m) (Err raise (lit type) "object is not callable" ()) (apply m args))))
-      ; a bound method: the receiver goes first, then the arguments
-      ((%py-bound-is f) (apply (%py-bound-fn f) (pair (%py-bound-self f) args)))
-      (#t (apply f args)))))
-
+; StopIteration raised by f ends it where a yield from expects.  f is called
+; through %py-apply-any, so map(tuple, ...) works like any other callable.
 ; map(f, a, b, ...) walks the sources in step and stops with the shortest
 (def %py-pull-all
   (fn (self srcs acc)

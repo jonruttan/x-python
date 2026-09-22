@@ -211,16 +211,6 @@
                 (Float from t)
                 (bad)))))))))
 
-(def %py-num-kind
-  (fn (_ v)
-    (let ((h (%py-typeof-prim v)))
-      (match
-        ((eq? h %py-th-int) (lit int))
-        ((eq? h %py-th-big) (lit int))
-        ((eq? h %py-th-float) (lit float))
-        ((eq? h %py-th-complex) (lit complex))
-        (#t ())))))
-
 (%py-sweep!)
 ; --- int(text, base) ---------------------------------------------------------
 ; Surrounding whitespace, a sign, the 0x/0o/0b prefix the base allows (any of
@@ -302,11 +292,8 @@
                 (let ((k (%py-num-kind v)))
                   (if (eq? k (lit int)) v
                   (if (eq? k (lit float))
-                    ; toward zero through the EXACT DIGITS, so int(1e19) and
-                    ; int(2.0 ** 100) answer bigints instead of a wrapped int64
-                    (let ((m (%py-fmt-int-mag v)))
-                      (let ((n (%py-int-of-str (rest m))))
-                        (if (first m) (- 0 n) n)))
+                    ; toward zero, as math.trunc takes it
+                    (%py-mwhole v (lit trunc))
                     (Err raise (lit type) "int() argument must be a number or string" ()))))))))))
     "int" (list "x" "base") 0 #f))
 
