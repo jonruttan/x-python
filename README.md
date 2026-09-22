@@ -208,9 +208,10 @@ fixed.
 
 **`make test-boot` takes the path the suite does not.** The suite loads the
 bundle on the full-tower amalgam, which binds more platform names than the
-dialect `lang.xon` declares. `test-boot` boots through the wrapper on that
-dialect and runs a short program, so a platform name the bundle reads and never
-binds stops it with `Unbound SYMBOL`.
+dialect `lang.xon` declares. `test-boot` writes the bundle's image the way
+`make install` does, boots from it through the wrapper on that dialect and runs
+a short program, so a platform name the bundle reads and never binds stops it
+with `Unbound SYMBOL`.
 
 **Do not `make install` into an x-lang checkout.** The Makefile asks
 `$(X) --share-dir` where to put the bundle, and a checkout answers with its own
