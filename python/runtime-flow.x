@@ -559,18 +559,24 @@
 ; module table is keyed the same way.  `__import__()` is the Python-facing
 ; door, and it is the one that crosses a str over -- putting the check here
 ; instead would reject every `import x` the parser ever emitted.
+; A relative name (`.`, `..a`, from `from . import x`) has no package to be
+; relative to: a program here runs as a script, as __main__ does in CPython.
 (def %py-import
   (fn (_ name)
-    (if (= (Str8 length name) 0)
-      (Err raise (lit value) "empty module name" ())
-      (let ((have (%py-module-find name (first %py-modules))))
-        (if (not (null? have))
-          have
-          (let ((built (%py-module-build name)))
-            (if (null? built)
-              (Err raise (lit import)
-                (Str8 append (Str8 append "No module named '" name) "'") ())
-              (%py-module-put! name built))))))))
+    (match
+      ((= (Str8 length name) 0) (Err raise (lit value) "empty module name" ()))
+      ((Str8 =? (Str8 sub 0 1 name) ".")
+        (Err raise (lit import)
+          "attempted relative import with no known parent package" ()))
+      (#t
+        (let ((have (%py-module-find name (first %py-modules))))
+          (if (not (null? have))
+            have
+            (let ((built (%py-module-build name)))
+              (if (null? built)
+                (Err raise (lit import)
+                  (Str8 append (Str8 append "No module named '" name) "'") ())
+                (%py-module-put! name built)))))))))
 
 ; `from X import a, b` and `from X import *` both read attributes off the
 ; module the same way an ordinary program would.

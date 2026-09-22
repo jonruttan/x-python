@@ -56,3 +56,28 @@ TypeError
 ValueError
 little
 ```
+
+### a relative import has no package to be relative to
+
+```python
+(python-run "for src in (\"from . import foo\", \"from .a import b\", \"from .. import c\", \"from .a.b import *\"):\n    try:\n        exec(src)\n    except ImportError as e:\n        print(\"ImportError\", e)")
+```
+---
+```output
+ImportError attempted relative import with no known parent package
+ImportError attempted relative import with no known parent package
+ImportError attempted relative import with no known parent package
+ImportError attempted relative import with no known parent package
+```
+
+### import * only at module level
+
+```python
+(python-run "try:\n    exec(\"def foo():\\n    from math import *\")\nexcept SyntaxError as e:\n    print(\"SyntaxError\", str(e).split(\" (\")[0])\ntry:\n    exec(\"class C:\\n    from math import *\")\nexcept SyntaxError:\n    print(\"SyntaxError\")\nfrom math import *\nprint(floor(2.5))")
+```
+---
+```output
+SyntaxError import * only allowed at module level
+SyntaxError
+2
+```

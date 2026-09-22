@@ -152,3 +152,17 @@ called
 two
 done
 ```
+
+## statements expressions
+
+### an expression statement is an expression list
+
+```python
+(python-run "print(1), print(2)\ntry:\n    len, undefined_name\nexcept NameError as e:\n    print(\"NameError\", e)\n-1, 2\nnot 0, 1")
+```
+---
+```output
+1
+2
+NameError name 'undefined_name' is not defined
+```
