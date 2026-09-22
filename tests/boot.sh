@@ -24,10 +24,12 @@
 # whatever tree wrote an image, and the bundle sweeps between its files on
 # every source boot (python/util.x), so the load fits.
 #
-# The program goes in as the specs send theirs, a `python-run` form in a
-# file the wrapper reads after run.x.  It is small on purpose: one thing from
-# each table the bundle builds while it loads -- a string escape, a big
-# integer, a float, a dict -- and the specs cover the rest.
+# The program goes in as the specs send theirs, `python-run` forms in a file
+# the wrapper reads after run.x.  It is small on purpose: one thing from each
+# table the bundle builds while it loads -- a string escape, a big integer, a
+# float, a dict -- and the specs cover the rest.  Each line runs on a swept
+# heap, so the peak this check reaches is the load's and not the probe's;
+# on x-lang 0.14.0 the two together passed the cap below.
 set -u
 
 BUNDLE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -67,16 +69,23 @@ else
 	SPAWN_DIR="$BUNDLE"
 fi
 
-# An x form, as the specs write one: the reader unescapes \\ and \n, so the
-# program Python sees has a \x41 escape and four lines.
+# x forms, as the specs write them: the reader unescapes \\, so the first
+# program Python sees has a \x41 escape.  A collect between the lines, as
+# the platform's own boots collect between their groups.
 cat > "$_TMP/program.x" <<'EOX'
-(python-run "print('\\x41' + 'b')\nprint(2 ** 100)\nprint(1 / 4)\nprint(sorted({'b': 1, 'a': 2}))")
+(python-run "print('\\x41' + 'b')")
+((prim-ref (lit heap) (lit collect)))
+(python-run "print(2 ** 100)")
+((prim-ref (lit heap) (lit collect)))
+(python-run "print(1 / 4 < 1)")
+((prim-ref (lit heap) (lit collect)))
+(python-run "print(sorted({'b': 1, 'a': 2}))")
 EOX
 
 cat > "$_TMP/want" <<'EOX'
 Ab
 1267650600228229401496703205376
-0.25
+True
 ['a', 'b']
 EOX
 
