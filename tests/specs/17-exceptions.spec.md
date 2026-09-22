@@ -72,6 +72,29 @@ r11 ValueError ValueError('inner')
 r12 KeyError KeyError('from a list')
 ```
 
+### a bare raise raises again inside a handler, and is a RuntimeError outside one
+
+```python
+(python-run "def f():\n    try:\n        raise ValueError(\"val\", 3)\n    except:\n        raise\n\n\ntry:\n    f()\nexcept ValueError as e:\n    print(repr(e))\ntry:\n    raise\nexcept RuntimeError as e:\n    print(type(e).__name__, e)")
+```
+---
+```output
+ValueError('val', 3)
+RuntimeError No active exception to reraise
+```
+
+### raise from records the cause
+
+```python
+(python-run "try:\n    raise Exception from None\nexcept Exception as e:\n    print(\"caught\", repr(e), e.__cause__)\ntry:\n    try:\n        raise ValueError(\"Value\")\n    except Exception as exc:\n        raise RuntimeError(\"Runtime\") from exc\nexcept Exception as ex2:\n    print(\"caught\", ex2, \"from\", repr(ex2.__cause__))\ntry:\n    raise ValueError(\"x\") from 1\nexcept TypeError as e:\n    print(e)")
+```
+---
+```output
+caught Exception() None
+caught Runtime from ValueError('Value')
+exception causes must derive from BaseException
+```
+
 ## except
 
 ### as binds the exception, and str(e) is the message
@@ -127,6 +150,34 @@ than computed. When classes arrive, this is the entry that grows a parent link.
 ```
 ---
     fine
+
+### except takes an expression: a class, a tuple of them, or a refusal when the exception arrives
+
+```python
+(python-run "exc = (KeyError, ValueError)\n\n\ndef t(f):\n    try:\n        f()\n    except TypeError as e:\n        print(\"TypeError\", e)\n\n\ndef e1():\n    try:\n        raise ValueError(\"v\")\n    except exc:\n        print(\"tuple matched\")\n\n\ndef e2():\n    try:\n        raise ValueError(\"v\")\n    except exc[1] as e:\n        print(\"subscript matched\", e)\n\n\ndef e3():\n    try:\n        raise ValueError(\"v\")\n    except 1:\n        pass\n\n\ndef e4():\n    try:\n        raise ValueError(\"v\")\n    except (1,):\n        pass\n\n\ndef e5():\n    try:\n        raise ValueError(\"v\")\n    except int:\n        pass\n\n\ndef e6():\n    try:\n        raise KeyboardInterrupt()\n    except BaseException:\n        print(\"BaseException\")\n\n\nfor f in (e1, e2, e3, e4, e5, e6):\n    t(f)")
+```
+---
+```output
+tuple matched
+subscript matched v
+TypeError catching classes that do not inherit from BaseException is not allowed
+TypeError catching classes that do not inherit from BaseException is not allowed
+TypeError catching classes that do not inherit from BaseException is not allowed
+BaseException
+```
+
+### the as name is unbound when the handler ends, whichever way it ends
+
+```python
+(python-run "try:\n    raise ValueError(534)\nexcept ValueError as e:\n    print(type(e).__name__, e.args)\ntry:\n    e\nexcept NameError as err:\n    print(err)\ntry:\n    try:\n        raise KeyError(\"k\")\n    except KeyError as e:\n        raise\nexcept KeyError:\n    pass\ntry:\n    e\nexcept NameError as err:\n    print(\"after a re-raise:\", err)\n\n\ndef f():\n    try:\n        raise KeyError(\"k\")\n    except KeyError as e:\n        return 1\n\n\nf()\ntry:\n    e\nexcept NameError as err:\n    print(\"after a return:\", err)")
+```
+---
+```output
+ValueError (534,)
+name 'e' is not defined
+after a re-raise: name 'e' is not defined
+after a return: name 'e' is not defined
+```
 
 ## the errors the runtime already raised
 

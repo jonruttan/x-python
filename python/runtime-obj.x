@@ -726,17 +726,22 @@
       #f
       (if (%py-subclass? (first bs) target) #t (self (rest bs) target)))))
 
+; `except X:` -- X is an exception class, or a tuple of them, which Python
+; spells as "or"; anything else is Python's TypeError, raised when an
+; exception reaches the clause.
 (def %py-exc-match
   (fn (_ e cls)
-    (if (not (%py-class-is cls))
-      (Err raise (lit type)
-        "catching classes that do not inherit from BaseException is not allowed"
-        ())
-      (%py-subclass? (%py-exc-class-of e) cls))))
-
-; `except (A, B):` -- any of a tuple of classes.  Python spells this with a
-; tuple and means "or"; nothing about it needs the tuple TYPE, only the list of
-; classes the parser already has.
+    (match
+      ((%py-class-is cls)
+        (if (%py-subclass? cls %py-exc-BaseException)
+          (%py-subclass? (%py-exc-class-of e) cls)
+          (%py-exc-match-refuse)))
+      ((%py-tuple-is cls) (%py-exc-match-any e (%py-tuple-elems cls)))
+      (#t (%py-exc-match-refuse)))))
+(def %py-exc-match-refuse
+  (fn (_)
+    (Err raise (lit type)
+      "catching classes that do not inherit from BaseException is not allowed" ())))
 (def %py-exc-match-any
   (fn (self e clss)
     (if (null? clss)

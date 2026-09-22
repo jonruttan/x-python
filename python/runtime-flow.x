@@ -811,14 +811,39 @@
         (first args)
         (%py-instantiate e args))
       e)))
-; raising what was thrown, or what a raise statement names: a class derived
-; from BaseException instantiates, an instance of one is itself, anything
-; else -- 1, int, an ordinary object -- is Python's TypeError
-(def %py-raise-any
+; No exception is active outside a handler: the name every compiled handler
+; binds to the one it caught is nil here, and a bare `raise` finds it so.
+(def %py-exc ())
+(def %py-reraise
+  (fn (_ e)
+    (if (null? e)
+      (%py-raise
+        (%py-instantiate %py-exc-RuntimeError (list "No active exception to reraise")))
+      (error e))))
+; the instance a raise statement or a generator's throw() raises: a class
+; derived from BaseException instantiates, an instance of one is itself,
+; anything else -- 1, int, an ordinary object -- is Python's TypeError
+(def %py-exc-value
   (fn (_ e)
     (if (%py-thrown-is? e %py-exc-BaseException)
-      (error (%py-exc-instance e ()))
+      (%py-exc-instance e ())
       (Err raise (lit type) "exceptions must derive from BaseException" ()))))
+(def %py-raise-any (fn (_ e) (error (%py-exc-value e))))
+; `raise X from Y` records the cause on the instance: None, or an exception
+; class or instance; anything else is Python's TypeError
+(def %py-raise-from
+  (fn (_ e c)
+    (let ((inst (%py-exc-value e)))
+      (%py-setattr inst "__cause__" (%py-cause-value c))
+      (error inst))))
+(def %py-cause-value
+  (fn (_ c)
+    (match
+      ((null? c) ())
+      ((%py-thrown-is? c %py-exc-BaseException) (%py-exc-instance c ()))
+      (#t
+        (Err raise (lit type)
+          "exception causes must derive from BaseException" ())))))
 ; is a thrown value (class or instance) of this exception class?
 (def %py-thrown-is?
   (fn (_ e cls)

@@ -107,11 +107,24 @@ Each def binds its own escape continuation, so the inner shadows the outer.
 
 ### return at module level is refused
 
-Python raises SyntaxError; here the escape continuation is simply not bound.
-Different words, same refusal.
+Python's SyntaxError, from the parser: `return` is a statement only inside a def,
+which the parser counts its way into and out of.
 
 ```python
 (python-run "return 1")
 ```
 ---
-    Error: Unbound SYMBOL '%py-return'
+    Error: #<err:syntax 'return' outside function>
+
+### in a class body, under an if, and through exec; a nested def's return still answers
+
+```python
+(python-run "for src in (\"return\", \"class C:\\n    return 1\", \"if True:\\n    return\"):\n    try:\n        exec(src)\n    except SyntaxError as e:\n        print(type(e).__name__)\nexec(\"def f():\\n    def g():\\n        return 2\\n    return g()\\nprint(f())\")")
+```
+---
+```output
+SyntaxError
+SyntaxError
+SyntaxError
+2
+```

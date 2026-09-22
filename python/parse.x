@@ -1656,7 +1656,24 @@
             (let ((sp (%py-line-of (rest toks) ())))
               (self (rest sp)
                 (if (%py-del-plain? (first sp)) (%py-del-line-names (first sp) acc) acc))))
+          ; `except X as NAME`: the handler unbinds NAME when it ends
+          ((%py-kw? t "except")
+            (self (rest toks) (%py-except-as-name (rest toks) acc)))
           (#t (self (rest toks) acc)))))))
+
+; the name an except clause binds with `as`, onto acc, from the tokens after
+; the keyword to the end of its line
+(def %py-except-as-name
+  (fn (self ts acc)
+    (match
+      ((null? ts) acc)
+      ((eq? (%py-tag (first ts)) (lit tok-newline)) acc)
+      ((%py-block? (first ts)) acc)
+      ((%py-kw? (first ts) "as")
+        (if (if (null? (rest ts)) #f (eq? (%py-tag (first (rest ts))) (lit tok-name)))
+          (pair (%py-val (first (rest ts))) acc)
+          acc))
+      (#t (self (rest ts) acc)))))
 
 (def %py-del-line-names
   (fn (self ts acc)
@@ -1677,6 +1694,16 @@
 ; as symbols.  A read of one of these finds that binding and never the module's
 ; %py-deleted, so it stays a bare symbol.
 (def %py-scope-syms (pair () ()))
+
+; How many def bodies the compile is inside: `return` is a statement only
+; inside one.  The count comes back down however the compile ends.
+(def %py-fn-depth (pair 0 ()))
+(def %py-in-fn
+  (fn (_ thunk)
+    (def up! (fn (_ k) (%set-first! %py-fn-depth (+ (first %py-fn-depth) k))))
+    (%seq (up! 1)
+      (let ((r (guard (e (%seq (up! (- 0 1)) (error e))) (thunk))))
+        (%seq (up! (- 0 1)) r)))))
 
 ; Compile with syms added to the local names, and take them off again however
 ; the compile ends.
@@ -2144,13 +2171,15 @@
                     (rest r)))))))
         ((%py-kw? t "def") (%py-def (rest toks)))
         ((%py-kw? t "return")
-          (let ((nxt (if (null? (rest toks)) () (first (rest toks)))))
-            (if (if (null? nxt) #t
-                  (if (eq? (%py-tag nxt) (lit tok-newline)) #t
-                    (%py-block? nxt)))
-              (pair (list (lit %py-return) ()) (rest toks))
-              (let ((r (%py-exprlist (rest toks))))
-                (pair (list (lit %py-return) (first r)) (rest r))))))
+          (if (eq? (first %py-fn-depth) 0)
+            (Err raise (lit syntax) "'return' outside function" ())
+            (let ((nxt (if (null? (rest toks)) () (first (rest toks)))))
+              (if (if (null? nxt) #t
+                    (if (eq? (%py-tag nxt) (lit tok-newline)) #t
+                      (%py-block? nxt)))
+                (pair (list (lit %py-return) ()) (rest toks))
+                (let ((r (%py-exprlist (rest toks))))
+                  (pair (list (lit %py-return) (first r)) (rest r)))))))
         ((%py-kw? t "pass") (pair () (rest toks)))
         ((%py-kw? t "break") (pair (list (lit %py-break) ()) (rest toks)))
         ((%py-kw? t "continue") (pair (list (lit %py-continue) ()) (rest toks)))
@@ -2675,19 +2704,13 @@
       ; a bare `except:` catches everything
       (let ((b (%py-block toks)))
         (pair (list () () (first b)) (rest b)))
-      (if (%py-group? (if (null? toks) () (first toks)) "(")
-        ; `except (A, B):` -- a tuple of classes, any of which matches
+      ; `except EXPR:` -- an exception class, or a tuple of them, decided when
+      ; an exception arrives (%py-exc-match); anything else is Python's
+      ; TypeError then
+      (let ((e (%py-test toks)))
         (%py-except-tail
-          (list (lit %py-exc-match-any) (lit %py-exc)
-            (pair (lit list) (%py-group-exprs (%py-group-of (first toks)))))
-          (rest toks))
-        (let ((n (first toks)))
-          (if (not (eq? (%py-tag n) (lit tok-name)))
-            (Err raise (lit syntax) "expected an exception name after except" ())
-            (%py-except-tail
-              (list (lit %py-exc-match) (lit %py-exc)
-                (%py-name-read (%py-val n)))
-              (rest toks))))))))
+          (list (lit %py-exc-match) (lit %py-exc) (first e))
+          (rest e))))))
 
 (def %py-except-clauses ())
 (set! %py-except-clauses
@@ -2712,9 +2735,13 @@
           (let ((handler
                   (if (null? var)
                     body
-                    (list (lit %seq)
-                      (list (lit set!) (%py-name->sym var) (lit %py-exc))
-                      body))))
+                    ; `as NAME` binds the exception for the handler, and unbinds
+                    ; it after -- however the handler is left, as Python does
+                    (let ((sym (%py-name->sym var)))
+                      (list (lit %seq)
+                        (list (lit set!) sym (lit %py-exc))
+                        (%py-finally-form body
+                          (list (lit set!) sym (lit %py-deleted))))))))
             (if (null? matcher)
               handler
               (list (lit if) matcher handler (self (rest clauses))))))))))
@@ -2761,31 +2788,31 @@
                                 (list (lit %set-first!) (lit %py-ok) #t)))
                             (list (lit if) (list (lit first) (lit %py-ok)) (first e) ())))))))
               (pair
-                (if (null? (first f))
-                  guarded
-                  ; FINALLY RUNS ON ALL THREE PATHS.  The body is emitted ONCE,
-                  ; as a thunk, and reached three ways: after the guarded form
-                  ; when it finished, from a handler that then re-raises, and
-                  ; -- for a `return`, `break` or `continue` out of the try --
-                  ; from the wind stack, which %py-escape walks before it jumps
-                  ; (python/runtime.x, "Unwinding on the way out").
-                  ;
-                  ; The first two DROP the entry before running the thunk, so
-                  ; it runs exactly once whichever way the block is left, and a
-                  ; handler that re-raises does not leave the entry stranded.
-                  (list (lit let) (list (list (lit %py-fin-th)
-                                              (list (lit fn) (list (lit _)) (first f))))
-                    (list (lit let) (list (list (lit %py-fin-w)
-                                                (list (lit %py-wind-push!) (lit %py-fin-th))))
-                      (list (lit guard)
-                        (list (lit %py-fin)
-                          (list (lit %seq) (list (lit %py-wind-drop!) (lit %py-fin-w))
-                            (list (lit %seq) (list (lit %py-fin-th))
-                              (list (lit error) (lit %py-fin)))))
-                        (list (lit %seq) guarded
-                          (list (lit %seq) (list (lit %py-wind-drop!) (lit %py-fin-w))
-                            (list (lit %py-fin-th))))))))
+                (if (null? (first f)) guarded (%py-finally-form guarded (first f)))
                 (rest f))))))))))
+
+; A body with a finally.  The finally body is emitted once, as a thunk, and
+; reached three ways: after the body when it finished, from a handler that
+; then re-raises, and -- for a `return`, `break` or `continue` out of the
+; body -- from the wind stack, which %py-escape walks before it jumps
+; (python/runtime.x, "Unwinding on the way out").  The first two drop the
+; entry before running the thunk, so it runs exactly once whichever way the
+; body is left, and a handler that re-raises does not leave the entry
+; stranded.  A try's finally and an except clause's `as` unbinding are both
+; this shape.
+(def %py-finally-form
+  (fn (_ body fin)
+    (list (lit let) (list (list (lit %py-fin-th) (list (lit fn) (list (lit _)) fin)))
+      (list (lit let)
+        (list (list (lit %py-fin-w) (list (lit %py-wind-push!) (lit %py-fin-th))))
+        (list (lit guard)
+          (list (lit %py-fin)
+            (list (lit %seq) (list (lit %py-wind-drop!) (lit %py-fin-w))
+              (list (lit %seq) (list (lit %py-fin-th))
+                (list (lit error) (lit %py-fin)))))
+          (list (lit %seq) body
+            (list (lit %seq) (list (lit %py-wind-drop!) (lit %py-fin-w))
+              (list (lit %py-fin-th)))))))))
 
 ; `assert EXPR` and `assert EXPR, MSG`: an AssertionError, with the message,
 ; when the expression is not true.
@@ -2808,15 +2835,20 @@
   (fn (_ toks)
     ; positioned just after the `raise` keyword
     (if (if (null? toks) #t (eq? (%py-tag (first toks)) (lit tok-newline)))
-      ; a bare `raise` re-raises what the enclosing except caught
-      (pair (list (lit error) (lit %py-exc)) toks)
-      ; `raise EXPR`: an exception class instantiates, an instance of one (from
-      ; `except X as e`, or `raise X(...)`) raises as itself, and anything else
-      ; is Python's TypeError -- %py-raise-any decides, as it does for a
-      ; generator's throw().  A name is read as any name is, so an undefined
-      ; one is NameError.
+      ; a bare `raise` raises again what the enclosing except caught, and is
+      ; a RuntimeError outside one
+      (pair (list (lit %py-reraise) (lit %py-exc)) toks)
+      ; `raise EXPR`, and `raise EXPR from CAUSE`: an exception class
+      ; instantiates, an instance of one (from `except X as e`, or
+      ; `raise X(...)`) raises as itself, and anything else is Python's
+      ; TypeError -- %py-raise-any and %py-raise-from decide, as the first
+      ; does for a generator's throw().  A name is read as any name is, so an
+      ; undefined one is NameError.
       (let ((e (%py-test toks)))
-        (pair (list (lit %py-raise-any) (first e)) (rest e))))))
+        (if (%py-kw? (if (null? (rest e)) () (first (rest e))) "from")
+          (let ((c (%py-test (rest (rest e)))))
+            (pair (list (lit %py-raise-from) (first e) (first c)) (rest c)))
+          (pair (list (lit %py-raise-any) (first e)) (rest e)))))))
 
 (%py-sweep!)
 ; --- decorators --------------------------------------------------------------
@@ -3094,7 +3126,7 @@
                          (%py-append all-syms
                            (%py-minus (%py-assign-targets (%py-block-contents after) ())
                              (%py-global-names (%py-block-contents after) ())))
-                         (fn (_) (%py-block after)))))
+                         (fn (_) (%py-in-fn (fn (_) (%py-block after)))))))
                 ; A FUNCTION'S ASSIGNMENTS ARE ITS OWN.  The module-level scan
                 ; skips def bodies, so their targets are hoisted HERE instead,
                 ; as a `let` (NOT `def`: x's `def` decides global-versus-local
@@ -3443,6 +3475,7 @@
     ; names it still has to carry the check
     (%set-first! %py-del-names (%py-del-targets %toks ()))
     (%set-first! %py-scope-syms ())
+    (%set-first! %py-fn-depth 0)
     (def %targets (%py-dedupe () (%py-assign-targets %toks ()) ()))
     (def %undef
       (%py-undefined (%py-mentioned %toks ())
