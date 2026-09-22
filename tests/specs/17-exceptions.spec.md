@@ -136,8 +136,8 @@ than computed. When classes arrive, this is the entry that grows a parent link.
 ## division by zero
 
 Three more silent wrong answers: `1 / 0` answered `inf`, `1 // 0` answered `0`,
-and `1 % 0` answered None. Python spells all three ZeroDivisionError, with two
-different messages.
+and `1 % 0` answered None. Python spells all three ZeroDivisionError, with one
+message.
 
 ### true division
 
@@ -153,7 +153,7 @@ different messages.
 (python-run "try:\n    print(1 // 0)\nexcept ZeroDivisionError as e:\n    print(e)")
 ```
 ---
-    integer division or modulo by zero
+    division by zero
 
 ### modulo
 
@@ -161,7 +161,20 @@ different messages.
 (python-run "try:\n    print(1 % 0)\nexcept ZeroDivisionError as e:\n    print(e)")
 ```
 ---
-    integer modulo by zero
+    division by zero
+
+### a zero to a finite negative power; an infinite or NaN exponent is libm's
+
+```python
+(python-run "for f in (lambda: 0 ** -1, lambda: 0.0 ** -1, lambda: 0 ** -1.5):\n    try:\n        f()\n    except ZeroDivisionError as e:\n        print(e)\ninf = float(\"inf\")\nprint(0.0 ** -inf, 0 ** -inf, (-2) ** float(\"nan\"), (-2.0) ** inf, (-2.0) ** -inf, (-0.5) ** inf)")
+```
+---
+```output
+zero to a negative power
+zero to a negative power
+zero to a negative power
+inf inf nan inf 0.0 0.0
+```
 
 ## finally
 
