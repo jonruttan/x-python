@@ -82,3 +82,15 @@ C+B B who
 3 2 boom ValueError('boom') x
 C C
 ```
+
+### an object hashes by identity unless its class says otherwise, and a bound method by its receiver too
+
+```python
+(python-run "class A:\n    def f(self):\n        return 0\n\n    def g(self, a):\n        return a\n\n\nclass H:\n    def __hash__(self):\n        return 42\n\n\na, a2 = A(), A()\nprint(hash(a) == hash(a), hash(a) == hash(a2), hash(H()) == hash(H()), hash(H()))\nm1, m2 = a.f, a.f\nprint(hash(m1) == hash(a.f), hash(m1) == hash(m2), hash(m1) != hash(a.g), hash(m1) == hash(a2.f))\nd = {a: 1, a2: 2}\nprint(len(d), d[a], d[a2], {H(): 1, H(): 2} == {H(): 2})")
+```
+---
+```output
+True False True 42
+True True True False
+2 1 2 False
+```

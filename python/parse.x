@@ -288,33 +288,77 @@
             (self (list %sym acc (first r)) (rest r))))))
     (%go (first %first) (rest %first))))
 
-; `in` and `not in` are comparison-level operators spelled as NAMES, so the
-; table walk cannot see them; a wrapper reads them after the ordinary
-; comparison parse.  The for-statement and comprehension `in`s are consumed
-; POSITIONALLY by their own parsers before any expression parse begins, so
+; The comparison level.  Python chains: `a < b < c` is `a < b and b < c` with
+; b evaluated once, and the answer is the first comparison that is not true,
+; or the last one.  So the level collects every operand and operator before
+; it emits: one operator is the plain call, and a chain binds each middle
+; operand once (%py-cmp-chain).  `in`, `not in`, `is` and `is not` are
+; spelled as names, so the operator table cannot see them and the collector
+; reads them itself; the for-statement and comprehension `in`s are consumed
+; positionally by their own parsers before any expression parse begins, so
 ; this never collides with them.
 (set! %py-comparison
   (fn (_ toks)
-    (let ((r (%py-left toks %py-cmp-ops %py-bor)))
-      (def more (rest r))
-      (match
-        ((%py-kw? (if (null? more) () (first more)) "in")
-          (let ((rhs (%py-left (rest more) %py-cmp-ops %py-bor)))
-            (pair (list (lit %py-in) (first r) (first rhs)) (rest rhs))))
-        ((if (%py-kw? (if (null? more) () (first more)) "not")
-              (%py-kw? (if (null? (rest more)) () (first (rest more))) "in")
-              #f)
-          (let ((rhs (%py-left (rest (rest more)) %py-cmp-ops %py-bor)))
-            (pair (list (lit not) (list (lit %py-in) (first r) (first rhs)))
-              (rest rhs))))
-        ; `is` and `is not`: identity (python/runtime.x %py-is)
-        ((%py-kw? (if (null? more) () (first more)) "is")
-          (if (%py-kw? (if (null? (rest more)) () (first (rest more))) "not")
-            (let ((rhs (%py-left (rest (rest more)) %py-cmp-ops %py-bor)))
-              (pair (list (lit not) (list (lit %py-is) (first r) (first rhs))) (rest rhs)))
-            (let ((rhs (%py-left (rest more) %py-cmp-ops %py-bor)))
-              (pair (list (lit %py-is) (first r) (first rhs)) (rest rhs)))))
-        (#t r)))))
+    ; the operator at the head of more, as (emitter . rest), or ()
+    (def op-at
+      (fn (_ more)
+        (def head (if (null? more) () (first more)))
+        (def next (if (if (null? more) #t (null? (rest more))) () (first (rest more))))
+        (def sym (%py-op-sym head %py-cmp-ops))
+        (match
+          ((not (null? sym)) (pair (%py-cmp-op sym #f) (rest more)))
+          ((%py-kw? head "in") (pair (%py-cmp-op (lit %py-in) #f) (rest more)))
+          ((if (%py-kw? head "not") (%py-kw? next "in") #f)
+            (pair (%py-cmp-op (lit %py-in) #t) (rest (rest more))))
+          ((if (%py-kw? head "is") (%py-kw? next "not") #f)
+            (pair (%py-cmp-op (lit %py-is) #t) (rest (rest more))))
+          ((%py-kw? head "is") (pair (%py-cmp-op (lit %py-is) #f) (rest more)))
+          (#t ()))))
+    ; every (emitter . operand) after the first operand
+    (def go
+      (fn (self acc more)
+        (let ((o (op-at more)))
+          (if (null? o)
+            (pair (%py-reverse acc) more)
+            (let ((r (%py-bor (rest o))))
+              (self (pair (pair (first o) (first r)) acc) (rest r)))))))
+    (let ((a (%py-bor toks)))
+      (let ((c (go () (rest a))))
+        (pair
+          (if (if (null? (first c)) #t (null? (rest (first c))))
+            (%py-cmp-chain (first a) (first c) 1)
+            ; a chain binds its first operand before the second is evaluated,
+            ; which is Python's order
+            (let ((t0 (%py-cmp-sym "t" 0)))
+              (list (lit let) (list (list t0 (first a)))
+                (%py-cmp-chain t0 (first c) 1))))
+          (rest c))))))
+; the form one comparison emits: (%py-lt l r), or its negation for `not in`
+; and `is not`
+(def %py-cmp-op
+  (fn (_ sym negated)
+    (if negated
+      (fn (_ l r) (list (lit not) (list sym l r)))
+      (fn (_ l r) (list sym l r)))))
+; left, then the (emitter . operand) pairs: a chain binds each middle operand
+; and each comparison's answer once, and stops at the first that is not true
+(def %py-cmp-chain
+  (fn (self left ops k)
+    (match
+      ((null? ops) left)
+      ((null? (rest ops)) ((first (first ops)) left (rest (first ops))))
+      (#t
+        (let ((t (%py-cmp-sym "t" k)) (r (%py-cmp-sym "r" k)))
+          (list (lit let) (list (list t (rest (first ops))))
+            (list (lit let) (list (list r ((first (first ops)) left t)))
+              (list (lit if) (list (lit %py-truthy) r)
+                (self t (rest ops) (+ k 1))
+                r))))))))
+; %py-ct1, %py-cr1, ...: a chain's temporaries, one pair a level so an inner
+; comparison's left operand names the outer level's binding
+(def %py-cmp-sym
+  (fn (_ which k)
+    (%py-intern (Str8 append "%py-c" (Str8 append which (%number->str k))))))
 (set! %py-bor  (fn (_ toks) (%py-left toks %py-bor-ops %py-bxor)))
 (set! %py-bxor (fn (_ toks) (%py-left toks %py-bxor-ops %py-band)))
 (set! %py-band (fn (_ toks) (%py-left toks %py-band-ops %py-shift)))

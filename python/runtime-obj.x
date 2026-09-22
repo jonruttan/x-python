@@ -402,8 +402,10 @@
         (+ (%py-hash (%py-cre v)) (* 1000003 (%py-hash (%py-cim v)))))
       ((eq? (%py-num-kind v) (lit int)) v)
       ((%py-str-is v) (%py-cp-hash (%py-str-cps v) 0))
+      ; an object hashes by identity unless its class says otherwise, so two
+      ; instances are two keys
       ((%py-obj-is v)
-        (let ((m (%py-dunder v "__hash__"))) (if (null? m) 0 (m))))
+        (let ((m (%py-dunder v "__hash__"))) (if (null? m) (%py-id v) (m))))
       ; a frozenset hashes on its elements; a set is unhashable
       ((%py-set-is v)
         (if (%py-set-frozen? v)

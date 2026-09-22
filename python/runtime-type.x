@@ -258,6 +258,17 @@
                   (%py-int-text-bad s base)
                   (if (= c0 45) (- 0 v) v))))))))))
 
+; what an object's __int__ answered, which int() takes only as an int -- a bool
+; as the int it is
+(def %py-int-answer
+  (fn (_ v)
+    (if (eq? (%py-num-kind (%py-boolnorm v)) (lit int))
+      (%py-boolnorm v)
+      (Err raise (lit type)
+        (Str8 append "__int__ returned non-int (type "
+          (Str8 append (%py-class-name (%py-type-of v)) ")"))
+        ()))))
+
 (def %py-int-ctor
   (%py-sig!
     (fn (_ . a)
@@ -287,7 +298,7 @@
                 (let ((m (%py-dunder v "__int__")))
                   (if (null? m)
                     (Err raise (lit type) "int() argument must be a number or string" ())
-                    (m))))
+                    (%py-int-answer (m)))))
               (#t
                 (let ((k (%py-num-kind v)))
                   (if (eq? k (lit int)) v
@@ -643,7 +654,8 @@
     (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
     (pair "__str__"      (fn (_ self) (%py-str (%py-native-of self))))
     (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
-    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))))
+    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))
+    (pair "__radd__"     (fn (_ self o) (%py-add (%py-native-of o) (%py-native-of self))))))
 
 (def %py-cls-str
   (%py-class-new "str" %py-cls-object %py-str-methods "str"))
@@ -712,6 +724,7 @@
     (pair "__iter__"     (fn (_ self) (%py-native-of self)))
     (pair "__contains__" (fn (_ self x) (%py-in x (%py-native-of self))))
     (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))
+    (pair "__radd__"     (fn (_ self o) (%py-add (%py-native-of o) (%py-native-of self))))
     (pair "__eq__"       (fn (_ self o) (%py-eq (%py-native-of self) (%py-native-of o))))
     (pair "__str__"      (fn (_ self) (%py-repr-of (%py-native-of self))))
     (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
@@ -841,7 +854,8 @@
     (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
     (pair "__str__"      (fn (_ self) (%py-str (%py-native-of self))))
     (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
-    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))))
+    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))
+    (pair "__radd__"     (fn (_ self o) (%py-add (%py-native-of o) (%py-native-of self))))))
 
 (def %py-cls-tuple
   (%py-class-new "tuple" %py-cls-object %py-tuple-methods "tuple"))
@@ -1014,7 +1028,8 @@
     (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
     (pair "__str__"      (fn (_ self) (%py-str (%py-native-of self))))
     (pair "__repr__"     (fn (_ self) (%py-repr-of (%py-native-of self))))
-    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))))
+    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))
+    (pair "__radd__"     (fn (_ self o) (%py-add (%py-native-of o) (%py-native-of self))))))
 
 (def %py-cls-bytes
   (%py-class-new "bytes" %py-cls-object %py-bytes-methods "bytes"))
@@ -1059,7 +1074,8 @@
     (pair "__ge__"       (fn (_ self o) (%py-ge (%py-native-of self) (%py-native-of o))))
     (pair "__str__"      %py-bytearray-class-repr)
     (pair "__repr__"     %py-bytearray-class-repr)
-    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))))
+    (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))
+    (pair "__radd__"     (fn (_ self o) (%py-add (%py-native-of o) (%py-native-of self))))))
 
 (def %py-cls-bytearray
   (%py-class-new "bytearray" %py-cls-object %py-bytearray-methods "bytearray"))
