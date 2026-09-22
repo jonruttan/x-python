@@ -19,6 +19,10 @@
 ; 6,062-line file, which the platform's linter could not analyse -- it
 ; ran 91 seconds and the engine died with no diagnostic at all.
 
+; A sweep before each section (84M objects under x-lang 0.14.0 on
+; x86-64 as one load); a section boundary is a quiet point.  See
+; python/util.x.
+(%py-sweep!)
 ; --- Type objects ------------------------------------------------------------
 ;
 ; `type(x)` answers a CLASS, and the builtin types get real class objects --
@@ -33,6 +37,7 @@
 
 (def %py-char-code (prim-ref (lit char) (lit ->int)))
 
+(%py-sweep!)
 ; --- constructors ------------------------------------------------------------
 ; int('abc') is a ValueError with Python's own message, and the parse is walked
 ; BY HAND: the reader-base shortcut accepts prefixes ("12ab" would answer 12),
@@ -206,6 +211,7 @@
                 (Float from t)
                 (bad)))))))))
 
+(%py-sweep!)
 ; --- int(text, base) ---------------------------------------------------------
 ; Surrounding whitespace, a sign, the 0x/0o/0b prefix the base allows (any of
 ; them when the base is 0), then digits with underscores between; a bytes-like
@@ -452,9 +458,11 @@
       (Err raise (lit type) "type() takes 1 argument here" ())
       (%py-type-of (first a)))))
 
+(%py-sweep!)
 ; --- the class objects -------------------------------------------------------
 ; int before bool, because bool derives from it.
 
+(%py-sweep!)
 ; --- int.to_bytes and int.from_bytes ------------------------------------------
 ; Both take byteorder as "big" or "little" and a keyword-only signed flag;
 ; since 3.11 to_bytes defaults to one big-endian byte and from_bytes to big.
@@ -640,6 +648,7 @@
 (def %py-cls-str
   (%py-class-new "str" %py-cls-object %py-str-methods "str"))
 
+(%py-sweep!)
 ; --- the __init__ rows of list, set and dict -----------------------------------
 ; Each fills the value an instance carries from the arguments, and each carries
 ; a signature, so `super().__init__(*args, **kwargs)` reaches it.
@@ -1112,6 +1121,7 @@
           "isinstance() arg 2 must be a type or tuple of types" ())
         (%py-subclass? (%py-type-of v) cls)))))
 
+(%py-sweep!)
 ; --- Slicing -----------------------------------------------------------------
 ;
 ; Python's slice rules, stated once and used by str, list and tuple:
@@ -1165,6 +1175,7 @@
       (%py-reverse acc)
       (self str (rest idxs) (pair (Str sub (first idxs) 1 str) acc)))))
 
+(%py-sweep!)
 ; --- slice, the object a program can hold ------------------------------------
 ;
 ; Three values and nothing else: start, stop and step, each None where the
@@ -1307,6 +1318,7 @@
         ((%py-dict? obj) (%py-dget obj (%py-sl-new start stop step)))
         (#t (Err raise (lit type) "unhashable type: 'slice'" ()))))))
 
+(%py-sweep!)
 ; --- def, whatever the frame depth -------------------------------------------
 ;
 ; The REPL's conditional hoists run inside a guard HANDLER, where a plain def

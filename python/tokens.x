@@ -142,9 +142,15 @@
           ((let ((cl (%py-code-at s (- n 1)))) (if (= cl 106) #t (= cl 74))) 3)
           ((%py-floaty? s i n) 2)
           (#t 1))))))
-; The list->string spelling ash arrived at: %cvt to the string type, with the
+; The conversion door and the string type handle, fetched from the catalog
+; under this bundle's own names.  The platform's %cvt and %string belong to
+; the library files that define them, and a scoped module keeps its names to
+; itself, so neither is promised to be bound here.
+(def %py-cvt (prim-ref (lit convert) (lit to)))
+(def %py-th-str ((prim-ref (lit type) (lit of)) ""))
+; The list->string spelling ash arrived at: convert to the string type, with the
 ; empty list special-cased because a conversion of nothing has no type to go on.
-(def %py-list->string (fn (_ l) (if (null? l) "" (%cvt l %string))))
+(def %py-list->string (fn (_ l) (if (null? l) "" (%py-cvt l %py-th-str))))
 
 ; --- Token values ------------------------------------------------------------
 ; Plain lists, the shape ash settled on: readable in a spec without a printer.

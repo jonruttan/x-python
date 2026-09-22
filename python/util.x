@@ -42,21 +42,27 @@
 ; `List from-seq`; these take a list or nil, which is what all 131 call sites
 ; passed.  A call that wants an iterable should still say `List`.
 
-(provide python/util %py-reverse %py-rev-onto %py-length %py-byte-len %py-image-sweep!)
+(provide python/util %py-reverse %py-rev-onto %py-length %py-byte-len %py-sweep!)
 
-; A sweep while a state image is being written, and only then.  The image
-; writer boots this bundle in a child and sweeps it once after the load; the
-; load itself is mostly garbage -- 734M objects allocated for 305K live,
-; python/runtime's seven files 311M of it -- and a heap that size took a
-; 16 GB machine down before the writer's turn came.  The engine sweeps only
-; when asked, and only the code that knows its own quiet points may ask:
-; this bundle roots every compiled state it keeps (python/tokens.x), so a
-; module of it can sweep between the loads it drives.  %image-writing is the
-; writer's marker (x-lang tools/dev/image-write.x), bound for the length of
-; the child's load and unbound in every other boot, where this does nothing.
+; A sweep after each of the loads this bundle drives.  The load is mostly
+; garbage -- 734M objects allocated for 305K live, python/runtime's seven
+; files 311M of it -- and the engine sweeps only when asked, so a source
+; boot that never asked held all of it, which no 16 GB machine survives.
+; Only the code that knows its own quiet points may ask: this bundle roots
+; every compiled state it keeps (python/tokens.x), so a module of it can
+; sweep between the loads it drives, and its largest files sweep between
+; their own sections.
+;   A session loaded from a state image skips the sweeps.  Its imports are
+; no-ops and its heap is the image's, swept once by the writer; the recache
+; hook below runs only after a load (x-lang lib/x/boot/reflect.x), so the
+; mark it sets is never in an image, and the writer's child, which loads
+; from source, sweeps like any other source boot.
 (def %py-image-collect (prim-ref (lit heap) (lit collect)))
-(def %py-image-sweep!
-  (fn (_) (if (guard (_ ()) %image-writing) (%py-image-collect) ())))
+(def %py-from-image (pair () ()))
+(set! %image-recache-hooks
+  (pair (fn (_) (%set-first! %py-from-image #t)) %image-recache-hooks))
+(def %py-sweep!
+  (fn (_) (if (first %py-from-image) () (%py-image-collect))))
 
 ; Reverse-prepend: the tail-shape list builder.  Every walk in the bundle
 ; accumulates front-to-back and reverses once, so this is the shape underneath

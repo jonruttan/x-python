@@ -20,10 +20,15 @@
 ; 6,062-line file, which the platform's linter could not analyse -- it
 ; ran 91 seconds and the engine died with no diagnostic at all.
 
+; A sweep before each section: this file's load is the second largest
+; between two sweeps (117M objects under x-lang 0.14.0 on x86-64), and
+; a section boundary is a quiet point.  See python/util.x.
+(%py-sweep!)
 ; --- Arithmetic --------------------------------------------------------------
 ; `+` dispatches on the operands, and the string case is not an extra: Python
 ; spells concatenation with it, and every conformance program that builds a
 ; message uses it.
+(%py-sweep!)
 ; --- The operator protocol ---------------------------------------------------
 ;
 ; A USER CLASS TAKES PART IN EVERY OPERATOR through its dunders, and the
@@ -319,6 +324,7 @@
 (def %py-str-repeat
   (fn (_ s n) (%py-str-new (%pb-repeat (%py-str-cps s) n ()))))
 
+(%py-sweep!)
 ; --- the str seams that are not the method table -----------------------------
 ;
 ; PRINTING A NUL WORKS, and the refusal that used to stand here is worth
@@ -735,6 +741,7 @@
 (def %py-boolnorm
   (fn (_ v) (if (eq? v #t) 1 (if (eq? v #f) 0 v))))
 
+(%py-sweep!)
 ; --- Bitwise, exact two's complement -----------------------------------------
 ; Forty-eight bits at a time.  An operand's low chunk is its floor remainder
 ; by 2^48 -- for a negative operand, its two's complement low bits -- and the
@@ -841,6 +848,7 @@
       (%py-set-and a b)
       (%py-bit2 a b "&" %py-nib-and (fn (_ x y) (if x y #f)))))))
 
+(%py-sweep!)
 ; --- Membership --------------------------------------------------------------
 ; `a in b`: substring for strings, element walk with Python's equality for
 ; the containers, keys for a dict, and a TypeError for anything that cannot
@@ -886,6 +894,7 @@
           (%py-in-walk a (keys (%py-dict-entries b) ()))))
       (#t (Err raise (lit type) "argument is not iterable" ())))))
 
+(%py-sweep!)
 ; --- Numeric builtins --------------------------------------------------------
 ; abs clears the SIGN BIT for floats (the arithmetic spelling turns -0.0
 ; into itself); round is the exact-digit machinery at a decimal place, half
@@ -1017,6 +1026,7 @@
         dflt)
       (%py-minmax-by vs pick (if (null? key) %py-ident key)))))
 
+(%py-sweep!)
 ; --- Bytes seams -------------------------------------------------------------
 (def %py-mkbytes (fn (_ s) (%py-bytes-of-str s)))
 
@@ -1157,6 +1167,7 @@
   (fn (_ v mk l r)
     (if (if (%py-barr-is v) #f (= (%pb-len r) (%pb-len l))) v (mk r))))
 
+(%py-sweep!)
 ; --- hex and fromhex ---------------------------------------------------------
 ;
 ; x.hex(sep, bytes_per_sep): two digits a byte, and one separator character

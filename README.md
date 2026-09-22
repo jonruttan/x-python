@@ -152,7 +152,8 @@ and engine. Two things in this bundle are process state and cannot travel in
 an image — the tokenizer base and the parser's sexp base, each `(Base make)`d
 on a chain of its own — so `python/tokens.x` and `python/parse.x` name them as
 transients and remake them after a load. `x --no-image -l python` boots from
-source.
+source, sweeping the heap between its files as it loads (a load that never
+sweeps holds 734M objects).
 
 **Xenon boots slower than the light dialects**, and that is a deliberate cost:
 eight runtime `cc` compilations for the numeric analysers, bought so that
@@ -195,6 +196,7 @@ reads Python from stdin, block by block, as before. On a platform older than
 
 ```bash
 X=/path/to/x-lang/x.sh make test   # the bundle's own suite -- 21 spec files
+X=/path/to/x-lang/x.sh make test-boot   # one program through `x -l python`
 make gen                           # fetch the pinned corpus, generate tests/conformance/
 make score                         # pass/total per group, worst first
 make conformance                   # the same run, case by case
@@ -204,6 +206,12 @@ make clean                         # drop deps/ and tests/conformance/
 **Pass `X` explicitly.** Without it the suite takes the `x` on your PATH, and an
 installed x that trails the checkout reports failures the platform has already
 fixed.
+
+**`make test-boot` takes the path the suite does not.** The suite loads the
+bundle on the full-tower amalgam, which binds more platform names than the
+dialect `lang.xon` declares. `test-boot` boots through the wrapper on that
+dialect, from source, and runs a short program, so a platform name the bundle
+reads and never binds stops it with `Unbound SYMBOL`.
 
 **Do not `make install` into an x-lang checkout.** The Makefile asks
 `$(X) --share-dir` where to put the bundle, and a checkout answers with its own
