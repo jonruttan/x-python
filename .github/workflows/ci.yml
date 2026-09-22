@@ -110,6 +110,24 @@ jobs:
         run: |
           make engine
           make
+      # The source boot's peak by stage, each under the same cap as the check:
+      # helium alone, then with the tower, then with the bundle's tokenizer,
+      # then with everything the bundle loads before run.x.  A stage past the
+      # cap prints "allocation failed" and the next runs.
+      - name: The source boot's peak, by stage
+        run: |
+          B="$PWD"
+          cd .x-lang
+          for stage in \
+            'helium|(display "ok")' \
+            'tower|(import x/num/tower)' \
+            'tokens|(do (import-path! "B") (import python/tokens))' \
+            'base|(do (import-path! "B") (import python/base))'; do
+            name=${stage%%|*}; form=${stage#*|}; form=${form//\"B\"/\"$B\"}
+            ( ulimit -v 12000000; /usr/bin/time -f "$name: %e s, max RSS %M KB, exit %x" \
+                sh x.sh -q --no-image -l he -c "$form" </dev/null >/dev/null 2>"$RUNNER_TEMP/$name.err" ) || true
+            tail -3 "$RUNNER_TEMP/$name.err"
+          done
       # Under time -v for the peak: the bundle sweeps between its files on a
       # source boot (python/util.x), and a load that stopped sweeping does
       # not fit this runner.
