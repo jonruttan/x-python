@@ -110,8 +110,15 @@ jobs:
         run: |
           make engine
           make
+      # The memory the runner has, and the most the boot took: a source boot
+      # collects nothing while it loads, so the peak is the number to watch.
       - name: Run a program through x -l python
-        run: X="$PWD/.x-lang/x.sh" sh tests/boot.sh
+        run: |
+          free -m
+          X="$PWD/.x-lang/x.sh" /usr/bin/time -v sh tests/boot.sh
+      - name: What the kernel logged, for a run the OS stopped
+        if: failure()
+        run: sudo dmesg 2>/dev/null | grep -i -E 'oom|out of memory|killed process|segfault' | tail -20 || true
 
   if-ladders:
     # `match` IS THE PRIMITIVE, and a decision with four or more arms written

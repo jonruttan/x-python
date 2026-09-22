@@ -3,8 +3,8 @@
 #
 # ## tests/boot.sh -- the bundle boots the way a user boots it
 #
-# @description Runs a short program through `x -l python`, on the dialect
-#   lang.xon declares, and compares what it prints.
+# @description Boots the bundle through `x -l python`, on the dialect
+#   lang.xon declares, runs a short program, and compares what it prints.
 # @author [Jon Ruttan](jonruttan@gmail.com)
 # @copyright 2026 Jon Ruttan
 # @license MIT No Attribution (MIT-0)
@@ -19,9 +19,10 @@
 # boots the declared dialect, reads run.x and runs a program, which is the
 # path that finds such a name: the boot stops with `Unbound SYMBOL`.
 #
-# The program is small on purpose.  It asks for one thing from each table the
-# bundle builds while it loads -- a string escape, a big integer, a float, a
-# dict -- and the specs cover the rest.
+# The program goes in as the specs send theirs, a `python-run` form in a
+# file the wrapper reads after run.x.  It is small on purpose: one thing from
+# each table the bundle builds while it loads -- a string escape, a big
+# integer, a float, a dict -- and the specs cover the rest.
 set -u
 
 BUNDLE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -33,10 +34,16 @@ command -v "$X" >/dev/null 2>&1 || {
 }
 
 _TMP="${TMPDIR:-/tmp}/x-python-boot.$$"
-trap 'rm -rf "$_TMP"' EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
 mkdir -p "$_TMP/langs"
+
+# What the run wrote so far, for a run that did not end on its own.
+show() {
+	[ -s "$_TMP/err" ] && sed 's/^/    /' "$_TMP/err" | tail -20 >&2
+	[ -s "$_TMP/got" ] && sed 's/^/    /' "$_TMP/got" | tail -20 >&2
+}
+trap 'rm -rf "$_TMP"' EXIT
+trap 'echo "x-python: interrupted" >&2; show; exit 130' INT
+trap 'echo "x-python: terminated" >&2; show; exit 143' TERM
 
 # The wrapper searches X_LANG_DIR for the bundle that calls itself "python"
 # and refuses when two do.  A directory holding one link to this tree answers
@@ -54,37 +61,36 @@ else
 	SPAWN_DIR="$BUNDLE"
 fi
 
-cat > "$_TMP/program.py" <<'EOF'
-print('\x41' + 'b')
-print(2 ** 100)
-print(1 / 4)
-print(sorted({'b': 1, 'a': 2}))
-EOF
+# An x form, as the specs write one: the reader unescapes \\ and \n, so the
+# program Python sees has a \x41 escape and four lines.
+cat > "$_TMP/program.x" <<'EOX'
+(python-run "print('\\x41' + 'b')\nprint(2 ** 100)\nprint(1 / 4)\nprint(sorted({'b': 1, 'a': 2}))")
+EOX
 
-cat > "$_TMP/want" <<'EOF'
+cat > "$_TMP/want" <<'EOX'
 Ab
 1267650600228229401496703205376
 0.25
 ['a', 'b']
-EOF
+EOX
 
 # --no-image: the boot under test is the one from source.  An image would
-# answer from whatever tree wrote it.
-( cd "$SPAWN_DIR" && "$X" -q --no-image -l python -f "$_TMP/program.py" ) \
-	> "$_TMP/got" 2> "$_TMP/err"
+# answer from whatever tree wrote it.  Stdin is closed off so the run owes
+# nothing to whatever the caller's is.
+( cd "$SPAWN_DIR" && "$X" -q --no-image -l python -f "$_TMP/program.x" ) \
+	< /dev/null > "$_TMP/got" 2> "$_TMP/err"
 status=$?
 
 if [ "$status" -ne 0 ]; then
 	echo "x-python: x -l python exited $status" >&2
-	sed 's/^/    /' "$_TMP/err" | head -20 >&2
-	sed 's/^/    /' "$_TMP/got" | head -20 >&2
+	show
 	exit 1
 fi
 
 if ! diff -u "$_TMP/want" "$_TMP/got" > "$_TMP/diff"; then
 	echo "x-python: x -l python booted, and the program printed something else" >&2
 	sed 's/^/    /' "$_TMP/diff" >&2
-	sed 's/^/    /' "$_TMP/err" | head -20 >&2
+	show
 	exit 1
 fi
 
