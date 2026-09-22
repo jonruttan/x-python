@@ -87,10 +87,9 @@ jobs:
   boot:
     # The specs load the bundle on the full-tower amalgam, which binds more
     # names than the dialect lang.xon declares.  This job boots the way a user
-    # does -- the wrapper writes the bundle's image and boots the declared
-    # dialect from it, run.x included -- and runs a program, so a platform
-    # name the bundle reads and never binds stops it here.  Both legs, for the
-    # reasons the specs job gives, and main may fail likewise.
+    # does -- the wrapper, the declared dialect, run.x -- and runs a program,
+    # so a platform name the bundle reads and never binds stops it here.  Both
+    # legs, for the reasons the specs job gives, and main may fail likewise.
     name: boots under -l python @ x-lang ${{ matrix.x-lang }}
     runs-on: ubuntu-latest
     continue-on-error: ${{ matrix.x-lang == 'main' }}
@@ -111,17 +110,11 @@ jobs:
         run: |
           make engine
           make
-      # The memory the runner has, and the most the check took.  The image
-      # write sweeps between the bundle's files; a load that is not swept
-      # allocates past this runner (tests/boot.sh), so the peak is the number
-      # to watch.
+      # Under time -v for the peak: the bundle sweeps between its files on a
+      # source boot (python/util.x), and a load that stopped sweeping does
+      # not fit this runner.
       - name: Run a program through x -l python
-        run: |
-          free -m
-          X="$PWD/.x-lang/x.sh" /usr/bin/time -v sh tests/boot.sh
-      - name: What the kernel logged, for a run the OS stopped
-        if: failure()
-        run: sudo dmesg 2>/dev/null | grep -i -E 'oom|out of memory|killed process|segfault' | tail -20 || true
+        run: X="$PWD/.x-lang/x.sh" /usr/bin/time -v sh tests/boot.sh
 
   if-ladders:
     # `match` IS THE PRIMITIVE, and a decision with four or more arms written

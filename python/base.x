@@ -46,19 +46,19 @@
 ; measures the difference; `make score` ranks what is still red.
 
 (import python/util)
-; A sweep after each load while a state image is written; see python/util.x.
+; A sweep after each load; see python/util.x.
 (import python/tokens)
-(%py-image-sweep!)
+(%py-sweep!)
 (import python/indent)
-(%py-image-sweep!)
+(%py-sweep!)
 (import python/types)
-(%py-image-sweep!)
+(%py-sweep!)
 (import python/str)
-(%py-image-sweep!)
+(%py-sweep!)
 (import python/runtime)
-(%py-image-sweep!)
+(%py-sweep!)
 (import python/parse)
-(%py-image-sweep!)
+(%py-sweep!)
 
 (provide python/base python-version python-run python-tokenize python-lex python-parse python-parse-expr %python-repl-print
   %py-eval %py-exec %py-compile)

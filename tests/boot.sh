@@ -3,9 +3,9 @@
 #
 # ## tests/boot.sh -- the bundle boots the way a user boots it
 #
-# @description Writes the bundle's state image through `x --image -l
-#   python`, as `make install` does, boots from it on the dialect lang.xon
-#   declares, runs a short program, and compares what it prints.
+# @description Boots the bundle from source through `x -l python`, on the
+#   dialect lang.xon declares, runs a short program, and compares what it
+#   prints.
 # @author [Jon Ruttan](jonruttan@gmail.com)
 # @copyright 2026 Jon Ruttan
 # @license MIT No Attribution (MIT-0)
@@ -20,12 +20,9 @@
 # boots the declared dialect and reads run.x, which is the path that finds
 # such a name: the load stops with `Unbound SYMBOL`.
 #
-# The image is written first because that is the boot that fits.  A source
-# load of this bundle allocates 734M objects for 305K live, and the sweeps
-# that keep the heap small run only while an image is being written
-# (python/util.x), so `--no-image` is a load no 16 GB machine survives.  The
-# writer's child loads the same files in the same order, so an unbound name
-# stops it the same way, and its report reaches stderr here.
+# From source, with --no-image: the boot under test is this tree's, not
+# whatever tree wrote an image, and the bundle sweeps between its files on
+# every source boot (python/util.x), so the load fits.
 #
 # The program goes in as the specs send theirs, a `python-run` form in a
 # file the wrapper reads after run.x.  It is small on purpose: one thing from
@@ -46,7 +43,7 @@ mkdir -p "$_TMP/langs"
 
 # What the runs wrote so far, for a run that did not end on its own.
 show() {
-	for f in image.err err got; do
+	for f in err got; do
 		[ -s "$_TMP/$f" ] && sed 's/^/    /' "$_TMP/$f" | tail -20 >&2
 	done
 }
@@ -83,11 +80,10 @@ Ab
 ['a', 'b']
 EOX
 
-# One wrapper run.  Stdin is closed off so the run owes nothing to whatever
-# the caller's is.  The address-space cap turns a boot that grows past it
-# into an engine exit instead of a machine out of memory: a load that is
-# not swept is the case above, and a machine that does not enforce the cap
-# (macOS) runs the same swept write.
+# Stdin is closed off so the run owes nothing to whatever the caller's is.
+# The address-space cap turns a boot that grows past it into an engine exit
+# instead of a machine out of memory: a load that stopped sweeping would
+# show here first.  macOS does not enforce the cap.
 run_x() {
 	(
 		cd "$SPAWN_DIR" || exit 1
@@ -96,18 +92,7 @@ run_x() {
 	) < /dev/null
 }
 
-# The image, as the installer writes it: into .images/ beside the bundle,
-# keyed on the tree, the bundle and the engine.  The write is the load under
-# test; the boot below reads its result.
-run_x -q --image -l python > "$_TMP/image.out" 2> "$_TMP/image.err"
-status=$?
-if [ "$status" -ne 0 ]; then
-	echo "x-python: x --image -l python exited $status" >&2
-	show
-	exit 1
-fi
-
-run_x -q -l python -f "$_TMP/program.x" > "$_TMP/got" 2> "$_TMP/err"
+run_x -q --no-image -l python -f "$_TMP/program.x" > "$_TMP/got" 2> "$_TMP/err"
 status=$?
 if [ "$status" -ne 0 ]; then
 	echo "x-python: x -l python exited $status" >&2
@@ -122,4 +107,4 @@ if ! diff -u "$_TMP/want" "$_TMP/got" > "$_TMP/diff"; then
 	exit 1
 fi
 
-echo "x-python: x -l python writes its image, boots from it on the declared dialect and runs a program"
+echo "x-python: x -l python boots from source on the declared dialect and runs a program"
