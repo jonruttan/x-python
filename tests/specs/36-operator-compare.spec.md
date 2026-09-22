@@ -101,6 +101,22 @@ TypeError
 (True, False, False)
 ```
 
+### a chain binds each middle operand once, stops at the first comparison that is not true, and answers it
+
+```python
+(python-run "print(1 < 2 < 3, 1 < 2 < 3 < 4, 1 > 2 < 3, 1 < 2 > 3, 3 > 2 > 1, 1 == 1 == 1, 1 == 1 != 2)\ncalls = []\n\n\ndef v(x):\n    calls.append(x)\n    return x\n\n\nprint(v(1) < v(2) < v(3), calls)\ncalls.clear()\nprint(v(3) < v(2) < v(1), calls)\nx = 5\nprint(0 <= x < 10, 0 <= x < 3, \"a\" < \"b\" < \"c\", 2 < x < 10 > 7)\nprint(1 in [1, 2] in [[1, 2]], 5 not in [1] == True, None is None is not 3, 1 < 2 in [True])\n\n\nclass L:\n    def __init__(self, v):\n        self.v = v\n\n    def __lt__(self, o):\n        return self.v * 10\n\n    def __gt__(self, o):\n        return 0\n\n\nprint(L(1) < L(2) < L(3), L(1) > L(2) < L(3), (L(1) < L(2)) < L(3))\nprint([1, 2] == [1, 2] == [1, 2], (1, 2) < (1, 3) <= (1, 3))")
+```
+---
+```output
+True True False False True True True
+True [1, 2, 3]
+False [3, 2]
+True False True True
+True False True False
+20 0 0
+True True
+```
+
 ## str and repr part ways at print
 
 ### print shows __str__; a container shows __repr__

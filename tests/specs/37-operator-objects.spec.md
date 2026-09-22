@@ -83,3 +83,17 @@ TypeError
 ```
 ---
     (1267650600228229401496703205376, 2.5, 'abs!', 42, 'inv', 'pos')
+
+### __int__ must answer an int, and %d names the class either way
+
+```python
+(python-run "class BadInt:\n    def __int__(self):\n        return None\n\n\nclass GoodInt:\n    def __int__(self):\n        return 7\n\n\nclass BoolInt:\n    def __int__(self):\n        return True\n\n\nfor f in (lambda: int(BadInt()), lambda: \"%d\" % BadInt(), lambda: int(GoodInt()), lambda: \"%d\" % GoodInt(), lambda: int(BoolInt())):\n    try:\n        print(repr(f()))\n    except TypeError as e:\n        print(\"TypeError\", e)")
+```
+---
+```output
+TypeError __int__ returned non-int (type NoneType)
+TypeError %d format: a real number is required, not BadInt
+7
+'7'
+1
+```

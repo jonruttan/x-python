@@ -246,3 +246,15 @@ Q([]) R([2], maxlen=1) R([3]) P([4], maxlen=2)
 descriptor '__init__' requires a 'collections.deque' object but received a 'list'
 descriptor '__init__' requires a 'bytearray' object but received a 'bytes'
 ```
+
+### a native type on the left of +, its subclass on the right: the base type answers
+
+```python
+(python-run "class MyBytes(bytes):\n    pass\n\n\nclass MyTuple(tuple):\n    pass\n\n\nclass MyList(list):\n    pass\n\n\nclass MyStr(str):\n    pass\n\n\nclass MyBA(bytearray):\n    pass\n\n\nprint(bytes([4, 5]) + MyBytes([0, 1]), MyBytes([0, 1]) + bytes([4, 5]), MyBytes([0]) + MyBytes([1]))\nprint((1, 2) + MyTuple((3, 4)), [1] + MyList([2]), \"a\" + MyStr(\"b\"), bytearray(b\"x\") + MyBA(b\"y\"))\nprint(type((1, 2) + MyTuple((3, 4))).__name__, type(bytes([4]) + MyBytes([5])).__name__)")
+```
+---
+```output
+b'\x04\x05\x00\x01' b'\x00\x01\x04\x05' b'\x00\x01'
+(1, 2, 3, 4) [1, 2] ab bytearray(b'xy')
+tuple bytes
+```

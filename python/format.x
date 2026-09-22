@@ -236,9 +236,15 @@
   (fn (_ v)
     (if (%py-obj-is v)
       (let ((m (%py-dunder v "__int__")))
-        (if (null? m)
-          (Err raise (lit type) "%d format: a real number is required, not object" ())
-          (m)))
+        (let ((r (if (null? m) () (%py-boolnorm (m)))))
+          ; the answer must be an int; CPython names the object's class
+          ; either way
+          (if (eq? (%py-num-kind r) (lit int))
+            r
+            (Err raise (lit type)
+              (Str8 append "%d format: a real number is required, not "
+                (%py-class-name (%py-type-of v)))
+              ()))))
       v)))
 (def %py-fmt-float-of
   (fn (_ v)
