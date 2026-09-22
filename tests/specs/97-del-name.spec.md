@@ -54,3 +54,53 @@ NameError
 NameError
 ```
 
+
+# del a target list
+
+### a list of targets, nested and mixed
+
+```python
+(python-run "class C:\n    pass\n\n\nc = C()\nc.p = 1\nx = [1, 2, 3]\nd = {\"k\": 1, \"j\": 2}\na = b = 1\ndel x[0], (a, [b]), c.p, d[\"k\"]\nprint(x, d, hasattr(c, \"p\"))\ntry:\n    print(a)\nexcept NameError as e:\n    print(\"NameError\", e)")
+```
+---
+```output
+[2, 3] {'j': 2} False
+NameError name 'a' is not defined
+```
+
+### slices in a del list
+
+```python
+(python-run "x = [0, 1, 2, 3, 4, 5]\ny = 1\ndel x[1:3], (y, x[-2:])\nprint(x)\ntry:\n    print(y)\nexcept NameError as e:\n    print(\"NameError\", e)")
+```
+---
+```output
+[0, 3]
+NameError name 'y' is not defined
+```
+
+### `del ()` deletes nothing, and a starred target is refused
+
+```python
+(python-run "del ()\ndel []\nprint(\"ok\")\ntry:\n    exec(\"a = [1]\\ndel *a,\")\nexcept SyntaxError as e:\n    print(\"SyntaxError\", str(e).split(\" (\")[0])")
+```
+---
+```output
+ok
+SyntaxError cannot delete starred
+```
+
+### a star alone, two names, a literal, a call, and nothing are refused
+
+```python
+(python-run "for src in (\"del *\", \"del [*]\", \"del a b\", \"del 1\", \"del f()\", \"del\"):\n    try:\n        exec(src)\n    except SyntaxError:\n        print(\"SyntaxError\")")
+```
+---
+```output
+SyntaxError
+SyntaxError
+SyntaxError
+SyntaxError
+SyntaxError
+SyntaxError
+```

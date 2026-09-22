@@ -261,7 +261,7 @@ to None and fail somewhere else entirely.
 (python-run "a, b, c = 1, 2")
 ```
 ---
-    Error: #<err:value not enough values to unpack>
+    Error: #<err:value not enough values to unpack (expected 3, got 2)>
 
 ### and not exceed
 
@@ -269,15 +269,15 @@ to None and fail somewhere else entirely.
 (python-run "a, b = 1, 2, 3")
 ```
 ---
-    Error: #<err:value too many values to unpack>
+    Error: #<err:value too many values to unpack (expected 2, got 3)>
 
-### a non-sequence does not unpack
+### a non-iterable does not unpack
 
 ```python
 (python-run "a, b = 5")
 ```
 ---
-    Error: #<err:type cannot unpack non-sequence>
+    Error: #<err:type cannot unpack non-iterable int object>
 
 ### for unpacks each item
 
