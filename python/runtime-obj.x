@@ -743,10 +743,9 @@
       #f
       (if (%py-exc-match e (first clss)) #t (self e (rest clss))))))
 
-; `raise X(...)` CALLS X and raises the result, which is what Python does -- and
-; is why an undefined name answers NameError here without any special case: the
-; parser emits a call, and an undefined name is bound to a shim that raises when
-; called.
+; Raising an instance the runtime built: assert, and the math and array
+; refusals.  A raise statement goes through %py-raise-any (python/runtime-flow.x),
+; which also takes a class.
 (def %py-raise
   (fn (_ inst)
     ; BaseException, not Exception: the root is raisable itself, and so are

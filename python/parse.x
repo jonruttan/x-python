@@ -849,9 +849,12 @@
           (pair (lit list) kw-spreads))))
     (if (if (null? kw-forms) (null? kw-spreads) #f)
       (let ((a (%py-args-form parts)))
-        ; a spread call applies a program's callable, which may be a class, a
-        ; callable object or a bound method as well as a function
-        (if (eq? (first a) (lit list)) (pair f (rest a)) (list (lit %py-apply-any) f a)))
+        ; both go through the runtime's call door (%py-call), which applies a
+        ; function, a class, a callable object or a bound method, and refuses
+        ; anything else; a spread hands its arguments over as one list
+        (if (eq? (first a) (lit list))
+          (pair (lit %py-call) (pair f (rest a)))
+          (list (lit %py-apply-any) f a)))
       (let ((pos (%py-args-form (poss parts))))
         (if (if (pair? f) (eq? (first f) (lit %py-getattr)) #f)
           (list (lit %py-kwcall-attr) (first (rest f)) (first (rest (rest f)))
@@ -2789,27 +2792,13 @@
     (if (if (null? toks) #t (eq? (%py-tag (first toks)) (lit tok-newline)))
       ; a bare `raise` re-raises what the enclosing except caught
       (pair (list (lit error) (lit %py-exc)) toks)
-      (let ((n (first toks)))
-        (if (not (eq? (%py-tag n) (lit tok-name)))
-          (Err raise (lit syntax) "expected an exception name after raise" ())
-          ; `raise X(...)` CALLS X and raises the result, which is what Python
-          ; does.  X is read as any name is, so an undefined one is NameError.
-          ; `raise X` with no parens instantiates it too, as Python does.
-          (if (%py-group? (if (null? (rest toks)) () (first (rest toks))) "(")
-            (let ((g (%py-group-of (first (rest toks)))))
-              (pair
-                (list (lit %py-raise)
-                  (if (null? g)
-                    ; `raise X()` -- no argument
-                    (list (%py-name-read (%py-val n)))
-                    ; every argument: raise ValueError('a', 0)
-                    (pair (%py-name-read (%py-val n)) (%py-group-exprs g))))
-                (rest (rest toks))))
-            ; `raise X` with no parens: a class instantiates, an instance
-            ; (from `except X as e`) raises as itself
-            (pair
-              (list (lit %py-raise) (list (lit %py-exc-instance) (%py-name-read (%py-val n)) ()))
-              (rest toks))))))))
+      ; `raise EXPR`: an exception class instantiates, an instance of one (from
+      ; `except X as e`, or `raise X(...)`) raises as itself, and anything else
+      ; is Python's TypeError -- %py-raise-any decides, as it does for a
+      ; generator's throw().  A name is read as any name is, so an undefined
+      ; one is NameError.
+      (let ((e (%py-test toks)))
+        (pair (list (lit %py-raise-any) (first e)) (rest e))))))
 
 ; --- decorators --------------------------------------------------------------
 ;
@@ -2833,7 +2822,7 @@
 (set! %py-wrap-decos
   ; (a b) over F is (a (b F)) -- the decorator nearest the def runs first
   (fn (self ds f)
-    (if (null? ds) f (list (first ds) (self (rest ds) f)))))
+    (if (null? ds) f (list (lit %py-call) (first ds) (self (rest ds) f)))))
 
 ; --- class -------------------------------------------------------------------
 ;

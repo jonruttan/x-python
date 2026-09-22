@@ -51,6 +51,27 @@ runtime are matched identically.
 ---
     outer
 
+### raise takes an expression: a class, an instance, or a refusal
+
+```python
+(python-run "def t(label, f):\n    try:\n        f()\n        print(label, \"no error\")\n    except TypeError as e:\n        print(label, \"TypeError\", e)\n    except NameError as e:\n        print(label, \"NameError\", e)\n    except Exception as e:\n        print(label, type(e).__name__, repr(e))\n\n\ndef r1():\n    raise 1\n\n\ndef r2():\n    raise int\n\n\ndef r3():\n    raise ValueError\n\n\ndef r4():\n    raise ValueError(\"x\")\n\n\ndef r5():\n    try:\n        raise KeyError(\"k\")\n    except KeyError as e:\n        raise e\n\n\nclass A:\n    pass\n\n\ndef r6():\n    raise A()\n\n\ndef r7():\n    raise A\n\n\ndef r8():\n    raise (ValueError)(\"p\")\n\n\ndef r9():\n    raise ValueError(\"a\") if True else KeyError(\"b\")\n\n\ndef r10():\n    raise Nope\n\n\ndef r11():\n    try:\n        raise ValueError(\"inner\")\n    except ValueError:\n        raise\n\n\nexc = [ValueError, KeyError]\n\n\ndef r12():\n    raise exc[1](\"from a list\")\n\n\nfor f in (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12):\n    t(f.__name__, f)")
+```
+---
+```output
+r1 TypeError exceptions must derive from BaseException
+r2 TypeError exceptions must derive from BaseException
+r3 ValueError ValueError()
+r4 ValueError ValueError('x')
+r5 KeyError KeyError('k')
+r6 TypeError exceptions must derive from BaseException
+r7 TypeError exceptions must derive from BaseException
+r8 ValueError ValueError('p')
+r9 ValueError ValueError('a')
+r10 NameError name 'Nope' is not defined
+r11 ValueError ValueError('inner')
+r12 KeyError KeyError('from a list')
+```
+
 ## except
 
 ### as binds the exception, and str(e) is the message
