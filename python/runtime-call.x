@@ -293,26 +293,73 @@
     (cat segs)))
 (def %py-tuple? (fn (_ v) (%py-tuple-is v)))
 
-; UNPACKING IS A LENGTH CHECK AND A WALK.  `a, b = f()` is the reason tuples
-; earn their keep -- it is how a Python function returns two things -- and
-; Python is strict about the count, because a silent short walk would bind a
-; name to None and fail somewhere else entirely.
-(def %py-unpack-count
-  (fn (self v)
-    (if (%py-tuple-is v)
-      (%py-length (%py-tuple-elems v))
-      (if (%py-list? v)
-        (%py-length (%py-list-elems v))
-        (Err raise (lit type) "cannot unpack non-sequence" ())))))
-
+; Unpacking is a count and a walk: `a, b = f()` is how a Python function
+; returns two things, and Python is strict about the count.  A tuple or a list
+; is counted whole; any other iterable is read one value past the count and no
+; further, as CPython reads it, so a generator is never run to its end.
 (def %py-unpack
   (fn (_ v n)
-    (let ((got (%py-unpack-count v)))
+    (match
+      ((%py-tuple-is v) (%py-unpack-counted (%py-tuple-elems v) n))
+      ((%py-list? v) (%py-unpack-counted (%py-list-elems v) n))
+      (#t (%py-unpack-pulled (%py-unpack-source v) n 0 ())))))
+(def %py-unpack-counted
+  (fn (_ es n)
+    (let ((got (%py-length es)))
       (match
-        ((< got n) (Err raise (lit value) "not enough values to unpack" ()))
-        ((> got n) (Err raise (lit value) "too many values to unpack" ()))
-        ((%py-tuple-is v) (%py-tuple-elems v))
-        (#t (%py-list-elems v))))))
+        ((< got n) (%py-unpack-short n got))
+        ((> got n) (%py-unpack-refuse "too many" (%number->str n) (%py-unpack-got got)))
+        (#t es)))))
+(def %py-unpack-pulled
+  (fn (self src n i acc)
+    (if (= i n)
+      (if (same? (%py-iter-pull! src) %py-gen-done)
+        (%py-reverse acc)
+        ; an iterator's length is not known, so CPython names no count
+        (%py-unpack-refuse "too many" (%number->str n) ""))
+      (let ((v (%py-iter-pull! src)))
+        (if (same? v %py-gen-done)
+          (%py-unpack-short n i)
+          (self src n (+ i 1) (pair v acc)))))))
+(def %py-unpack-short
+  (fn (_ n got)
+    (%py-unpack-refuse "not enough" (%number->str n) (%py-unpack-got got))))
+(def %py-unpack-got (fn (_ got) (Str8 append ", got " (%number->str got))))
+; too many values to unpack (expected 2, got 3): `expected` and `got` are text
+(def %py-unpack-refuse
+  (fn (_ what expected got)
+    (Err raise (lit value)
+      (Str8 append what
+        (Str8 append " values to unpack (expected "
+          (Str8 append expected (Str8 append got ")"))))
+      ())))
+; an iterable to pull from, or CPython's refusal naming what it is not
+(def %py-unpack-source
+  (fn (_ v)
+    (%py-iter-open v
+      (Str8 append "cannot unpack non-iterable "
+        (Str8 append (%py-class-name (%py-type-of v)) " object")))))
+
+; `a, *b, c = v`: before values, a list of the middle, after values -- every
+; value read, since the star takes what the others leave
+(def %py-unpack-star
+  (fn (_ v before after)
+    (let ((es (match
+                ((%py-tuple-is v) (%py-tuple-elems v))
+                ((%py-list? v) (%py-list-elems v))
+                (#t (%py-unpack-drain (%py-unpack-source v) ())))))
+      (let ((got (%py-length es)) (least (+ before after)))
+        (if (< got least)
+          (%py-unpack-refuse "not enough" (Str8 append "at least " (%number->str least))
+            (%py-unpack-got got))
+          (let ((tail (%py-drop es before)))
+            (%py-list-cat (%py-take-n es before ())
+              (pair (%py-list-new (%py-take-n tail (- got least) ()))
+                (%py-drop tail (- got least))))))))))
+(def %py-unpack-drain
+  (fn (self src acc)
+    (let ((v (%py-iter-pull! src)))
+      (if (same? v %py-gen-done) (%py-reverse acc) (self src (pair v acc))))))
 
 ; --- super() -----------------------------------------------------------------
 ;

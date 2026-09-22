@@ -1655,48 +1655,10 @@
   (fn (self s names)
     (if (null? names) #f (if (str=? s (first names)) #t (self s (rest names))))))
 
-; A del line is plain when it holds names, commas and parens and nothing
-; else: anything with a dot or a subscript is a target the runtime deletes
-; from, not a name to unbind.
-(def %py-del-plain?
-  (fn (self ts)
-    (match
-      ((null? ts) #f)
-      ((%py-del-plain-go ts #f) #t)
-      (#t #f))))
-
-(def %py-del-plain-go
-  (fn (self ts seen)
-    (if (null? ts)
-      seen
-      (let ((t (first ts)))
-        (match
-          ((eq? (%py-tag t) (lit tok-name)) (self (rest ts) #t))
-          ((%py-op-is? t ",") (self (rest ts) seen))
-          ((eq? (%py-tag t) (lit tok-newline)) (self (rest ts) seen))
-          ((%py-group? t "(") (if (%py-del-plain-go (%py-group-of t) seen) (self (rest ts) #t) #f))
-          (#t #f))))))
-
-; One rebinding per name, in the order written.
-(def %py-del-forms
-  (fn (self ts acc)
-    (if (null? ts)
-      (%py-reverse acc)
-      (let ((t (first ts)))
-        (match
-          ((eq? (%py-tag t) (lit tok-name))
-            (self (rest ts)
-              (pair
-                (list (lit set!) (%py-name->sym (%py-val t))
-                  (list (lit %py-name-gone) (%py-val t) (%py-name->sym (%py-val t))))
-                acc)))
-          ((%py-group? t "(")
-            (self (rest ts) (%py-reverse (%py-del-forms (%py-group-of t) (%py-reverse acc)))))
-          (#t (self (rest ts) acc)))))))
-
-; Every name a `del` line names, for the read check above.  A body is a
-; nested token, so the walk descends into every block -- including a def's,
-; whose `del` is exactly the one whose reads have to carry the check.
+; Every name a `del` line unbinds, for the read check above: the names of its
+; target list (%py-target-names).  A body is a nested token, so the walk
+; descends into every block -- including a def's, whose `del` is exactly the
+; one whose reads have to carry the check.
 (def %py-del-targets
   (fn (self toks acc)
     (if (null? toks)
@@ -1707,8 +1669,7 @@
             (self (rest toks) (%py-append (%py-reverse (self (%py-block-toks t) ())) acc)))
           ((%py-kw? t "del")
             (let ((sp (%py-line-of (rest toks) ())))
-              (self (rest sp)
-                (if (%py-del-plain? (first sp)) (%py-del-line-names (first sp) acc) acc))))
+              (self (rest sp) (%py-target-names (first sp) acc))))
           ; `except X as NAME`: the handler unbinds NAME when it ends
           ((%py-kw? t "except")
             (self (rest toks) (%py-except-as-name (rest toks) acc)))
@@ -1727,16 +1688,6 @@
           (pair (%py-val (first (rest ts))) acc)
           acc))
       (#t (self (rest ts) acc)))))
-
-(def %py-del-line-names
-  (fn (self ts acc)
-    (if (null? ts)
-      acc
-      (let ((t (first ts)))
-        (match
-          ((eq? (%py-tag t) (lit tok-name)) (self (rest ts) (pair (%py-val t) acc)))
-          ((%py-group? t "(") (self (rest ts) (%py-del-line-names (%py-group-of t) acc)))
-          (#t (self (rest ts) acc)))))))
 
 ; THE NAMES A PROGRAM MENTIONS AND NEVER BINDS, collected before the body is
 ; walked.  Each is bound at the start to %py-deleted, as a deleted name is, so a
@@ -2148,29 +2099,13 @@
                     ; `from a import *` binds every public name the module has
                     (pair (list (lit %py-import-star) name) (rest what))
                     (%py-from-imports name what ())))))))
-        ; `del NAME`, `del a, b`, `del (a, (b, c))`: names and nothing else,
-        ; decided on the tokens so the check a read carries does not have to
-        ; be unwrapped back into a name here
-        ((if (%py-kw? t "del") (%py-del-plain? (first (%py-line-of (rest toks) ()))) #f)
-          (let ((sp (%py-line-of (rest toks) ())))
-            (pair (pair (lit do) (%py-del-forms (first sp) ())) (rest sp))))
-        ; `del NAME[k]`, `del NAME[a:b]`: the subscript form decides which
+        ; `del` takes a target list: names, subscripts, slices, attributes,
+        ; and ( ) or [ ] of them (%py-delete)
         ((%py-kw? t "del")
-          (let ((r (%py-postfix (rest toks))))
-            (let ((tgt (first r)))
-              (match
-                ((not (pair? tgt))
-                  (Err raise (lit syntax) "cannot delete this target" ()))
-                ((eq? (first tgt) (lit %py-index))
-                  (pair (pair (lit %py-delindex) (rest tgt)) (rest r)))
-                ((eq? (first tgt) (lit %py-slice))
-                  (pair (pair (lit %py-delslice) (rest tgt)) (rest r)))
-                ; `del obj.attr` -- the runtime already had %py-delattr for
-                ; the builtin of that name; only the statement was missing,
-                ; and the attribute node carries exactly its two arguments.
-                ((eq? (first tgt) (lit %py-getattr))
-                  (pair (pair (lit %py-delattr) (rest tgt)) (rest r)))
-                (#t (Err raise (lit syntax) "cannot delete this target" ()))))))
+          (let ((sp (%py-line-of (rest toks) ())))
+            (if (null? (first sp))
+              (Err raise (lit syntax) "invalid syntax" ())
+              (pair (%py-delete (%py-target-tree (first sp))) (rest sp)))))
         ((%py-kw? t "try") (%py-try (rest toks)))
         ((%py-kw? t "raise") (%py-raise-stmt (rest toks)))
         ((%py-kw? t "assert") (%py-assert-stmt (rest toks)))
@@ -2236,7 +2171,9 @@
         ((%py-kw? t "pass") (pair () (rest toks)))
         ((%py-kw? t "break") (pair (list (lit %py-break) ()) (rest toks)))
         ((%py-kw? t "continue") (pair (list (lit %py-continue) ()) (rest toks)))
-        ((%py-unpack-stmt? toks) (%py-unpack-stmt toks))
+        ; a target list and an `=` (%py-assign-stmt): `x = v`, `a, b = v`,
+        ; `(a, *b) = v`, `x[i] = y = v`
+        ((not (null? (%py-assign-split toks))) (%py-assign-stmt toks))
         ; A statement can BEGIN with a unary operator (`~x`, `-x` as an
         ; expression statement); the postfix-target probe below would
         ; refuse the op token, so these go straight to the expression
@@ -3046,36 +2983,233 @@
             (%py-class-of n after (list (lit list) (lit %py-cls-object)))))))))
 
 (%py-sweep!)
-; --- tuple unpacking ---------------------------------------------------------
+; --- assignment targets ------------------------------------------------------
 ;
-; `a, b = f()` is the reason tuples earn their keep -- it is how a Python
-; function returns two things.  It is decided by a scan rather than by the first
-; token: NAME (, NAME)+ = ... and nothing else, so `a[0], b = ...` is NOT
-; unpacked here.  Only plain names, which is the case that matters and the one
-; that can be hoisted.
+; What stands before an `=`: a name, a subscript, an attribute, or a list of
+; targets -- `a, b`, `(a, (b, c))`, `[x, *rest]` -- read from the tokens, since
+; `*rest` is not an expression.  A statement is an assignment when its tokens
+; begin with a target list and an `=`; `a = b = v` has two, and the value's own
+; tokens are the expression parser's.  The same reader serves `del`, and the
+; scans that hoist the names a target list binds.
 
-(def %py-unpack-scan
-  (fn (self toks comma)
-    (if (null? toks)
-      #f
-      (let ((t (first toks)))
+; what the skips below answer when the tokens do not begin with a target
+(def %py-no-target (list (lit %py-no-target)))
+
+(def %py-postfix-next?
+  (fn (_ ts)
+    (if (null? ts) #f
+      (match
+        ((%py-group? (first ts) "[") #t)
+        ((%py-group? (first ts) "(") #t)
+        (#t (%py-op-is? (first ts) "."))))))
+; past `.NAME`, `[...]` and `(...)`
+(def %py-postfix-skip
+  (fn (self ts)
+    (match
+      ((null? ts) ts)
+      ((%py-group? (first ts) "[") (self (rest ts)))
+      ((%py-group? (first ts) "(") (self (rest ts)))
+      ((if (%py-op-is? (first ts) ".")
+          (if (null? (rest ts)) #f (eq? (%py-tag (first (rest ts))) (lit tok-name)))
+          #f)
+        (self (rest (rest ts))))
+      (#t ts))))
+
+; The tokens after one target at the head of ts: `*` and a target, a name and
+; its postfixes, a ( ) or [ ] of targets, or a group with postfixes after it.
+(def %py-target-skip
+  (fn (self ts)
+    (if (null? ts) %py-no-target
+      (let ((t (first ts)))
         (match
-          ((eq? (%py-tag t) (lit tok-newline)) #f)
-          ((%py-op-is? t "=") comma)
-          ((%py-op-is? t ",") (self (rest toks) #t))
-          ((eq? (%py-tag t) (lit tok-name)) (self (rest toks) comma))
-          (#t #f))))))
+          ((%py-op-is? t "*") (self (rest ts)))
+          ((eq? (%py-tag t) (lit tok-name)) (%py-postfix-skip (rest ts)))
+          ((if (%py-group? t "(") #t (%py-group? t "["))
+            (match
+              ((%py-postfix-next? (rest ts)) (%py-postfix-skip (rest ts)))
+              ((%py-targets-exact? (%py-group-of t)) (rest ts))
+              (#t %py-no-target)))
+          (#t %py-no-target))))))
+; past a target list: targets between commas, and a trailing comma
+(def %py-targets-skip
+  (fn (self ts)
+    (let ((r (%py-target-skip ts)))
+      (match
+        ((same? r %py-no-target) r)
+        ((%py-op-is? (if (null? r) () (first r)) ",")
+          (if (%py-target-start? (rest r)) (self (rest r)) (rest r)))
+        (#t r)))))
+(def %py-target-start?
+  (fn (_ ts)
+    (if (null? ts) #f
+      (match
+        ((%py-op-is? (first ts) "*") #t)
+        ((eq? (%py-tag (first ts)) (lit tok-name)) #t)
+        ((%py-group? (first ts) "(") #t)
+        (#t (%py-group? (first ts) "["))))))
+; the whole of ts is a target list, or nothing
+(def %py-targets-exact?
+  (fn (_ ts)
+    (if (null? ts) #t
+      (let ((r (%py-targets-skip ts)))
+        (if (same? r %py-no-target) #f (null? r))))))
 
-(def %py-unpack-stmt? (fn (_ toks) (%py-unpack-scan toks #f)))
+; (target-tokens . tokens-after-the-=) when toks begin `target-list =`, else ()
+(def %py-assign-split
+  (fn (_ toks)
+    (let ((r (%py-targets-skip toks)))
+      (if (if (same? r %py-no-target) #f (%py-op-is? (if (null? r) () (first r)) "="))
+        (pair (%py-before toks r) (rest r))
+        ()))))
+; the tokens of toks ahead of its tail r
+(def %py-before
+  (fn (self toks r)
+    (if (same? toks r) () (pair (first toks) (self (rest toks) r)))))
 
-(def %py-unpack-names
-  (fn (self toks acc)
-    (let ((t (first toks)))
-      (if (%py-op-is? t "=")
-        (pair (%py-reverse acc) (rest toks))
-        (if (%py-op-is? t ",")
-          (self (rest toks) acc)
-          (self (rest toks) (pair (%py-name->sym (%py-val t)) acc)))))))
+; The names a target list binds, from its tokens, onto acc: a name standing
+; alone, in any ( ) or [ ] of targets, starred or not.  A name with a postfix
+; after it is subscripted, called or has an attribute taken, and binds nothing.
+(def %py-target-names
+  (fn (self ts acc)
+    (if (null? ts) acc
+      (let ((t (first ts)))
+        (match
+          ((eq? (%py-tag t) (lit tok-name))
+            (if (%py-postfix-next? (rest ts))
+              (self (%py-postfix-skip (rest ts)) acc)
+              (self (rest ts) (pair (%py-val t) acc))))
+          ((if (%py-group? t "(") #t (%py-group? t "["))
+            (if (%py-postfix-next? (rest ts))
+              (self (%py-postfix-skip (rest ts)) acc)
+              (self (rest ts) (self (%py-group-of t) acc))))
+          (#t (self (rest ts) acc)))))))
+
+; A target list's tree, from its tokens: (name "x"), (one FORM) for a
+; subscript, slice or attribute, (seq NODES) for a list of targets, and
+; (star NODE).  A top-level comma, a ( ) holding one, and any [ ] make a seq;
+; `(a)` is the target a.
+(def %py-target-tree
+  (fn (_ toks)
+    (if (%py-has-comma? toks)
+      (list (lit seq) (%py-target-nodes (%py-comma-split toks () ())))
+      (%py-target-node toks))))
+(def %py-target-nodes
+  (fn (self parts)
+    (if (null? parts) () (pair (%py-target-node (first parts)) (self (rest parts))))))
+; An assignment's tokens were read as a target list before they get here; a
+; `del` line's were not, so `del *` and `del a b` are refused here.
+(def %py-target-node
+  (fn (self ts)
+    (if (null? ts) (Err raise (lit syntax) "invalid syntax" ())
+      (let ((t (first ts)))
+        (match
+          ((%py-op-is? t "*") (list (lit star) (self (rest ts))))
+          ((if (null? (rest ts)) (eq? (%py-tag t) (lit tok-name)) #f)
+            (list (lit name) (%py-val t)))
+          ((if (null? (rest ts)) (%py-group? t "(") #f)
+            (let ((es (%py-group-of t)))
+              (if (if (null? es) #t (%py-has-comma? es))
+                (list (lit seq) (%py-target-nodes (%py-comma-split es () ())))
+                (self es))))
+          ((if (null? (rest ts)) (%py-group? t "[") #f)
+            (list (lit seq)
+              (%py-target-nodes (%py-comma-split (%py-group-of t) () ()))))
+          (#t
+            (let ((r (%py-postfix ts)))
+              (if (null? (rest r))
+                (list (lit one) (first r))
+                (Err raise (lit syntax) "invalid syntax" ())))))))))
+
+; The form that stores v into a target tree.  A seq unpacks v once and stores
+; each element in turn, a star taking a list of what the others leave.
+(def %py-assign
+  (fn (self node v)
+    (match
+      ((eq? (first node) (lit name))
+        (list (lit set!) (%py-name->sym (first (rest node))) v))
+      ((eq? (first node) (lit one)) (%py-store (first (rest node)) v))
+      ((eq? (first node) (lit star))
+        (Err raise (lit syntax)
+          "starred assignment target must be in a list or tuple" ()))
+      (#t
+        (let ((nodes (first (rest node))))
+          (let ((n (%py-count nodes)) (k (%py-star-at nodes 0 ())))
+            (list (lit let)
+              (list (list (lit %py-unpacked)
+                      (if (null? k)
+                        (list (lit %py-unpack) v n)
+                        (list (lit %py-unpack-star) v k (- n (+ k 1))))))
+              (pair (lit do) (%py-assign-elems nodes 0 ())))))))))
+; the position of the one starred node, or (); two are refused
+(def %py-star-at
+  (fn (self nodes i k)
+    (match
+      ((null? nodes) k)
+      ((not (eq? (first (first nodes)) (lit star))) (self (rest nodes) (+ i 1) k))
+      ((null? k) (self (rest nodes) (+ i 1) i))
+      (#t (Err raise (lit syntax) "multiple starred expressions in assignment" ())))))
+(def %py-assign-elems
+  (fn (self nodes i acc)
+    (if (null? nodes)
+      (if (null? acc) (list ()) (%py-reverse acc))
+      (self (rest nodes) (+ i 1)
+        (pair
+          (%py-assign (%py-unstar (first nodes))
+            (list (lit List) (lit ref) i (lit %py-unpacked)))
+          acc)))))
+; a starred node's target; any other node is its own
+(def %py-unstar
+  (fn (_ node) (if (eq? (first node) (lit star)) (first (rest node)) node)))
+
+; `t = v`, `t1 = t2 = v`: the value once, then each target left to right
+(def %py-assign-stmt
+  (fn (_ toks)
+    (def targets
+      (fn (self ts acc)
+        (let ((s (%py-assign-split ts)))
+          (if (null? s)
+            (pair (%py-reverse acc) ts)
+            (self (rest s) (pair (%py-target-tree (first s)) acc))))))
+    (let ((tv (targets toks ())))
+      (let ((v (%py-exprlist (rest tv))))
+        (pair
+          (if (null? (rest (first tv)))
+            (%py-assign (first (first tv)) (first v))
+            (list (lit let) (list (list (lit %py-assigned) (first v)))
+              (pair (lit do) (%py-assign-each (first tv)))))
+          (rest v))))))
+(def %py-assign-each
+  (fn (self nodes)
+    (if (null? nodes) ()
+      (pair (%py-assign (first nodes) (lit %py-assigned)) (self (rest nodes))))))
+
+; `del` takes a target list too: each name unbound, each subscript, slice and
+; attribute deleted from, and a seq's targets one by one.
+(def %py-delete
+  (fn (self node)
+    (match
+      ((eq? (first node) (lit name))
+        (let ((s (first (rest node))))
+          (list (lit set!) (%py-name->sym s)
+            (list (lit %py-name-gone) s (%py-name->sym s)))))
+      ((eq? (first node) (lit star))
+        (Err raise (lit syntax) "cannot delete starred" ()))
+      ((eq? (first node) (lit seq))
+        (pair (lit do) (pair () (%py-delete-each (first (rest node))))))
+      (#t (%py-del-form (first (rest node)))))))
+(def %py-delete-each
+  (fn (self nodes)
+    (if (null? nodes) () (pair (%py-delete (first nodes)) (self (rest nodes))))))
+(def %py-del-form
+  (fn (_ tgt)
+    (match
+      ((not (pair? tgt)) (Err raise (lit syntax) "cannot delete this target" ()))
+      ((eq? (first tgt) (lit %py-index)) (pair (lit %py-delindex) (rest tgt)))
+      ((eq? (first tgt) (lit %py-slice)) (pair (lit %py-delslice) (rest tgt)))
+      ; `del obj.attr`: the attribute node carries exactly %py-delattr's two
+      ; arguments
+      ((eq? (first tgt) (lit %py-getattr)) (pair (lit %py-delattr) (rest tgt)))
+      (#t (Err raise (lit syntax) "cannot delete this target" ())))))
 
 (def %py-unpack-sets
   (fn (self syms i acc)
@@ -3086,19 +3220,6 @@
           (list (lit set!) (first syms)
             (list (lit List) (lit ref) i (lit %py-unpacked)))
           acc)))))
-
-(def %py-unpack-stmt
-  (fn (_ toks)
-    (let ((n (%py-unpack-names toks ())))
-      (let ((r (%py-exprlist (rest n))))
-        (pair
-          ; `let`, not `def`: the temporary binds in the frame, so an unpack
-          ; inside a function called during another unpack cannot clobber it.
-          (list (lit let)
-            (list (list (lit %py-unpacked)
-                    (list (lit %py-unpack) (first r) (%py-count (first n)))))
-            (pair (lit do) (%py-unpack-sets (first n) 0 ())))
-          (rest r))))))
 
 (def %py-store
   (fn (_ target value)
@@ -3403,9 +3524,11 @@
               (self (rest u) (%py-append (%py-reverse (%py-syms-of (first u) ())) acc))))
           ((%py-block? t)
             (self (rest toks) (%py-append (%py-reverse (self (%py-block-toks t) ())) acc)))
-          ((%py-unpack-stmt? toks)
-            (let ((u (%py-unpack-names toks ())))
-              (self (rest u) (%py-append (%py-reverse (first u)) acc))))
+          ; the names a target list binds: `a, (b, *c) = ...`, `x = y = ...`
+          ((not (null? (%py-assign-split toks)))
+            (let ((u (%py-assign-split toks)))
+              (self (rest u)
+                (%py-append (%py-syms-of (%py-target-names (first u) ()) ()) acc))))
           ((%py-kw? t "class")
             (let ((n (if (null? (rest toks)) () (first (rest toks)))))
               (self (rest (rest toks))

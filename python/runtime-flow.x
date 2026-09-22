@@ -1161,8 +1161,11 @@
 ; A for loop PULLS: a generator one value per iteration (its prints
 ; interleave with the body's, and it may be infinite), anything else from
 ; its materialized element list.
+; `who` is %py-iter-elems' door: a caller may name itself in the refusal.
 (def %py-iter-open
-  (fn (_ v)
+  (fn (_ v . who)
+    (def elems
+      (fn (_) (if (null? who) (%py-iter-elems v) (%py-iter-elems v (first who)))))
     (if (%py-gen-is v) v
       (if (%py-obj-is v)
         ; an object with __iter__ whose iterator has __next__ is pulled a
@@ -1170,13 +1173,13 @@
         ; in step with the loop body
         (let ((it-m (%py-dunder v "__iter__")))
           (if (null? it-m)
-            (pair (%py-iter-elems v) ())
+            (pair (elems) ())
             (let ((it (it-m)))
               (let ((nx (if (%py-obj-is it) (%py-dunder it "__next__") ())))
                 (if (null? nx)
                   (pair (%py-iter-answer it) ())
                   (list (lit %py-cursor) nx))))))
-        (pair (%py-iter-elems v) ())))))
+        (pair (elems) ())))))
 (def %py-iter-pull!
   (fn (_ src)
     (match
