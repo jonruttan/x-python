@@ -582,12 +582,11 @@
 (def %py-hex (fn (_ v) (%py-based-str v 16 "0x")))
 (def %py-oct (fn (_ v) (%py-based-str v 8 "0o")))
 
-(def %py-num? (fn (_ v) (not (null? (%py-num-kind (%py-boolnorm v))))))
 (def %py-divmod
   (fn (_ a b)
     (if (if (%py-num? a) (%py-num? b) #f)
       (%py-tuple-new (list (%py-floordiv a b) (%py-mod a b)))
-      (Err raise (lit type) "unsupported operand type(s) for divmod()" ()))))
+      (%py-op-refuse "divmod()" a b))))
 
 ; A CLOSURE HAS NO PREDICATE, so its type handle is taken from one built
 ; here and compared -- the same trick the arithmetic seams use for float.
@@ -879,8 +878,7 @@
   (fn (_ a b op body)
     (if (if (%py-set-is a) (%py-set-is b) #f)
       (%py-set-new (%py-set-frozen? a) (body (%py-set-elems a) (%py-set-elems b)))
-      (Err raise (lit type)
-        (Str8 append (Str8 append "unsupported operand type(s) for " op) ": set") ()))))
+      (%py-op-refuse op a b))))
 (def %py-set-or  (fn (_ a b) (%py-set-binop a b "|" (fn (_ x y) (%py-set-fold x y)))))
 (def %py-set-and (fn (_ a b) (%py-set-binop a b "&" (fn (_ x y) (%py-set-keep x y)))))
 (def %py-set-sub (fn (_ a b) (%py-set-binop a b "-" (fn (_ x y) (%py-set-minus x y)))))
@@ -900,7 +898,7 @@
           ((Str8 =? op ">=") (%py-set-subset? y x))
           ((%py-set-subset? y x) (> (%py-length x) (%py-length y)))
           (#t #f)))
-      (%py-ord-refuse op))))
+      (%py-ord-refuse op a b))))
 
 ; The set methods that change the set, which a frozenset does not have.
 (def %py-set-mutator?

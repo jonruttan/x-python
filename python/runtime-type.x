@@ -206,16 +206,6 @@
                 (Float from t)
                 (bad)))))))))
 
-(def %py-num-kind
-  (fn (_ v)
-    (let ((h (%py-typeof-prim v)))
-      (match
-        ((eq? h %py-th-int) (lit int))
-        ((eq? h %py-th-big) (lit int))
-        ((eq? h %py-th-float) (lit float))
-        ((eq? h %py-th-complex) (lit complex))
-        (#t ())))))
-
 ; --- int(text, base) ---------------------------------------------------------
 ; Surrounding whitespace, a sign, the 0x/0o/0b prefix the base allows (any of
 ; them when the base is 0), then digits with underscores between; a bytes-like

@@ -74,8 +74,7 @@
         (let ((r2 (%py-side b a rname)))
           (if (not (eq? r2 %py-NotImplemented))
             r2
-            (Err raise (lit type)
-              (Str8 append "unsupported operand type(s) for " opname) ())))))))
+            (%py-op-refuse opname a b)))))))
 
 ; augmented + on a list is list.extend, which takes any iterable -- while
 ; plain + demands a list.  Python draws that line and the corpus tests it.
@@ -120,6 +119,7 @@
 (def %py-add
   (fn (_ a b)
     (match
+      ((%py-plain-nums? a b) (+ a b))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__add__" "__radd__" "+"))
       ((%py-arr-is a) (%py-arr-cat a b))
@@ -129,13 +129,14 @@
          ((%py-view-is b) #t)
          ((%py-dict? a) #t)
          (#t (%py-dict? b)))
-        (Err raise (lit type) "unsupported operand type(s) for +" ()))
+        (%py-op-refuse "+" a b))
       ((%py-list? a)
         (if (%py-list? b)
           (%py-list-new (%py-list-cat (%py-list-elems a) (%py-list-elems b)))
-          (Err raise (lit type) "can only concatenate list to list" ())))
-      ((%py-list? b)
-        (Err raise (lit type) "unsupported operand type(s) for +" ()))
+          (%py-concat-refuse "list" b)))
+      ; a tuple concatenates by the + its type carries (python/types.x)
+      ((%py-tuple-is a) (if (%py-tuple-is b) (+ a b) (%py-concat-refuse "tuple" b)))
+      ((%py-list? b) (%py-op-refuse "+" a b))
       ; THE LEFT OPERAND DECIDES: bytearray + bytes is a bytearray and bytes +
       ; bytearray is a bytes, as in Python -- the buffers concatenate either
       ; way, and only the answer's type is in question.
@@ -154,30 +155,31 @@
       ((%py-str-is a)
         (if (%py-str-is b)
           (%py-str-new (%pb-cat (%py-str-cps a) (%py-str-cps b)))
-          (Err raise (lit type) "can only concatenate str to str" ())))
-      ((%py-str-is b)
-        (Err raise (lit type) "unsupported operand type(s) for +" ()))
-      ; Lists concatenate through PY-LIST's own `+` op, which the engine
-      ; dispatches from here.  Bools are ints here too: 1j + True.
+          (%py-concat-refuse "str" b)))
+      ((%py-str-is b) (%py-op-refuse "+" a b))
+      ; Bools are ints here too: 1j + True.
       ((if (eq? (%py-typeof-prim a) %py-th-complex) #t
               (eq? (%py-typeof-prim b) %py-th-complex))
         (%py-cx-arith a b "+" 0))
-      (#t
+      ((%py-nums? a b)
         (+ (if (eq? a #t) 1 (if (eq? a #f) 0 a))
-           (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))
+           (if (eq? b #t) 1 (if (eq? b #f) 0 b))))
+      (#t (%py-op-refuse "+" a b)))))
 
 (def %py-sub
   (fn (_ a b)
     (match
+      ((%py-plain-nums? a b) (- a b))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__sub__" "__rsub__" "-"))
       ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-sub a b))
       ((if (eq? (%py-typeof-prim a) %py-th-complex) #t
           (eq? (%py-typeof-prim b) %py-th-complex))
         (%py-cx-arith a b "-" 1))
-      (#t
+      ((%py-nums? a b)
         (- (if (eq? a #t) 1 (if (eq? a #f) 0 a))
-           (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))
+           (if (eq? b #t) 1 (if (eq? b #f) 0 b))))
+      (#t (%py-op-refuse "-" a b)))))
 
 ; THE TYPE HANDLES, EARLY: the arithmetic seams below consult them, and
 ; %py-f-2p64 is computed through %py-mul at LOAD time -- so these must be
@@ -190,6 +192,70 @@
 (def %py-th-complex (%py-typeof-prim (Complex make 0.0 1.0)))
 (def %py-complex-is
   (fn (_ v) (eq? (%py-typeof-prim v) %py-th-complex)))
+(def %py-num-kind
+  (fn (_ v)
+    (let ((h (%py-typeof-prim v)))
+      (match
+        ((eq? h %py-th-int) (lit int))
+        ((eq? h %py-th-big) (lit int))
+        ((eq? h %py-th-float) (lit float))
+        ((eq? h %py-th-complex) (lit complex))
+        (#t ())))))
+; a bool is the int it is
+(def %py-num?
+  (fn (_ v)
+    (match
+      ((eq? (%py-typeof-prim v) %py-th-int) #t)
+      ((eq? (%py-typeof-prim v) %py-th-float) #t)
+      ((eq? (%py-typeof-prim v) %py-th-big) #t)
+      ((eq? (%py-typeof-prim v) %py-th-complex) #t)
+      ((eq? v #t) #t)
+      (#t (eq? v #f)))))
+
+; A number on each side, or Python's TypeError.  Past the numbers the platform's
+; operators do not refuse: they answer a word (1 + memoryview(b"")), raise under
+; a tag no except clause maps, or crash (1 / None).  So each seam asks before its
+; numeric arm, and the refusal names both types as CPython does.
+(def %py-nums? (fn (_ a b) (if (%py-num? a) (%py-num? b) #f)))
+; A machine int or a float on each side needs none of a seam's other questions,
+; and that is most of what a program adds, subtracts, multiplies and orders.
+(def %py-plain-nums?
+  (fn (_ a b)
+    (if (if (eq? (%py-typeof-prim a) %py-th-int) #t
+          (eq? (%py-typeof-prim a) %py-th-float))
+      (if (eq? (%py-typeof-prim b) %py-th-int) #t
+        (eq? (%py-typeof-prim b) %py-th-float))
+      #f)))
+(def %py-op-refuse
+  (fn (_ op a b)
+    (Err raise (lit type)
+      (Str8 append (Str8 append "unsupported operand type(s) for " op)
+        (Str8 append ": " (%py-type-pair a b)))
+      ())))
+; 'int' and 'NoneType'
+(def %py-type-pair
+  (fn (_ a b)
+    (Str8 append (Str8 append "'" (%py-class-name (%py-type-of a)))
+      (Str8 append "' and '" (Str8 append (%py-class-name (%py-type-of b)) "'")))))
+; can only concatenate list (not "int") to list
+(def %py-concat-refuse
+  (fn (_ what b)
+    (Err raise (lit type)
+      (Str8 append (Str8 append "can only concatenate " what)
+        (Str8 append (Str8 append " (not \"" (%py-class-name (%py-type-of b)))
+          (Str8 append "\") to " what)))
+      ())))
+; A sequence repeats by an int, a bool being one; any other count is refused in
+; CPython's words.
+(def %py-repeat-count
+  (fn (_ k)
+    (let ((n (%py-boolnorm k)))
+      (if (eq? (%py-num-kind n) (lit int))
+        n
+        (Err raise (lit type)
+          (Str8 append "can't multiply sequence by non-int of type '"
+            (Str8 append (%py-class-name (%py-type-of k)) "'"))
+          ())))))
 
 ; THE COMPLEX BRANCH OF THE FOUR SEAMS.  A complex beside a non-number is a
 ; TypeError here, not the tower's promotion error -- that one is x's
@@ -197,15 +263,13 @@
 ; never saw it and 1j + [] killed the program.  And a bigint beside a
 ; complex is FLOATED first, as Python does, because the tower declares no
 ; COMPLEX x BIGINT promotion.  Only the complex case pays: the seams reach
-; here after two handle compares, and every other pairing the tower already
-; refuses with a tag Python recognises.
+; here after two handle compares, and refuse any other non-number themselves.
 (def %py-cx-arith
   (fn (_ a0 b0 op code)
     (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
     (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
     (if (if (null? (%py-num-kind a)) #t (null? (%py-num-kind b)))
-      (Err raise (lit type)
-        (Str8 append "unsupported operand type(s) for " op) ())
+      (%py-op-refuse op a0 b0)
       (do
         (def x (if (eq? (%py-typeof-prim a) %py-th-big) (* 1.0 a) a))
         (def y (if (eq? (%py-typeof-prim b) %py-th-big) (* 1.0 b) b))
@@ -230,7 +294,7 @@
       (if (< b 0)
         (Err raise (lit value) "negative shift count" ())
         (* a (Num expt 2 b)))
-      (Err raise (lit type) "unsupported operand type(s) for <<" ()))))
+      (%py-op-refuse "<<" a0 b0))))
 (def %py-rshift
   (fn (_ a0 b0)
     (if (if (%py-obj-is a0) #t (%py-obj-is b0))
@@ -246,7 +310,7 @@
         (let ((p (Num expt 2 b)))
           (let ((q (Num quotient a p)))
             (if (if (< a 0) (not (= (* q p) a)) #f) (- q 1) q))))
-      (Err raise (lit type) "unsupported operand type(s) for >>" ()))))
+      (%py-op-refuse ">>" a0 b0))))
 ; STRING REPETITION IS HANDLED HERE, NOT ON THE TYPE.  A type's ops fire when
 ; either operand carries the type, so pushing `*` onto x's str type would change
 ; what `*` means for every string in the process, the platform's included.  The
@@ -305,52 +369,49 @@
   (fn (_ a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (%py-binop a b "__matmul__" "__rmatmul__" "@")
-      (Err raise (lit type) "unsupported operand type(s) for @" ()))))
+      (%py-op-refuse "@" a b))))
 
 (def %py-mul
   (fn (_ a b)
     (match
+      ((%py-plain-nums? a b) (* a b))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__mul__" "__rmul__" "*"))
       ((%py-dq-is a) (%py-dq-repeat a b))
       ((%py-dq-is b) (%py-dq-repeat b a))
-      ((if (%py-list? a) #t (%py-list? b))
-        (let ((l (if (%py-list? a) a b)))
-          (let ((k (if (%py-list? a) b a)))
-            (if (not (eq? (%py-num-kind (%py-boolnorm k)) (lit int)))
-              (Err raise (lit type) "can't multiply sequence by non-int" ())
-              (%py-list-new (%py-els-repeat (%py-list-elems l) (%py-boolnorm k) ()))))))
+      ((%py-list? a)
+        (%py-list-new (%py-els-repeat (%py-list-elems a) (%py-repeat-count b) ())))
+      ((%py-list? b)
+        (%py-list-new (%py-els-repeat (%py-list-elems b) (%py-repeat-count a) ())))
       ; a tuple repeats like every other sequence, and a namedtuple's own
       ; __mul__ answers through this arm
-      ((if (%py-tuple-is a) #t (%py-tuple-is b))
-        (let ((t (if (%py-tuple-is a) a b)))
-          (let ((k (if (%py-tuple-is a) b a)))
-            (if (not (eq? (%py-num-kind (%py-boolnorm k)) (lit int)))
-              (Err raise (lit type) "can't multiply sequence by non-int" ())
-              (%py-tuple-new (%py-els-repeat (%py-tuple-elems t) (%py-boolnorm k) ()))))))
+      ((%py-tuple-is a)
+        (%py-tuple-new (%py-els-repeat (%py-tuple-elems a) (%py-repeat-count b) ())))
+      ((%py-tuple-is b)
+        (%py-tuple-new (%py-els-repeat (%py-tuple-elems b) (%py-repeat-count a) ())))
       ((%py-bytes-is a)
-        ((if (%py-barr-is a) %py-barr-new %py-bytes-new) (%pb-repeat (%py-bytes-list a) b ())))
+        ((if (%py-barr-is a) %py-barr-new %py-bytes-new)
+          (%pb-repeat (%py-bytes-list a) (%py-repeat-count b) ())))
       ((%py-bytes-is b)
-        ((if (%py-barr-is b) %py-barr-new %py-bytes-new) (%pb-repeat (%py-bytes-list b) a ())))
-      ((%py-str-is a)
-        (if (%py-str-is b)
-          (Err raise (lit type) "can't multiply sequence by non-int" ())
-          (%py-str-repeat a b)))
-      ((%py-str-is b) (%py-str-repeat b a))
+        ((if (%py-barr-is b) %py-barr-new %py-bytes-new)
+          (%pb-repeat (%py-bytes-list b) (%py-repeat-count a) ())))
+      ((%py-str-is a) (%py-str-repeat a (%py-repeat-count b)))
+      ((%py-str-is b) (%py-str-repeat b (%py-repeat-count a)))
       ((if (eq? (%py-typeof-prim a) %py-th-complex) #t
               (eq? (%py-typeof-prim b) %py-th-complex))
         (%py-cx-arith a b "*" 2))
-      (#t
+      ((%py-nums? a b)
         (* (if (eq? a #t) 1 (if (eq? a #f) 0 a))
-           (if (eq? b #t) 1 (if (eq? b #f) 0 b)))))))
+           (if (eq? b #t) 1 (if (eq? b #f) 0 b))))
+      (#t (%py-op-refuse "*" a b)))))
 
 ; TRUE DIVISION ALWAYS PRODUCES A FLOAT.  `1 / 2` is 0.5 in Python 3 and an
 ; exact 1/2 in x, and that difference is the reason this bundle declares xenon
 ; -- float is reachable from the first arithmetic a beginner types.
 ; DIVISION BY ZERO RAISES.  It answered `inf` for `1 / 0`, `0` for `1 // 0`
 ; and None for `1 % 0` -- three more silent wrong answers, and the three
-; Python spells ZeroDivisionError.  The messages are Python's own, which
-; differ between true and floor division.
+; Python spells ZeroDivisionError.  The message is Python's own, the same for
+; true and floor division and for modulo.
 ;
 ; These raise an Err rather than building an instance, like every other raise
 ; this runtime makes.  The tag is what `except ZeroDivisionError` matches on;
@@ -362,6 +423,7 @@
     (match
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__truediv__" "__rtruediv__" "/"))
+      ((not (%py-nums? a b)) (%py-op-refuse "/" a0 b0))
       ((= b 0) (Err raise (lit zero-division) "division by zero" ()))
       ((if (eq? (%py-typeof-prim a) %py-th-complex) #t
             (eq? (%py-typeof-prim b) %py-th-complex))
@@ -506,12 +568,15 @@
     (if (null? names) #f
       (if (%pb-eq? (%py-str-cps k) (%ps-of-x (first names))) #t (self k (rest names))))))
 (def %py-floordiv
-  (fn (_ a b)
+  (fn (_ a0 b0)
+    (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
+    (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
     (match
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__floordiv__" "__rfloordiv__" "//"))
+      ((not (%py-nums? a b)) (%py-op-refuse "//" a0 b0))
       ((= b 0)
-        (Err raise (lit zero-division) "integer division or modulo by zero" ()))
+        (Err raise (lit zero-division) "division by zero" ()))
       ((if (%py-complex-is a) #t (%py-complex-is b))
         (Err raise (lit type) "can't take floor of complex number." ()))
       ((if (%py-float-is a) #t (%py-float-is b))
@@ -534,17 +599,20 @@
 ; and the check comes before the zero test because the right operand of a
 ; format is a tuple as often as a number.
 (def %py-mod
-  (fn (_ a b)
+  (fn (_ a0 b0)
+    (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
+    (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
     ; str.__mod__ answers first: "%d" % obj formats the object, it does not
     ; ask the object for __rmod__
     (match
-      ((%py-str-is a) (%py-format-str a b))
-      ((%py-bytes-is a) (%py-format-bytes a b))
+      ((%py-str-is a) (%py-format-str a b0))
+      ((%py-bytes-is a) (%py-format-bytes a b0))
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__mod__" "__rmod__" "%"))
+      ((not (%py-nums? a b)) (%py-op-refuse "%" a0 b0))
       ((if (%py-complex-is a) #t (%py-complex-is b))
         (Err raise (lit type) "can't mod complex numbers." ()))
-      ((= b 0) (Err raise (lit zero-division) "integer modulo by zero" ()))
+      ((= b 0) (Err raise (lit zero-division) "division by zero" ()))
       (#t (Num modulo a b)))))
 ; NEVER HAND Num expt A NEGATIVE EXPONENT.  Its parameter is documented
 ; "Non-negative integer exponent" and nothing enforces it: with exp < 0 the
@@ -583,26 +651,35 @@
         (Err raise (lit type) "pow() requires integers" ())))))
 
 (def %py-pow
-  (fn (_ a b)
+  (fn (_ a0 b0)
+    (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
+    (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
     (match
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__pow__" "__rpow__" "** or pow()"))
+      ((not (%py-nums? a b)) (%py-op-refuse "** or pow()" a0 b0))
       ((if (%py-complex-is a) #t (%py-complex-is b))
         (%py-cpow (%py-complex-of a) (%py-complex-of b)))
-      ; a negative real base to a fractional power is a COMPLEX in Python 3
+      ; a negative real base to a fractional power is a COMPLEX in Python 3;
+      ; an infinite or NaN exponent is libm's, below
       ((if (< (if (eq? a #t) 1 (if (eq? a #f) 0 a)) 0)
-          (if (%py-float-is b) (not (= b (Float floor b))) #f)
+          (if (%py-float-is b)
+            (if (Float finite? b) (not (= b (Float floor b))) #f)
+            #f)
           #f)
         (%py-cpow (%py-complex-of a) (%py-complex-of b)))
       ((if (%py-float-is a) #t (%py-float-is b))
         (do
           (def fa (* (%py-boolnorm a) 1.0))
           (def fb (* (%py-boolnorm b) 1.0))
-          (if (if (= fa 0.0) (< fb 0.0) #f)
-            (Err raise (lit zero-division)
-              "0.0 cannot be raised to a negative power" ())
+          ; zero to -inf is inf, which libm answers
+          (if (if (= fa 0.0) (if (< fb 0.0) (Float finite? fb) #f) #f)
+            (Err raise (lit zero-division) "zero to a negative power" ())
             (Float pow fa fb))))
-      ((< b 0) (/ 1.0 (Num expt a (- 0 b))))
+      ((< b 0)
+        (if (= a 0)
+          (Err raise (lit zero-division) "zero to a negative power" ())
+          (/ 1.0 (Num expt a (- 0 b)))))
       ; a base of 0, 1 or -1 is answered without raising it to anything,
       ; which is what lets 0 ** (1 << 65) finish
       ((%py-pow-unit? a)
@@ -735,8 +812,7 @@
           (if (if (if (eq? a0 #t) #t (eq? a0 #f)) (if (eq? b0 #t) #t (eq? b0 #f)) #f)
             (= r 1)
             r)))
-      (Err raise (lit type)
-        (Str8 append "unsupported operand type(s) for " opname) ()))))
+      (%py-op-refuse opname a0 b0))))
 
 (def %py-bitor
   (fn (_ a b)
