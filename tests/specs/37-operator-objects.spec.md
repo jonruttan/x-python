@@ -97,3 +97,21 @@ TypeError %d format: a real number is required, not BadInt
 '7'
 1
 ```
+
+### __float__ must answer a float, and an object without one is refused as anything else is
+
+```python
+(python-run "import math\n\n\nclass TestFloat:\n    def __float__(self):\n        return 10.0\n\n\nclass TestStrFloat:\n    def __float__(self):\n        return \"a\"\n\n\nclass TestNonFloat:\n    def __float__(self):\n        return 6\n\n\nclass Test:\n    pass\n\n\ndef err(f):\n    try:\n        print(repr(f()))\n    except TypeError as e:\n        print(\"TypeError\", e)\n\n\nerr(lambda: float(TestFloat()))\nerr(lambda: \"%.1f\" % TestFloat())\nerr(lambda: math.sqrt(TestFloat()))\nerr(lambda: float(TestStrFloat()))\nerr(lambda: float(TestNonFloat()))\nerr(lambda: math.sqrt(TestNonFloat()))\nerr(lambda: float(Test()))\nerr(lambda: float([1]))\nerr(lambda: \"%f\" % \"a\")")
+```
+---
+```output
+10.0
+'10.0'
+3.1622776601683795
+TypeError TestStrFloat.__float__ returned non-float (type str)
+TypeError TestNonFloat.__float__ returned non-float (type int)
+TypeError TestNonFloat.__float__ returned non-float (type int)
+TypeError float() argument must be a string or a real number, not 'Test'
+TypeError float() argument must be a string or a real number, not 'list'
+TypeError must be real number, not str
+```

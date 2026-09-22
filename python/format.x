@@ -248,7 +248,14 @@
       v)))
 (def %py-fmt-float-of
   (fn (_ v)
-    (if (%py-float-is v) v (* 1.0 (if (eq? v #t) 1 (if (eq? v #f) 0 v))))))
+    (match
+      ((%py-float-is v) v)
+      ((%py-obj-is v) (%py-obj-float v))
+      ((%py-num? v) (* 1.0 (%py-boolnorm v)))
+      (#t
+        (Err raise (lit type)
+          (Str8 append "must be real number, not " (%py-class-name (%py-type-of v)))
+          ())))))
 
 ; --- The operator ------------------------------------------------------------
 

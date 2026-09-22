@@ -153,3 +153,14 @@ True
 ```
 ---
     both
+
+### a subclass of a builtin is as true as the value it carries
+
+```python
+(python-run "class B(int):\n    pass\n\n\nclass C(list):\n    pass\n\n\nclass F(float):\n    pass\n\n\nclass S(str):\n    pass\n\n\nprint(not B(), not B(3), True if B() else False, not C(), not C([1]))\nprint(not F(), not F(1.5), not S(\"\"), not S(\"x\"), bool(B(7)))")
+```
+---
+```output
+True False False True False
+True False True False True
+```

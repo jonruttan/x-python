@@ -200,8 +200,9 @@
           ((eq? k (lit float)) n)
           ((eq? k (lit int)) (* n 1.0))
           ((%py-obj-is n)
-            (let ((m (%py-dunder n "__float__")))
-              (if (null? m) (%py-mfloat-refused n) (%py-mfloat (m)))))
+            (if (null? (%py-dunder n "__float__"))
+              (%py-mfloat-refused n)
+              (%py-obj-float n)))
           (#t (%py-mfloat-refused n)))))))
 (def %py-mfloat-refused
   (fn (_ v)

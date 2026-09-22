@@ -191,3 +191,21 @@ c
 ```
 ---
     [0, 2]
+
+### range takes ints: a bool, an int subclass, and nothing else
+
+```python
+(python-run "class B(int):\n    pass\n\n\ndef err(f):\n    try:\n        print(f())\n    except TypeError as e:\n        print(\"TypeError\", e)\n\n\nerr(lambda: list(range(True)))\nerr(lambda: list(range(B(2))))\nerr(lambda: list(range(2, 5)))\nerr(lambda: list(range(\"a\")))\nerr(lambda: list(range(1.5)))\nerr(lambda: list(range(0 for i in [])))\nerr(lambda: list(range(0, (0 for i in []))))\nerr(lambda: list(range(1, 2, 3, 4)))\nerr(lambda: list(range()))")
+```
+---
+```output
+[0]
+[0, 1]
+[2, 3, 4]
+TypeError 'str' object cannot be interpreted as an integer
+TypeError 'float' object cannot be interpreted as an integer
+TypeError 'generator' object cannot be interpreted as an integer
+TypeError 'generator' object cannot be interpreted as an integer
+TypeError range expected at most 3 arguments, got 4
+TypeError range expected at least 1 argument, got 0
+```

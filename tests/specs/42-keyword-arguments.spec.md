@@ -143,3 +143,16 @@ KeyError
 ['a', 'b,c']
 ['a b', 'c']
 ```
+
+### a positional argument after a keyword or ** is refused at parse time
+
+```python
+(python-run "for src in (\"print(1, a=2, 3)\", \"f(**a, b)\", \"f(*a, **b, *c)\", \"print(1, sep=' ', *[2])\"):\n    try:\n        exec(src)\n    except SyntaxError as e:\n        print(\"SyntaxError\", str(e).split(\" (\")[0])\n    except NameError as e:\n        print(\"NameError\", e)")
+```
+---
+```output
+SyntaxError positional argument follows keyword argument
+SyntaxError positional argument follows keyword argument unpacking
+SyntaxError iterable argument unpacking follows keyword argument unpacking
+1 2
+```

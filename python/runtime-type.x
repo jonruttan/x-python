@@ -308,6 +308,29 @@
                     (Err raise (lit type) "int() argument must be a number or string" ()))))))))))
     "int" (list "x" "base") 0 #f))
 
+; What an object answers through __float__, which float(), the float
+; conversions and math take only as a float; an object without one is refused
+; as float() refuses anything else, in CPython's words.
+(def %py-obj-float
+  (fn (_ v)
+    (let ((m (%py-dunder v "__float__")))
+      (if (null? m)
+        (%py-float-refuse v)
+        (let ((r (m)))
+          (if (%py-float-is r)
+            r
+            (Err raise (lit type)
+              (Str8 append (%py-class-name (%py-obj-class v))
+                (Str8 append ".__float__ returned non-float (type "
+                  (Str8 append (%py-class-name (%py-type-of r)) ")")))
+              ())))))))
+(def %py-float-refuse
+  (fn (_ v)
+    (Err raise (lit type)
+      (Str8 append "float() argument must be a string or a real number, not '"
+        (Str8 append (%py-class-name (%py-type-of v)) "'"))
+      ())))
+
 (def %py-float-ctor
   (fn (_ . a)
     (if (null? a)
@@ -319,16 +342,12 @@
           ((%py-str-is v) (%py-float-of-str (%ps->x (%py-str-cps v))))
           ; a buffer's own text, as int() reads one
           ((%py-buffer? v) (%py-float-of-str (%py-buffer-text v)))
-          ((%py-obj-is v)
-            (let ((m (%py-dunder v "__float__")))
-              (if (null? m)
-                (Err raise (lit type) "float() argument must be a number or string" ())
-                (m))))
+          ((%py-obj-is v) (%py-obj-float v))
           (#t
             (let ((k (%py-num-kind v)))
               (if (eq? k (lit float)) v
               (if (eq? k (lit int)) (* v 1.0)
-                (Err raise (lit type) "float() argument must be a number or string" ()))))))))))
+                (%py-float-refuse v))))))))))
 
 ; Python's truthiness, stated once: the empties and the zeros are false and
 ; everything else is true.  Objects and classes are unconditionally true.
@@ -347,12 +366,17 @@
       ((%py-arr-is v) (not (null? (%py-arr-el v))))
       ((%py-mv-is v) (< 0 (%py-mv-len v)))
       ((%py-dq-is v) (not (null? (%py-dq-el v))))
+      ; __bool__, then __len__, then the value a subclass of a builtin carries:
+      ; an int subclass at 0 is false, as its int is
       ((%py-obj-is v)
         (let ((b (%py-dunder v "__bool__")))
           (if (not (null? b))
             (%py-truthy (b))
             (let ((l (%py-dunder v "__len__")))
-              (if (null? l) #t (not (= (l) 0)))))))
+              (if (not (null? l))
+                (not (= (l) 0))
+                (let ((n (%py-obj-native v)))
+                  (if (null? n) #t (%py-truthy n))))))))
       ((%py-class-is v) #t)
       (#t (not (= v 0))))))
 
@@ -463,11 +487,45 @@
     (%seq (%py-at-most-one! "tuple" a)
       (if (null? a) (%py-tuple-new ()) (%py-tuple-new (%py-iter-elems (first a)))))))
 
+; type(x) is x's class; type(name, bases, dict) makes a class the way the
+; class statement does (%py-mkclass), the dict's entries as its rows and
+; object as the base when the tuple names none.
 (def %py-type-ctor
   (fn (_ . a)
-    (if (if (null? a) #t (not (null? (rest a))))
-      (Err raise (lit type) "type() takes 1 argument here" ())
-      (%py-type-of (first a)))))
+    (def n (%py-length a))
+    (match
+      ((= n 1) (%py-type-of (first a)))
+      ((= n 3) (%py-type-new (first a) (first (rest a)) (first (rest (rest a)))))
+      (#t (Err raise (lit type) "type() takes 1 or 3 arguments" ())))))
+; the dict may be a subclass of dict, an OrderedDict say: its entries are the
+; dict it carries
+(def %py-type-new
+  (fn (_ name bases attrs0)
+    (def attrs (%py-native-of attrs0))
+    (match
+      ((not (%py-str-is name)) (%py-type-new-refuse 1 "str" name))
+      ((not (%py-tuple-is bases)) (%py-type-new-refuse 2 "tuple" bases))
+      ((not (%py-dict? attrs)) (%py-type-new-refuse 3 "dict" attrs0))
+      (#t
+        (let ((bs (%py-tuple-elems bases)))
+          (%py-mkclass (%ps->x (%py-str-cps name))
+            (if (null? bs) (list %py-cls-object) bs)
+            (%py-class-rows-of (%py-dict-entries attrs))))))))
+; the class rows a dict's entries make: attribute names are the platform's
+(def %py-class-rows-of
+  (fn (self es)
+    (if (null? es) ()
+      (pair (pair (%py-attr-name! (first (first es))) (rest (first es)))
+        (self (rest es))))))
+(def %py-type-new-refuse
+  (fn (_ i what v)
+    (Err raise (lit type)
+      (Str8 append "type.__new__() argument "
+        (Str8 append (%number->str i)
+          (Str8 append " must be "
+            (Str8 append what
+              (Str8 append ", not " (%py-class-name (%py-type-of v)))))))
+      ())))
 
 (%py-sweep!)
 ; --- the class objects -------------------------------------------------------
