@@ -53,7 +53,23 @@
 ; and keeps the modules loadable one at a time, which is what the
 ; platform's linter does.
 (import python/util)
-; A sweep after each load; see python/util.x.
+; A sweep after each load; see python/util.x.  The tower's parts one at a
+; time, each swept: imported as one, x/num/tower is the largest load
+; between two sweeps by a distance (7.3 GB on x86-64 under x-lang 0.14.0,
+; against 1 GB for helium itself).  x/num/tower then finds its parts
+; loaded and adds its own generics.
+(import x/num/bigint)
+(%py-sweep!)
+(import x/num/float)
+(%py-sweep!)
+(import x/num/rational)
+(%py-sweep!)
+(import x/num/complex)
+(%py-sweep!)
+(import x/num/decimal)
+(%py-sweep!)
+(import x/type/generic)
+(%py-sweep!)
 (import x/num/tower)
 (%py-sweep!)
 (import x/type/dict)
