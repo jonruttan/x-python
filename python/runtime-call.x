@@ -1077,10 +1077,15 @@
       (if (null? a)
         (Err raise (lit type)
           "dir() with no arguments needs a namespace this runtime does not keep" ())
-        (%py-list-new
-          (%py-msort-by
-            (%py-dir-strs (%py-dir-uniq (%py-dir-of (first a)) ()) ())
-            %py-ident))))
+        ; an object's class may say what dir() lists (__dir__); a class is
+        ; listed by type's rule, the walk below, whatever its own __dir__ says
+        (let ((m (if (%py-obj-is (first a)) (%py-dunder (first a) "__dir__") ())))
+          (%py-list-new
+            (%py-msort-by
+              (if (null? m)
+                (%py-dir-strs (%py-dir-uniq (%py-dir-of (first a)) ()) ())
+                (%py-iter-elems (m)))
+              %py-ident)))))
     "dir" (list "object") 0 #f))
 
 ; `hasattr` is defined in terms of getattr in Python too: it is "does this

@@ -246,3 +246,13 @@ True
 compile SyntaxError
 5
 ```
+
+### dir() asks an object's class for __dir__, and lists a class by the walk
+
+```python
+(python-run "class Cud:\n    def __dir__(self):\n        return [\"c\", \"a\", \"b\"]\n\n\nclass Plain:\n    def __init__(self):\n        self.z = 1\n        self.y = 2\n\n\nprint(dir(Cud()), \"a\" in dir(Cud), [n for n in dir(Plain()) if not n.startswith(\"_\")])")
+```
+---
+```output
+['a', 'b', 'c'] False ['y', 'z']
+```

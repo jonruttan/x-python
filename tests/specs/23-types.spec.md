@@ -215,3 +215,19 @@ False
 True
 False
 ```
+
+### type(name, bases, dict) makes a class, and refuses in CPython's words
+
+```python
+(python-run "def err(f):\n    try:\n        print(f())\n    except TypeError as e:\n        print(\"TypeError\", e)\n\n\nA = type(\"A\", (), {\"a\": 1, \"b\": 2})\nprint(sorted(k for k in A.__dict__.keys() if not k.startswith(\"_\")), A().a, A.__name__)\nprint(type(\"Q\", (list,), {})([1, 2]) + [3], type(\"N\", (), {}).__name__)\n\n\nclass D(type):\n    pass\n\n\nd = D(\"foo\", (), {})\nprint(not d, True if d else False, d.__name__)\nerr(lambda: type(\"A\", ()))\nerr(lambda: type(1, (), {}))\nerr(lambda: type(\"A\", [], {}))\nerr(lambda: type(\"A\", (), 1))")
+```
+---
+```output
+['a', 'b'] 1 A
+[1, 2, 3] N
+False True foo
+TypeError type() takes 1 or 3 arguments
+TypeError type.__new__() argument 1 must be str, not int
+TypeError type.__new__() argument 2 must be tuple, not list
+TypeError type.__new__() argument 3 must be dict, not int
+```

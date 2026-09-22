@@ -680,10 +680,33 @@
       (%py-reverse acc)
       (self (+ i step) stop step (pair i acc)))))
 
+; A range argument is an int -- a bool as the int it is, a subclass of int as
+; the int it carries -- and anything else is refused in CPython's words.
+(def %py-range-int
+  (fn (_ v)
+    (let ((n (%py-boolnorm v)))
+      (let ((k (if (%py-obj-is n) (%py-obj-native n) n)))
+        (if (if (null? k) #f (eq? (%py-num-kind k) (lit int)))
+          k
+          (Err raise (lit type)
+            (Str8 append (Str8 append "'" (%py-class-name (%py-type-of v)))
+              "' object cannot be interpreted as an integer")
+            ()))))))
+(def %py-range-ints
+  (fn (self l) (if (null? l) () (pair (%py-range-int (first l)) (self (rest l))))))
 (def %py-range
-  (fn (_ . args)
+  (fn (_ . args0)
+    (def args (%py-range-ints args0))
+    (def n (%py-length args))
+    (match
+      ((= n 0) (Err raise (lit type) "range expected at least 1 argument, got 0" ()))
+      ((> n 3)
+        (Err raise (lit type)
+          (Str8 append "range expected at most 3 arguments, got " (%number->str n))
+          ()))
+      (#t ()))
     (if (null? args)
-      (Err raise (lit type) "range expected at least 1 argument" ())
+      ()
       (let ((start (if (null? (rest args)) 0 (first args)))
             (stop  (if (null? (rest args)) (first args) (first (rest args))))
             (step  (if (null? (rest args)) 1

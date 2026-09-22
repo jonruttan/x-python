@@ -883,16 +883,25 @@
           ((%py-kw-part? (first ps)) (self (rest ps)))
           ((%py-kwspread-part? (first ps)) (self (rest ps)))
           (#t (pair (first ps) (self (rest ps)))))))
+    ; Python's order: a positional before any keyword, a * before any **
     (def order-ok!
-      (fn (self ps seen-dstar)
+      (fn (self ps seen-kw seen-dstar)
         (match
           ((null? ps) ())
-          ((%py-kwspread-part? (first ps)) (self (rest ps) #t))
-          ((if seen-dstar (%py-spread-part? (first ps)) #f)
+          ((%py-kwspread-part? (first ps)) (self (rest ps) seen-kw #t))
+          ((%py-kw-part? (first ps)) (self (rest ps) #t seen-dstar))
+          ((%py-spread-part? (first ps))
+            (if seen-dstar
+              (Err raise (lit syntax)
+                "iterable argument unpacking follows keyword argument unpacking" ())
+              (self (rest ps) seen-kw seen-dstar)))
+          (seen-dstar
             (Err raise (lit syntax)
-              "iterable argument unpacking follows keyword argument unpacking" ()))
-          (#t (self (rest ps) seen-dstar)))))
-    (order-ok! parts #f)
+              "positional argument follows keyword argument unpacking" ()))
+          (seen-kw
+            (Err raise (lit syntax) "positional argument follows keyword argument" ()))
+          (#t (self (rest ps) seen-kw seen-dstar)))))
+    (order-ok! parts #f #f)
     (def kw-forms (kws parts))
     (def kw-spreads (spreads parts))
     ; the keyword list, with every spread dict merged onto the written ones
