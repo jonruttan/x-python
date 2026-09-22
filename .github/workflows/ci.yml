@@ -110,27 +110,6 @@ jobs:
         run: |
           make engine
           make
-      # The source boot's load with the heap counted at every sweep: the
-      # count before a collect is the size of the load since the last one,
-      # and the sweeps' order (python/base.x, python/runtime.x) names the
-      # file.  Under the same cap as the check; a load past it prints
-      # "allocation failed" and the counts up to there stand.
-      - name: The source boot's heap at every sweep
-        run: |
-          B="$PWD"
-          cd .x-lang
-          form='(do (import-path! "'"$B"'") (import python/util)
-            (def %count (prim-ref (lit heap) (lit count)))
-            (def %n (pair 0 ()))
-            (set! %py-sweep! (fn (_)
-              (do (%set-first! %n (+ 1 (first %n)))
-                  (display "sweep ") (display (first %n)) (display ": ")
-                  (display (guard (_ "?") (%count))) (newline)
-                  (%py-image-collect))))
-            (import python/base))'
-          ( ulimit -v 12000000; /usr/bin/time -f "base: %e s, max RSS %M KB, exit %x" \
-              sh x.sh -q --no-image -l he -c "$form" </dev/null >"$RUNNER_TEMP/base.out" 2>"$RUNNER_TEMP/base.err" ) || true
-          cat "$RUNNER_TEMP/base.out"; tail -3 "$RUNNER_TEMP/base.err"
       # Under time -v for the peak: the bundle sweeps between its files on a
       # source boot (python/util.x), and a load that stopped sweeping does
       # not fit this runner.
