@@ -221,6 +221,7 @@
             (Err raise (lit type) "this callable takes no keyword arguments" ())
             (apply (%py-bound-fn f)
               (pair (%py-bound-self f) (%py-kw-args (%py-sig-shift sig) pos kws))))))
+      ((not (if (%py-fn-is f) #t (%py-obj-is f))) (%py-call-refuse f))
       (#t
         (let ((sig (%py-sig-of f)))
           (if (null? sig)
@@ -600,6 +601,32 @@
       ((%py-class-is v) #t)
       ((%py-obj-is v) (not (null? (%py-dunder v "__call__"))))
       (#t #f))))
+
+; Every call goes through one door.  The engine applies a closure, and an
+; instance through its type's call handler -- but anything else it answers as
+; data: `1()` was the list (1), and a list called with no argument reached the
+; handler that subscripts it and died on the missing index.  So a call asks
+; first, and refuses in CPython's words.  Each callable kind is applied by its
+; own arm: `apply` takes a closure only, and crashes on an instance.
+(def %py-apply-any
+  (fn (_ f args)
+    (match
+      ((%py-fn-is f) (apply f args))
+      ((%py-class-is f) (%py-instantiate f args))
+      ; the object's own door, which asks __call__ or names the class
+      ((%py-obj-is f) (%py-obj-call f args))
+      ; a bound method: the receiver goes first, then the arguments
+      ((%py-bound-is f) (apply (%py-bound-fn f) (pair (%py-bound-self f) args)))
+      (#t (%py-call-refuse f)))))
+; the plain call the parser emits
+(def %py-call
+  (fn (_ f . args) (%py-apply-any f args)))
+(def %py-call-refuse
+  (fn (_ f)
+    (Err raise (lit type)
+      (Str8 append (Str8 append "'" (%py-class-name (%py-type-of f)))
+        "' object is not callable")
+      ())))
 
 ; id() is an IDENTITY TABLE, not an address: the engine hands out no
 ; addresses, and what Python promises is only that the number is unique and

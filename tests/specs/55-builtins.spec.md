@@ -77,6 +77,35 @@ True
 True
 ```
 
+### calling a non-callable is a TypeError naming its type, and callable() agrees
+
+```python
+(python-run "def err(f):\n    try:\n        print(\"no error\", repr(f()))\n    except TypeError as e:\n        print(e)\n\n\nx = 1\nlst = [1]\n\n\ndef deco(f):\n    return 1\n\n\nerr(lambda: 1())\nerr(lambda: x())\nerr(lambda: x(2))\nerr(lambda: x(*[2]))\nerr(lambda: x(k=2))\nerr(lambda: None())\nerr(lambda: 1.5())\nerr(lambda: \"a\"())\nerr(lambda: lst())\nerr(lambda: lst(0))\nerr(lambda: {}())\nerr(lambda: (1,)())\nerr(lambda: b\"a\"())\nerr(lambda: True())\nerr(lambda: {1}())\nerr(lambda: (1 << 70)())\n\n\nclass A:\n    pass\n\n\nclass B:\n    def __call__(self, z):\n        return z * 2\n\n\nerr(lambda: A()())\nerr(lambda: B()(4))\nprint(callable(A()), callable(B()), callable(x), callable(lst))\n\n\n@deco\ndef f():\n    pass\n\n\nerr(lambda: f())")
+```
+---
+```output
+'int' object is not callable
+'int' object is not callable
+'int' object is not callable
+'int' object is not callable
+'int' object is not callable
+'NoneType' object is not callable
+'float' object is not callable
+'str' object is not callable
+'list' object is not callable
+'list' object is not callable
+'dict' object is not callable
+'tuple' object is not callable
+'bytes' object is not callable
+'bool' object is not callable
+'set' object is not callable
+'int' object is not callable
+'A' object is not callable
+no error 8
+False True False False
+'int' object is not callable
+```
+
 ### attributes and class bodies
 
 ```python

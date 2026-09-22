@@ -811,11 +811,12 @@
         (first args)
         (%py-instantiate e args))
       e)))
-; raising what was thrown: a class instantiates, an instance is itself,
-; anything else is Python's TypeError
+; raising what was thrown, or what a raise statement names: a class derived
+; from BaseException instantiates, an instance of one is itself, anything
+; else -- 1, int, an ordinary object -- is Python's TypeError
 (def %py-raise-any
   (fn (_ e)
-    (if (if (%py-class-is e) #t (if (%py-obj-is e) (%py-subclass? (%py-obj-class e) %py-exc-BaseException) #f))
+    (if (%py-thrown-is? e %py-exc-BaseException)
       (error (%py-exc-instance e ()))
       (Err raise (lit type) "exceptions must derive from BaseException" ()))))
 ; is a thrown value (class or instance) of this exception class?
@@ -1023,20 +1024,8 @@
     (go (%py-iter-elems it) (if (null? st) 0 (first st)))))
 
 ; map(f, it) is LAZY -- a generator pulling from its source -- so a
-; StopIteration raised by f ends it where a yield from expects
-; APPLY WANTS A CLOSURE: a class is called through its own door, so
-; map(tuple, ...) and sorted(key=SomeClass) work like any other callable.
-(def %py-apply-any
-  (fn (_ f args)
-    (match
-      ((%py-class-is f) (%py-instantiate f args))
-      ((%py-obj-is f)
-        (let ((m (%py-dunder f "__call__")))
-          (if (null? m) (Err raise (lit type) "object is not callable" ()) (apply m args))))
-      ; a bound method: the receiver goes first, then the arguments
-      ((%py-bound-is f) (apply (%py-bound-fn f) (pair (%py-bound-self f) args)))
-      (#t (apply f args)))))
-
+; StopIteration raised by f ends it where a yield from expects.  f is called
+; through %py-apply-any, so map(tuple, ...) works like any other callable.
 ; map(f, a, b, ...) walks the sources in step and stops with the shortest
 (def %py-pull-all
   (fn (self srcs acc)
