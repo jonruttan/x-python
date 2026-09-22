@@ -50,7 +50,8 @@
 ; boot that never asked held all of it, which no 16 GB machine survives.
 ; Only the code that knows its own quiet points may ask: this bundle roots
 ; every compiled state it keeps (python/tokens.x), so a module of it can
-; sweep between the loads it drives.
+; sweep between the loads it drives, and its largest files sweep between
+; their own sections.
 ;   A session loaded from a state image skips the sweeps.  Its imports are
 ; no-ops and its heap is the image's, swept once by the writer; the recache
 ; hook below runs only after a load (x-lang lib/x/boot/reflect.x), so the

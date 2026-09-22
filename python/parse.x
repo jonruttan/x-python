@@ -131,6 +131,11 @@
           ; %py-int-of-str promotes through the tower digit by digit.
           (#t (%py-int-of-str t)))))))
 
+; A sweep before each section: this file's load is the largest between
+; two sweeps by a distance (138M objects on x-lang main, past a 12 GB
+; cap on 0.14.0, in a helium boot on x86-64), and a section boundary
+; is a quiet point.  See python/util.x.
+(%py-sweep!)
 ; --- Token helpers -----------------------------------------------------------
 ; Guarded for the same reason as python/indent.x's %py-tok-type: (first 2)
 ; segfaults rather than raising (x-engine-c#16), and a bare value can still
@@ -181,6 +186,7 @@
           (%look table))
         ()))))
 
+(%py-sweep!)
 ; --- Signed numbers in operator position ------------------------------------
 ; The tokenizer claims `+2` and `-3` as number tokens, because that is the only
 ; way to outscore the sexp integer type (see python/tokens.x).  Here is where
@@ -240,6 +246,7 @@
         (list "//" (lit %py-floordiv)) (list "%" (lit %py-mod))
         (list "@" (lit %py-matmul))))
 
+(%py-sweep!)
 ; --- The ladder --------------------------------------------------------------
 (def %py-comparison ())
 (def %py-bor ())
@@ -313,6 +320,7 @@
 (set! %py-band (fn (_ toks) (%py-left toks %py-band-ops %py-shift)))
 (set! %py-shift (fn (_ toks) (%py-left toks %py-shift-ops %py-sum)))
 
+(%py-sweep!)
 ; --- or / and / not ----------------------------------------------------------
 ;
 ; PYTHON'S and/or RETURN AN OPERAND, NOT A BOOLEAN.  `[] or 5` is 5 and
@@ -519,6 +527,7 @@
           (#t (pair acc more)))))
     (%go (first %a) (rest %a))))
 
+(%py-sweep!)
 ; --- Groups ------------------------------------------------------------------
 ;
 ; A BRACKETED RUN ARRIVES ALREADY NESTED.  python/tokens.x reads it through the
@@ -547,6 +556,7 @@
 ; that ran out at EOF.  python/tokens.x records the fact; judging it is here.
 (def %py-group-closer (fn (_ t) (first (rest (rest (rest t))))))
 
+(%py-sweep!)
 ; --- A group has to have MET ITS CLOSER --------------------------------------
 ;
 ; The reader takes a bracket's contents by recursing, so a group that is never
@@ -877,6 +887,7 @@
             (list (lit pair) (%py-expr-of (first kv)) (%py-expr-of (rest kv)))
             acc))))))
 
+(%py-sweep!)
 ; --- Comprehensions ----------------------------------------------------------
 ;
 ; A comprehension is a bracket group whose contents contain a top-level `for` --
@@ -1201,6 +1212,7 @@
           #f))
       #f)))
 
+(%py-sweep!)
 ; --- f-strings ---------------------------------------------------------------
 ;
 ; AN f-STRING IS A JOIN OF PARTS, expanded at parse time: literal text between
@@ -1725,6 +1737,7 @@
 (def python-parse-expr
   (fn (_ toks) (%seq (%py-groups-ok toks) (%py-test toks))))
 
+(%py-sweep!)
 ; --- Statements --------------------------------------------------------------
 ;
 ; A Python statement is not an expression, and the shapes it compiles to say so:
@@ -1841,6 +1854,7 @@
         (let ((r (%py-stmt t)))
           (self (rest r) (pair (first r) acc)))))))
 
+(%py-sweep!)
 ; --- import ------------------------------------------------------------------
 ;
 ; `import a`, `import a as b`, `from a import x, y`, `from a import x as z`
@@ -1935,6 +1949,7 @@
               (pair (list (lit def) (%py-name->sym attr)
                       (list (lit %py-import-from) name attr)) acc))))))))
 
+(%py-sweep!)
 ; --- with --------------------------------------------------------------------
 ;
 ; `with EXPR as NAME:` binds what __enter__ answers and runs the body inside a
@@ -2215,6 +2230,7 @@
                 (list (lit %py-unpack) (lit %py-item) (%py-count syms))))
         (pair (lit do) (%py-unpack-sets syms 0 ()))))))
 
+(%py-sweep!)
 ; --- break and continue ------------------------------------------------------
 ;
 ; Both are ESCAPES -- the shape `return` already uses: the loop binds a
@@ -2386,6 +2402,7 @@
                     (first e))
                   (rest e))))))))))
 
+(%py-sweep!)
 ; --- try / except / finally --------------------------------------------------
 ;
 ; `try` compiles to x's `guard`, which binds the raised value and runs a handler
@@ -2448,6 +2465,7 @@
         rest-sym
         (pair (first names) (self (rest names) rest-sym))))))
 
+(%py-sweep!)
 ; --- Parameters with defaults and a *rest ------------------------------------
 ; (names defaults rest-name): names are strings in declaration order, required
 ; first; defaults is ((sym . EXPR) ...) for the optional tail; rest-name is the
@@ -2811,6 +2829,7 @@
               (list (lit %py-raise) (list (lit %py-exc-instance) (%py-name-read (%py-val n)) ()))
               (rest toks))))))))
 
+(%py-sweep!)
 ; --- decorators --------------------------------------------------------------
 ;
 ; `@deco` before a def is a CALL: Python's rule is f = deco(f), applied bottom
@@ -2835,6 +2854,7 @@
   (fn (self ds f)
     (if (null? ds) f (list (first ds) (self (rest ds) f)))))
 
+(%py-sweep!)
 ; --- class -------------------------------------------------------------------
 ;
 ; A class body is a run of `def`s.  Each one is parsed by %py-def, which emits
@@ -2951,6 +2971,7 @@
                 (%py-class-of n (rest after) (pair (lit list) es))))
             (%py-class-of n after (list (lit list) (lit %py-cls-object)))))))))
 
+(%py-sweep!)
 ; --- tuple unpacking ---------------------------------------------------------
 ;
 ; `a, b = f()` is the reason tuples earn their keep -- it is how a Python
