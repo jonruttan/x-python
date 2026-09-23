@@ -594,10 +594,34 @@
       (Err raise (lit type) "iter() returned non-iterator" ())
       (%py-iter-elems it))))
 
+; THE OLD SEQUENCE PROTOCOL: an object with __getitem__ and no __iter__ is read
+; at 0, 1, 2, ... and ends where __getitem__ raises IndexError or StopIteration.
+; Read lazily, as CPython reads it: a thunk answering the next item or
+; %py-gen-done, which is what a cursor source holds (%py-iter-open).
+(def %py-getitem-steps
+  (fn (_ gi)
+    (def at (pair 0 ()))
+    (fn (_)
+      (guard (e (if (if (%py-exc-match e %py-exc-IndexError) #t
+                      (%py-exc-match e %py-exc-StopIteration))
+                  %py-gen-done
+                  (error e)))
+        (%py-step-at! at (gi (first at)))))))
+(def %py-step-at! (fn (_ at v) (%seq (%set-first! at (+ (first at) 1)) v)))
+(def %py-steps-drain
+  (fn (self nx acc)
+    (let ((v (nx)))
+      (if (same? v %py-gen-done) (%py-reverse acc) (self nx (pair v acc))))))
+; 'int' object is not iterable
+(def %py-not-iterable
+  (fn (_ v)
+    (Str8 append "'"
+      (Str8 append (%py-class-name (%py-type-of v)) "' object is not iterable"))))
+
 ; AN OBJECT ITERATES BY ITS PROTOCOL: __iter__ hands back an iterator whose
 ; __next__ is called until it raises StopIteration -- materialized here into
 ; the element list every consumer already walks.  Without __iter__, the old
-; sequence protocol: __getitem__ from 0 until IndexError.
+; sequence protocol (%py-getitem-steps).
 ; `who` is %py-iter-elems' door, carried one hop further: an object with
 ; neither dunder refuses in the caller's words too.
 (def %py-obj-elems
@@ -621,19 +645,8 @@
                 (go ())))))
         (let ((gi (%py-dunder v "__getitem__")))
           (if (null? gi)
-            (Err raise (lit type)
-              (if (null? who) "object is not iterable" (first who)) ())
-            (do
-              (def go
-                (fn (self i acc)
-                  (let ((r (guard (e (if (%py-exc-match e %py-exc-IndexError)
-                                          %py-NotImplemented
-                                          (error e)))
-                              (gi i))))
-                    (if (eq? r %py-NotImplemented)
-                      (%py-reverse acc)
-                      (self (+ i 1) (pair r acc))))))
-              (go 0 ()))))))))
+            (Err raise (lit type) (if (null? who) (%py-not-iterable v) (first who)) ())
+            (%py-steps-drain (%py-getitem-steps gi) ())))))))
 
 (def %py-iter-elems
   (fn (_ v . who)
@@ -656,13 +669,13 @@
         (%py-bytes-list v))
       ; a generator runs to its end; every consumer here wants the whole list
       ((%py-gen-is v) (%py-gen-drain v ()))
-      ; A CALLER MAY NAME ITSELF IN THE REFUSAL.  "object is not iterable" is
-      ; true and says nothing about what was being attempted; `','.join(5)`
+      ; A CALLER MAY NAME ITSELF IN THE REFUSAL.  "'int' object is not
+      ; iterable" says nothing about what was being attempted; `','.join(5)`
       ; wants to talk about join.  Taken as a trailing argument so that the
       ; thirty-odd existing call sites stay exactly as they are -- one
       ; implementation with a door, not a copy per caller.
       (#t (Err raise (lit type)
-            (if (null? who) "object is not iterable" (first who)) ())))))
+            (if (null? who) (%py-not-iterable v) (first who)) ())))))
 
 ; range(stop) / range(start, stop) / range(start, stop, step)
 ;

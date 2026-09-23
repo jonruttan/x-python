@@ -79,3 +79,57 @@ None
 ```
 ---
     None
+
+## the sequence protocol and StopIteration
+
+### a class with only __getitem__ is read a step at a time, to IndexError or StopIteration
+
+```python
+(python-run "class Seq14:\n    def __getitem__(self, i):\n        print(\"get\", i)\n        if i > 1:\n            raise IndexError\n        return i * 10\n\n\nfor v in Seq14():\n    print(\"body\", v)\nit14 = iter(Seq14())\nprint(next(it14), next(it14))\ntry:\n    next(it14)\nexcept StopIteration as e:\n    print(\"StopIteration\", e.args)\nprint(list(Seq14()))\n\n\nclass Stop14:\n    def __getitem__(self, i):\n        if i == 2:\n            raise StopIteration(99)\n        return i\n\n\nprint(list(Stop14()), [x for x in Stop14()])\n\n\nclass Bad14:\n    def __getitem__(self, i):\n        raise TypeError(\"no\")\n\n\ntry:\n    for x in Bad14():\n        pass\nexcept TypeError as e:\n    print(\"TypeError\", e)")
+```
+---
+```output
+get 0
+body 0
+get 1
+body 10
+get 2
+get 0
+get 1
+0 10
+get 2
+StopIteration ()
+get 0
+get 1
+get 2
+[0, 10]
+[0, 1] [0, 1]
+TypeError no
+```
+
+### map, enumerate and filter end with the StopIteration their source raised
+
+```python
+(python-run "class Src15:\n    def __iter__(self):\n        return self\n\n    def __next__(self):\n        raise StopIteration(42)\n\n\ndef gen15(x):\n    return x\n    yield\n\n\nfor label, make in ((\"map\", lambda: map(lambda v: v, Src15())),\n                    (\"enumerate\", lambda: enumerate(Src15())),\n                    (\"filter\", lambda: filter(None, Src15())),\n                    (\"map of a generator\", lambda: map(str, gen15(7)))):\n    try:\n        next(make())\n    except StopIteration as e:\n        print(label, e.args)\nprint(list(map(lambda v: v * 2, [1, 2])), list(enumerate(\"ab\", 1)),\n      list(filter(None, [0, 1, 2])), list(map(str, gen15(7))))")
+```
+---
+```output
+map (42,)
+enumerate (42,)
+filter (42,)
+map of a generator (7,)
+[2, 4] [(1, 'a'), (2, 'b')] [1, 2] []
+```
+
+### what is not iterable is refused by name, at the call
+
+```python
+(python-run "for src in (\"iter(5)\", \"iter(None)\", \"list(3.5)\"):\n    try:\n        eval(src)\n    except TypeError as e:\n        print(\"TypeError\", e)\ntry:\n    for x in 5:\n        pass\nexcept TypeError as e:\n    print(\"TypeError\", e)")
+```
+---
+```output
+TypeError 'int' object is not iterable
+TypeError 'NoneType' object is not iterable
+TypeError 'float' object is not iterable
+TypeError 'int' object is not iterable
+```
