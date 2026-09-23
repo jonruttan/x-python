@@ -465,7 +465,11 @@
     (def %base
       (if (%py-kw? (if (null? toks) () (first toks)) "await")
         (if (null? (first %py-in-async))
-          (Err raise (lit syntax) "await outside an async function" ())
+          (Err raise (lit syntax)
+            (if (eq? (first %py-fn-depth) 0)
+              "'await' outside function"
+              "'await' outside async function")
+            ())
           (let ((r (%py-postfix (rest toks))))
             (pair (list (lit %py-yield-from) (lit %py-gen) (first r)) (rest r))))
         (%py-postfix toks)))
@@ -489,6 +493,9 @@
 ; BOTH LITERAL KINDS ARE LISTS NOW -- a bytes literal's bytes, a str
 ; literal's utf-8 -- so adjacency is one join.
 (def %py-lit-join (fn (_ a b) (%py-append a b)))
+; `'a' b'b'`: adjacent literals join, and a str and a bytes cannot
+(def %py-mixed-literals
+  (fn (_) (Err raise (lit syntax) "cannot mix bytes and nonbytes literals" ())))
 
 ; A RUN OF ADJACENT TEXT LITERALS, which is where an f-string joins the
 ; others: Python concatenates the pieces, and one f-string among them makes
@@ -708,19 +715,25 @@
 ; `yield`, `yield v`, `yield a, b`, `yield from it`: an expression whose
 ; value is what send() passes back in.  %py-gen is the enclosing generator
 ; body's own parameter (see %py-def).
+; A yield talks to the generator its function makes, so outside a def or a
+; lambda there is none to talk to.
 (def %py-yield-expr
   (fn (_ toks)
     (let ((after (rest toks)))
-      (if (%py-kw? (if (null? after) () (first after)) "from")
-        (let ((r (%py-test (rest after))))
-          (pair (list (lit %py-yield-from) (lit %py-gen) (first r)) (rest r)))
-        (if (match
-              ((null? after) #t)
-              ((eq? (%py-tag (first after)) (lit tok-newline)) #t)
-              ((%py-op-is? (first after) ")") #t)
-              ((%py-op-is? (first after) "=") #t)
-              (#t (%py-op-is? (first after) ",")))
-          (pair (list (lit %py-yield) (lit %py-gen) ()) after)
+      (match
+        ((eq? (first %py-fn-depth) 0)
+          (Err raise (lit syntax) "'yield' outside function" ()))
+        ((%py-kw? (if (null? after) () (first after)) "from")
+          (let ((r (%py-test (rest after))))
+            (pair (list (lit %py-yield-from) (lit %py-gen) (first r)) (rest r))))
+        ((match
+           ((null? after) #t)
+           ((eq? (%py-tag (first after)) (lit tok-newline)) #t)
+           ((%py-op-is? (first after) ")") #t)
+           ((%py-op-is? (first after) "=") #t)
+           (#t (%py-op-is? (first after) ",")))
+          (pair (list (lit %py-yield) (lit %py-gen) ()) after))
+        (#t
           (let ((r (%py-exprlist after)))
             (pair (list (lit %py-yield) (lit %py-gen) (first r)) (rest r))))))))
 
@@ -736,7 +749,9 @@
             (self (rest ts) (pair (first ts) acc))))))
     (let ((sp (split (rest toks) ())))
       (let ((sig (%py-params-of (first sp)))
-            (b (%py-scoped (%py-param-syms (%py-params-of (first sp))) (fn (_) (%py-test (rest sp))))))
+            ; a lambda body is a function's, for a yield in it (%py-yield-expr)
+            (b (%py-scoped (%py-param-syms (%py-params-of (first sp)))
+                 (fn (_) (%py-in-fn (fn (_) (%py-test (rest sp))))))))
         (def names (first sig))
         (def syms (%py-strs->syms names))
         (def dflts (first (rest sig)))
@@ -1204,13 +1219,19 @@
           ; repeat on every evaluation.
           ((%py-text-tok? t)
             (let ((r (%py-text-run toks ())))
-              (pair (%py-text-form (first r)) (rest r))))
+              (if (if (null? (rest r)) #f
+                    (eq? (%py-tag (first (rest r))) (lit tok-bytes)))
+                (%py-mixed-literals)
+                (pair (%py-text-form (first r)) (rest r)))))
           ; THE VALUE IS A BYTE LIST, so it is emitted as one: a (list ...)
           ; form the evaluator builds, not a datum standing where a form
           ; belongs.
           ((eq? (%py-tag t) (lit tok-bytes))
             (let ((r (%py-adjacent (lit tok-bytes) (%py-val t) (rest toks))))
-              (pair (list (lit %py-bytes-new) (pair (lit list) (first r))) (rest r))))
+              (if (if (null? (rest r)) #f (%py-text-tok? (first (rest r))))
+                (%py-mixed-literals)
+                (pair (list (lit %py-bytes-new) (pair (lit list) (first r)))
+                  (rest r)))))
           ((%py-super-call? toks)
             (match
               ; super(type, obj): the arguments go through to the runtime
@@ -1854,7 +1875,7 @@
             (rest sp)))
       (let ((t (%py-skip-nl (rest toks))))
         (if (not (%py-block? (if (null? t) () (first t))))
-          (Err raise (lit syntax) "expected an indented block" ())
+          (Err raise (lit indent) "expected an indented block" ())
           (pair
             (%py-body-seq (first (%py-stmts (%py-semi->nl (%py-block-toks (first t))) ())))
             (rest t))))))))
@@ -2098,7 +2119,14 @@
       ; the parser and plain names to the tokenizer, which is where that
       ; distinction belongs.
       (match
+        ; a compound header takes its block with it (%py-block), so a block
+        ; that reaches here was indented with nothing to open it
+        ((%py-block? t) (Err raise (lit indent) "unexpected indent" ()))
         ((%py-kw? t "class") (%py-class-stmt (rest toks)))
+        ; a declaration compiles to nothing: %py-def reads them off the body
+        ((if (%py-kw? t "nonlocal") (eq? (first %py-fn-depth) 0) #f)
+          (Err raise (lit syntax)
+            "nonlocal declaration not allowed at module level" ()))
         ((if (%py-kw? t "global") #t (%py-kw? t "nonlocal"))
           (let ((sp (%py-line-of (rest toks) ()))) (pair () (rest sp))))
         ((%py-kw? t "with")
@@ -2537,11 +2565,21 @@
     (def go
       (fn (self parts names dflts rest-name kw-name kwonly kw?)
         (if (null? parts)
-          (list (%py-reverse names) (%py-reverse dflts) rest-name kw-name
-            (%py-reverse kwonly))
+          (%py-params-done (%py-reverse names) (%py-reverse dflts) rest-name kw-name
+            (%py-reverse kwonly) kw?)
           (let ((p (first parts)))
             (let ((t (first p)))
               (match
+                ((not (null? kw-name))
+                  (Err raise (lit syntax)
+                    "arguments cannot follow var-keyword argument" t))
+                ; a second star: CPython names a *name, and not a bare *
+                ((if kw? (%py-op-is? t "*") #f)
+                  (Err raise (lit syntax)
+                    (if (null? (rest p))
+                      "invalid syntax"
+                      "* argument may appear only once")
+                    t))
                 ((%py-op-is? t "**")
                   (let ((n (if (null? (rest p)) () (first (rest p)))))
                     (if (not (eq? (%py-tag n) (lit tok-name)))
@@ -2564,11 +2602,40 @@
                     (if (null? d)
                       (if (null? dflts)
                         (self (rest parts) (pair (%py-val t) names) dflts rest-name kw-name kwonly kw?)
-                        (Err raise (lit syntax) "non-default argument follows default argument" t))
+                        (Err raise (lit syntax)
+                          "parameter without a default follows parameter with a default"
+                          t))
                       (self (rest parts) (pair (%py-val t) names)
                         (pair (pair (%py-name->sym (%py-val t)) (first d)) dflts)
                         rest-name kw-name kwonly kw?))))))))))
     (go (%py-comma-split toks () ()) () () () () () #f)))
+
+; The parsed list, once CPython's rules for its whole shape hold: a bare `*`
+; has a keyword-only parameter after it, and no name appears twice.
+(def %py-params-done
+  (fn (_ names dflts rest-name kw-name kwonly star?)
+    (%seq
+      (if (if star? (if (null? rest-name) (null? kwonly) #f) #f)
+        (Err raise (lit syntax) "named arguments must follow bare *" ())
+        (%py-no-duplicate-param (%py-param-strs names rest-name kw-name kwonly)))
+      (list names dflts rest-name kw-name kwonly))))
+; every name a parameter list binds, as text
+(def %py-param-strs
+  (fn (_ names rest-name kw-name kwonly)
+    (%py-append names
+      (%py-append (if (null? rest-name) () (list rest-name))
+        (%py-append (if (null? kw-name) () (list kw-name))
+          (%py-kwo-names kwonly ()))))))
+(def %py-no-duplicate-param
+  (fn (self ns)
+    (match
+      ((null? ns) ())
+      ((%py-str-seen? (first ns) (rest ns))
+        (Err raise (lit syntax)
+          (Str8 append "duplicate argument '"
+            (Str8 append (first ns) "' in function definition"))
+          ()))
+      (#t (self (rest ns))))))
 
 ; The default after a parameter name as a one-element list, or nil when there
 ; is none -- a list, because a default of None is the form () and would
@@ -2788,11 +2855,25 @@
           (pair (first b) (rest b)))
         (pair () t)))))
 
+; A bare `except:` catches everything, so a clause after it could never run:
+; answers (clauses . rest) as %py-except-clauses gave it, or refuses.
+(def %py-default-except-last
+  (fn (_ r)
+    (def check
+      (fn (self cs)
+        (match
+          ((null? cs) ())
+          ((null? (rest cs)) ())
+          ((null? (first (first cs)))
+            (Err raise (lit syntax) "default 'except:' must be last" ()))
+          (#t (self (rest cs))))))
+    (%seq (check (first r)) r)))
+
 (def %py-try
   (fn (_ toks)
     ; positioned just after the `try` keyword
     (let ((b (%py-block toks)))
-      (let ((cs (%py-except-clauses (rest b) ())))
+      (let ((cs (%py-default-except-last (%py-except-clauses (rest b) ()))))
        (let ((e (%py-try-else (rest cs))))
         (let ((f (%py-finally (rest e))))
           (if (if (null? (first cs)) (null? (first f)) #f)
@@ -3335,6 +3416,11 @@
                 (%py-append (if (null? kw-sym) withrest (%py-append withrest (list kw-sym)))
                   kwo-syms)))
             (def after (%py-skip-annotation (rest (rest toks))))
+            (def decls (%py-decls-of (%py-block-contents after) #f () ()))
+            (%py-decl-checks! (%py-param-strs names rest-name kw-name kwonly)
+              (first decls) (rest decls))
+            ; this body's own global and nonlocal names, which it does not bind
+            (def declared (%py-strs->syms (%py-append (first decls) (rest decls))))
             ; taken and cleared here: a plain def nested in this body is plain
             (def %py-async-me (pair (first %py-async-def) ()))
             (def %py-async-outer (first %py-in-async))
@@ -3343,11 +3429,12 @@
             (let ((outer-self (first %py-current-self)))
               (%set-first! %py-current-self (if (null? syms) () (first syms)))
               ; the parameters and the names the body binds, less the ones it
-              ; declares global, are this body's own for %py-name-read
+              ; declares global or nonlocal, are this body's own for
+              ; %py-name-read
               (let ((b (%py-scoped
                          (%py-append all-syms
                            (%py-minus (%py-assign-targets (%py-block-contents after) ())
-                             (%py-global-names (%py-block-contents after) ())))
+                             declared))
                          (fn (_) (%py-in-fn (fn (_) (%py-block after)))))))
                 ; A FUNCTION'S ASSIGNMENTS ARE ITS OWN.  The module-level scan
                 ; skips def bodies, so their targets are hoisted HERE instead,
@@ -3357,7 +3444,7 @@
                 ; Parameters are already bound and are not re-declared.
                 (let ((locals (%py-minus
                                 (%py-dedupe () (%py-assign-targets (%py-block-contents after) ()) ())
-                                (%py-append (%py-global-names (%py-block-contents after) ()) all-syms))))
+                                (%py-append declared all-syms))))
                   (def body0
                     (if (null? locals) (first b) (list (lit let) (%py-lets locals ()) (first b))))
                   ; Every argument arrives in the %py-more tail and the prelude
@@ -3411,34 +3498,75 @@
                           (list (lit let) (%py-dflt-lets all-dflts 0) sig-form))))
                     (rest b)))))))))))
 
-; Is there a `yield` in this body?  Groups and blocks are searched, except
-; the block of a nested def or class, whose yields are its own.
-; The names declared global (or nonlocal) anywhere in a body, as symbols.
-(def %py-global-names
-  (fn (self toks acc)
-    (if (null? toks) acc
+; The names a body declares `global` and `nonlocal`, apart, as text:
+; (GLOBALS . NONLOCALS).  A nested def or class declares for itself, so its
+; block is not read; one written on its header line ends at the newline.
+(def %py-decls-of
+  (fn (self toks skip gs ns)
+    (if (null? toks) (pair gs ns)
       (let ((t (first toks)))
-        (if (if (%py-kw? t "global") #t (%py-kw? t "nonlocal"))
-          (let ((sp (%py-line-of (rest toks) ())))
-            (def names
-              (fn (self ts a)
-                (if (null? ts) a
-                  (if (eq? (%py-tag (first ts)) (lit tok-name))
-                    (self (rest ts) (pair (%py-name->sym (%py-val (first ts))) a))
-                    (self (rest ts) a)))))
-            (self (rest sp) (names (first sp) acc)))
-          (if (%py-block? t)
-            (self (rest toks) (self (%py-block-toks t) acc))
-            (self (rest toks) acc)))))))
+        (match
+          ((if skip #f (%py-kw? t "global"))
+            (let ((sp (%py-line-of (rest toks) ())))
+              (self (rest sp) skip (%py-decl-names (first sp) gs) ns)))
+          ((if skip #f (%py-kw? t "nonlocal"))
+            (let ((sp (%py-line-of (rest toks) ())))
+              (self (rest sp) skip gs (%py-decl-names (first sp) ns))))
+          ((if (%py-kw? t "def") #t (%py-kw? t "class")) (self (rest toks) #t gs ns))
+          ((eq? (%py-tag t) (lit tok-newline)) (self (rest toks) #f gs ns))
+          ((%py-block? t)
+            (if skip
+              (self (rest toks) #f gs ns)
+              (let ((in (self (%py-block-toks t) #f gs ns)))
+                (self (rest toks) #f (first in) (rest in)))))
+          (#t (self (rest toks) skip gs ns)))))))
+(def %py-decl-names
+  (fn (self ts acc)
+    (match
+      ((null? ts) acc)
+      ((eq? (%py-tag (first ts)) (lit tok-name))
+        (self (rest ts) (pair (%py-val (first ts)) acc)))
+      (#t (self (rest ts) acc)))))
 
+; CPython's rules for a function's declarations: a parameter is neither global
+; nor nonlocal, no name is both, and a nonlocal name is bound in an enclosing
+; function -- whose names %py-scope-syms holds while this def compiles.
+(def %py-decl-checks!
+  (fn (_ params gs ns)
+    (%seq (%py-decl-clash gs params "is parameter and global")
+      (%seq (%py-decl-clash ns params "is parameter and nonlocal")
+        (%seq (%py-decl-clash gs ns "is nonlocal and global")
+          (%py-nonlocal-bound ns))))))
+(def %py-decl-clash
+  (fn (self as bs what)
+    (match
+      ((null? as) ())
+      ((%py-str-seen? (first as) bs)
+        (Err raise (lit syntax)
+          (Str8 append "name '" (Str8 append (first as) (Str8 append "' " what))) ()))
+      (#t (self (rest as) bs what)))))
+(def %py-nonlocal-bound
+  (fn (self ns)
+    (match
+      ((null? ns) ())
+      ((%py-seen? (%py-name->sym (first ns)) (first %py-scope-syms)) (self (rest ns)))
+      (#t (Err raise (lit syntax)
+            (Str8 append "no binding for nonlocal '" (Str8 append (first ns) "' found"))
+            ())))))
+
+; Is there a `yield` in this body?  Groups and blocks are searched, except
+; the body of a nested def or class, whose yields are its own: its block, or
+; the rest of its header line.
 (def %py-has-yield?
   (fn (self toks skip-block)
     (if (null? toks) #f
       (let ((t (first toks)))
         (match
-          ((%py-kw? t "yield") #t)
+          ((if skip-block #f (%py-kw? t "yield")) #t)
           ((if (%py-kw? t "def") #t (%py-kw? t "class"))
             (self (rest toks) #t))
+          ; a def written on its header line ends there, and takes its yield
+          ((eq? (%py-tag t) (lit tok-newline)) (self (rest toks) #f))
           ((eq? (%py-tag t) (lit tok-group))
             (if (self (%py-group-of t) #f) #t (self (rest toks) skip-block)))
           ((%py-block? t)
@@ -3700,6 +3828,33 @@
             (%py-name->sym (first names)))
           acc)))))
 
+; A program's first line may not be indented; blank and comment-only lines
+; before it do not count.  The reader measures a column only after a newline,
+; so this one is read off the source.
+(def %py-first-line-indented?
+  (fn (self s i n)
+    (def j (%py-past-blanks s i n))
+    (if (>= j n) #f
+      (match
+        ((if (= (%py-code-at s j) 10) #t (= (%py-code-at s j) 13)) (self s (+ j 1) n))
+        ((= (%py-code-at s j) 35) (self s (%py-past-line s j n) n))
+        (#t (> j i))))))
+; past spaces, tabs and form feeds
+(def %py-past-blanks
+  (fn (self s i n)
+    (if (if (< i n)
+          (match
+            ((= (%py-code-at s i) 32) #t)
+            ((= (%py-code-at s i) 9) #t)
+            (#t (= (%py-code-at s i) 12)))
+          #f)
+      (self s (+ i 1) n)
+      i)))
+(def %py-past-line
+  (fn (self s i n)
+    (if (>= i n) n
+      (if (= (%py-code-at s i) 10) (+ i 1) (self s (+ i 1) n)))))
+
 (def python-parse
   (fn (_ src)
     ; PER-RUN STATE, RESET HERE.  The lexical cells are saved and restored around
@@ -3710,6 +3865,9 @@
     ; inside a class body and left the class behind.
     (%set-first! %py-current-class ())
     (%set-first! %py-current-self ())
+    (if (%py-first-line-indented? src 0 (%py-byte-len src))
+      (Err raise (lit indent) "unexpected indent" ())
+      ())
     (def %toks (python-lex src))
     ; Brackets first: an unclosed group makes every walk below read a shape the
     ; source never had, so the structural error goes ahead of them.

@@ -586,6 +586,40 @@
 ; --- PY-NAME: identifiers ------------------------------------------------------
 ; Keywords are PY-KEYWORD's, above, and take the tie by registration order;
 ; what reaches here is every name that is not one.
+;
+; A NUMBER RUN INTO A NAME is refused: `123z` is CPython's "invalid decimal
+; literal", where `1if x else 2` reads as a number and a keyword.  PY-NUMBER's
+; reader records where its token ended, and a name that starts at that same
+; place is the refusal -- a keyword has its own reader, so it passes.  The
+; record is (END . TEXT); python-tokenize clears it.
+(def %py-number-end (pair -1 ()))
+(def %py-number-ended!
+  (fn (_ buffer text)
+    (%seq (%set-first! %py-number-end (%cell-int (rest buffer)))
+      (%set-rest! %py-number-end text))))
+(def %py-number-run-into!
+  (fn (_ buffer)
+    (if (= (%cell-int buffer) (first %py-number-end))
+      (%py-lex-refuse! (%py-literal-refusal (rest %py-number-end)))
+      ())))
+; CPython's word for the literal: hexadecimal, octal, binary, imaginary or
+; decimal
+(def %py-literal-refusal
+  (fn (_ text)
+    (def n (%py-byte-len text))
+    (def i (if (if (= (%py-code-at text 0) 45) #t (= (%py-code-at text 0) 43)) 1 0))
+    (def c (if (%py-based-at? text i n) (%py-code-at text (+ i 1)) 0))
+    (Str8 append "invalid "
+      (Str8 append
+        (match
+          ((if (= c 120) #t (= c 88)) "hexadecimal")
+          ((if (= c 111) #t (= c 79)) "octal")
+          ((if (= c 98) #t (= c 66)) "binary")
+          ((if (= (%py-code-at text (- n 1)) 106) #t (= (%py-code-at text (- n 1)) 74))
+            "imaginary")
+          (#t "decimal"))
+        " literal"))))
+
 (def %py-name-body ())
 (set! %py-name-body
   (fn (_ buffer score chr)
@@ -599,7 +633,9 @@
       (fn (_ buffer score chr)
         (if (%py-name-start? chr) %py-name-body ())))
     (pair (lit read)
-      (fn (_ . args) (mk-tok-name (%buffer-token (first args)))))))
+      (fn (_ . args)
+        (%seq (%py-number-run-into! (first args))
+          (mk-tok-name (%buffer-token (first args))))))))
 (%py-tok-type! "PY-NAME" %py-t-name)
 
 ; --- PY-NUMBER: integers and floats ------------------------------------------
@@ -740,7 +776,9 @@
         (let ((text (%buffer-token (first args))))
           (let ((k (%py-read-variant args)))
             (let ((v (if (null? k) (%py-variant-of-text text) k)))
-              (%seq (%py-leading-zeros! text v) (mk-tok-number text v)))))))))
+              (%seq (%py-leading-zeros! text v)
+                (%seq (%py-number-ended! (first args) text)
+                  (mk-tok-number text v))))))))))
 
 ; A DECIMAL INTEGER MAY NOT OPEN WITH A ZERO unless it is all zeros: 01 is a
 ; SyntaxError in Python 3, where 00 and 0_0 are 0.  A float, an imaginary and a
@@ -1751,6 +1789,7 @@
     (%py-jit-tick! (Str8 length input))
     (%py-ind-reset!)
     (%set-first! %py-lex-error ())
+    (%set-first! %py-number-end -1)
     (let ((toks (%py-token-read-string (first %py-active-raw)
                   (Str8 append (%py-source-lf input) " "))))
       ; Reading is over and x is driving again, so this is where a parked
