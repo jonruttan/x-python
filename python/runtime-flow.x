@@ -1058,22 +1058,18 @@
 ; map(f, it) is LAZY -- a generator pulling from its source -- so a
 ; StopIteration raised by f ends it where a yield from expects.  f is called
 ; through %py-apply-any, so map(tuple, ...) works like any other callable.
-; map(f, a, b, ...) walks the sources in step and stops with the shortest
-(def %py-pull-all
-  (fn (self srcs acc)
-    (if (null? srcs) (%py-reverse acc)
-      (let ((v (%py-iter-pull! (first srcs))))
-        (if (same? v %py-gen-done) %py-gen-done (self (rest srcs) (pair v acc)))))))
+; map(f, a, b, ...) walks the sources in step and stops with the shortest,
+; ending with the StopIteration that source raised (%py-iter-step).
+(def %py-step-all
+  (fn (self srcs)
+    (if (null? srcs) () (pair (%py-iter-step (first srcs)) (self (rest srcs))))))
 (def %py-map
   (fn (_ f . its)
     (%py-gen-new
       (fn (_ g)
         (def srcs (%py-open-all its ()))
         (def go
-          (fn (self)
-            (let ((vs (%py-pull-all srcs ())))
-              (if (same? vs %py-gen-done) ()
-                (%seq (%py-yield g (%py-apply-any f vs)) (self))))))
+          (fn (self) (%seq (%py-yield g (%py-apply-any f (%py-step-all srcs))) (self))))
         (go))
       "map")))
 (def %py-open-all
@@ -1156,13 +1152,26 @@
       (pull)
       (guard (e (if (%py-exc-match e %py-exc-StopIteration) (first d) (error e)))
         (pull)))))
+; iter(x): an object's own __iter__, or a generator over the source
+; %py-iter-open makes of x -- so a value that is not iterable is refused here,
+; as CPython refuses it, and not at the first next()
 (def %py-iter
   (fn (_ v)
-    (if (%py-gen-is v) v
-      (if (%py-obj-is v)
-        (let ((m (%py-dunder v "__iter__")))
-          (if (null? m) (Err raise (lit type) "object is not iterable" ()) (m)))
-        (%py-gen-new (fn (_ g) (%py-yield-from g v)) "iterator")))))
+    (match
+      ((%py-gen-is v) v)
+      ((if (%py-obj-is v) (not (null? (%py-dunder v "__iter__"))) #f)
+        ((%py-dunder v "__iter__")))
+      (#t (%py-src-gen (%py-iter-open v))))))
+(def %py-src-gen
+  (fn (_ src)
+    (%py-gen-new
+      (fn (_ g)
+        (def go
+          (fn (self)
+            (let ((v (%py-iter-pull! src)))
+              (if (same? v %py-gen-done) () (%seq (%py-yield g v) (self))))))
+        (go))
+      "iterator")))
 
 ; A for loop PULLS: a generator one value per iteration (its prints
 ; interleave with the body's, and it may be infinite), anything else from
@@ -1179,7 +1188,11 @@
         ; in step with the loop body
         (let ((it-m (%py-dunder v "__iter__")))
           (if (null? it-m)
-            (pair (elems) ())
+            ; the old sequence protocol, read a step at a time too
+            (let ((gi (%py-dunder v "__getitem__")))
+              (if (null? gi)
+                (pair (elems) ())
+                (list (lit %py-cursor) (%py-getitem-steps gi))))
             (let ((it (it-m)))
               (let ((nx (if (%py-obj-is it) (%py-dunder it "__next__") ())))
                 (if (null? nx)
@@ -1194,6 +1207,19 @@
         (guard (e (if (%py-exc-match e %py-exc-StopIteration) %py-gen-done (error e)))
           ((first (rest src)))))
       ((null? (first src)) %py-gen-done)
+      (#t
+        (let ((v (first (first src)))) (%set-first! src (rest (first src))) v)))))
+; The same pull with the source's StopIteration raised as it came: a map,
+; enumerate or filter ends with the one its source ended with, value and all,
+; as CPython's pass it through.
+(def %py-iter-step
+  (fn (_ src)
+    (match
+      ((%py-gen-is src) (%py-gen-resume src (lit send) ()))
+      ((eq? (first src) (lit %py-cursor))
+        (let ((v ((first (rest src)))))
+          (if (same? v %py-gen-done) (%py-raise-stop ()) v)))
+      ((null? (first src)) (%py-raise-stop ()))
       (#t
         (let ((v (first (first src)))) (%set-first! src (rest (first src))) v)))))
 

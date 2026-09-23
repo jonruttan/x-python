@@ -802,7 +802,8 @@
       ((%py-subclass? c (first bs)) #t)
       (#t (self c (rest bs))))))
 
-; enumerate and filter are LAZY, like map: a generator pulling its source.
+; enumerate and filter are LAZY, like map: a generator pulling its source,
+; and ending with the StopIteration its source raised (%py-iter-step).
 (def %py-enumerate
   (%py-sig!
     (fn (_ . a)
@@ -815,9 +816,8 @@
             (def src (%py-iter-open it))
             (def go
               (fn (self i)
-                (let ((v (%py-iter-pull! src)))
-                  (if (same? v %py-gen-done) ()
-                    (%seq (%py-yield g (%py-tuple-new (list i v))) (self (+ i 1)))))))
+                (%seq (%py-yield g (%py-tuple-new (list i (%py-iter-step src))))
+                  (self (+ i 1)))))
             (go st))
           "enumerate")))
     "enumerate" (list "iterable" "start") 1 #f))
@@ -827,15 +827,11 @@
     (%py-gen-new
       (fn (_ g)
         (def src (%py-iter-open it))
-        (def go
-          (fn (self)
-            (let ((v (%py-iter-pull! src)))
-              (if (same? v %py-gen-done) ()
-                (%seq
-                  (if (%py-truthy (if (null? f) v (f v))) (%py-yield g v) ())
-                  (self))))))
+        (def go (fn (self) (%seq (%py-filter-one g f (%py-iter-step src)) (self))))
         (go))
       "filter")))
+(def %py-filter-one
+  (fn (_ g f v) (if (%py-truthy (if (null? f) v (f v))) (%py-yield g v) ())))
 
 ; reversed(): __reversed__ first, then the length/getitem protocol, then
 ; anything materialisable

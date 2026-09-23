@@ -159,7 +159,7 @@ c
 (python-run "for x in 5:\n    print(x)")
 ```
 ---
-    Error: #<err:type object is not iterable>
+    Error: #<err:type 'int' object is not iterable>
 
 ### a name is required after for
 
