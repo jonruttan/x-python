@@ -80,3 +80,27 @@ Base Sub Sub
 ```output
 ('Adder', 3) 12 30
 ```
+
+### a class decorator is called with the class, and its answer is bound
+
+```python
+(python-run "def dec(c):\n    print(\"dec\", c.__name__)\n    return c\n\n\ndef tag(t):\n    def d(c):\n        c.tag = t\n        return c\n    return d\n\n\n@dec\nclass A:\n    pass\n\n\n@tag(\"t1\")\n@dec\nclass B:\n    x = 1\n\n\nprint(A.__name__, B.tag, B.x, B().x)\n\n\n@lambda c: 42\nclass C:\n    pass\n\n\nprint(C)\n\n\ndef g():\n    @tag(\"inner\")\n    class D:\n        pass\n    return D.tag\n\n\nprint(g())")
+```
+---
+```output
+dec A
+dec B
+A t1 1 1
+42
+inner
+```
+
+### a decorator before anything but a def or a class is refused
+
+```python
+(python-run "try:\n    exec(\"@staticmethod\\nx = 1\")\nexcept SyntaxError:\n    print(\"SyntaxError\")")
+```
+---
+```output
+SyntaxError
+```

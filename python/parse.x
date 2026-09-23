@@ -1913,7 +1913,24 @@
       (Err raise (lit syntax) "expected a module name after import" ())
       (%py-dotted-name (rest toks) (%py-val (first toks))))))
 
-; the name a module is bound under: `import a.b` binds `a`, `as` renames
+; The module a `from` names: `a.b`, or a relative name -- dots, then a dotted
+; name or none (`.`, `..a`) -- which %py-import refuses when it runs, since a
+; program run here is in no package for it to be relative to.
+(def %py-from-name
+  (fn (_ toks)
+    (if (%py-op-is? (if (null? toks) () (first toks)) ".")
+      (%py-from-dots (rest toks) ".")
+      (%py-import-name toks))))
+(def %py-from-dots
+  (fn (self toks dots)
+    (let ((t (if (null? toks) () (first toks))))
+      (match
+        ((%py-op-is? t ".") (self (rest toks) (Str8 append dots ".")))
+        ((eq? (%py-tag t) (lit tok-name))
+          (let ((r (%py-import-name toks)))
+            (pair (Str8 append dots (first r)) (rest r))))
+        (#t (pair dots toks))))))
+
 ; the name a module is bound under: `import a.b` binds `a`, `as` renames.
 ; Str8 index-of answers NIL when the substring is absent, not -1.
 (def %py-import-head
@@ -2090,15 +2107,22 @@
               (pair (%py-with-body (first items) (first blk)) (rest blk)))))
         ((%py-kw? t "import") (%py-import-list (rest toks) ()))
         ((%py-kw? t "from")
-          (let ((r (%py-import-name (rest toks))))
+          (let ((r (%py-from-name (rest toks))))
             (let ((name (first r)) (after (rest r)))
               (if (not (%py-kw? (if (null? after) () (first after)) "import"))
                 (Err raise (lit syntax) "expected import after a from" ())
                 (let ((what (rest after)))
-                  (if (%py-op-is? (if (null? what) () (first what)) "*")
-                    ; `from a import *` binds every public name the module has
-                    (pair (list (lit %py-import-star) name) (rest what))
-                    (%py-from-imports name what ())))))))
+                  (match
+                    ((not (%py-op-is? (if (null? what) () (first what)) "*"))
+                      (%py-from-imports name what ()))
+                    ; `from a import *` binds every public name the module
+                    ; has, which only a module's own names can take
+                    ((if (eq? (first %py-fn-depth) 0)
+                        (null? (first %py-current-class))
+                        #f)
+                      (pair (list (lit %py-import-star) name) (rest what)))
+                    (#t (Err raise (lit syntax)
+                          "import * only allowed at module level" ()))))))))
         ; `del` takes a target list: names, subscripts, slices, attributes,
         ; and ( ) or [ ] of them (%py-delete)
         ((%py-kw? t "del")
@@ -2147,16 +2171,23 @@
                           ())))
                     (first e))
                   (rest e))))))
+        ; `@d def f` is (def f (d FN)) and `@d class C` is (set! C (d CLASS)):
+        ; the decorators wrap the value the statement binds
         ((%py-op-is? t "@")
           (let ((ds (%py-decos-of toks ())))
             (let ((t2 (%py-async-strip (rest ds))))
-              (if (not (%py-kw? (if (null? t2) () (first t2)) "def"))
-                (Err raise (lit syntax) "a decorator must be followed by a def" ())
-                (let ((r (%py-def (rest t2))))
-                  (pair
-                    (list (lit def) (first (rest (first r)))
-                      (%py-wrap-decos (first ds) (first (rest (rest (first r))))))
-                    (rest r)))))))
+              (let ((r (match
+                         ((%py-kw? (if (null? t2) () (first t2)) "def")
+                           (%py-def (rest t2)))
+                         ((%py-kw? (if (null? t2) () (first t2)) "class")
+                           (%py-class-stmt (rest t2)))
+                         (#t (Err raise (lit syntax)
+                               "a decorator must be followed by a def or a class"
+                               ())))))
+                (pair
+                  (list (first (first r)) (first (rest (first r)))
+                    (%py-wrap-decos (first ds) (first (rest (rest (first r))))))
+                  (rest r))))))
         ((%py-kw? t "def") (%py-def (rest toks)))
         ((%py-kw? t "return")
           (if (eq? (first %py-fn-depth) 0)
@@ -2180,20 +2211,20 @@
         ; parser.
         ((if (%py-op-is? t "-") #t
                     (if (%py-op-is? t "+") #t (%py-op-is? t "~")))
-          (%py-test toks))
+          (%py-exprlist toks))
         ; A KEYWORD THAT BEGINS AN EXPRESSION -- yield, not, lambda, await
         ; -- begins an expression STATEMENT when no arm above claimed it.
         ; The postfix-target probe below has no arm for a keyword token
         ; (it used to see these as names and tolerate them by accident),
         ; so they go straight to the expression parser, which owns them.
-        ((eq? (%py-tag t) (lit tok-kw)) (%py-test toks))
+        ((eq? (%py-tag t) (lit tok-kw)) (%py-exprlist toks))
         ; ASSIGNMENT IS DECIDED BY WHAT FOLLOWS A TARGET, not by the
         ; shape of the first token.  Parse a postfix expression -- a
         ; name, a subscript, an attribute, a call -- and then look.
-        ; If it is not an assignment the tokens are re-parsed as a full
-        ; expression from the start, which costs a second pass over one
-        ; statement and keeps the two cases from having to agree about
-        ; precedence.
+        ; If it is not an assignment the tokens are re-parsed from the
+        ; start as an expression list (`a, b` alone is a tuple), which
+        ; costs a second pass over one statement and keeps the two cases
+        ; from having to agree about precedence.
         (#t
           (let ((tgt (%py-postfix toks)))
             (let ((nxt (if (null? (rest tgt)) () (first (rest tgt)))))
@@ -2202,12 +2233,13 @@
                   (pair (%py-store (first tgt) (first r)) (rest r)))
                 (let ((aug (%py-op-sym nxt %py-aug-ops)))
                   (if (null? aug)
-                    (%py-test toks)
-                    ; `t op= v` is `t = t op v`.  The target is evaluated
-                    ; twice for a subscript, which is wrong for an
+                    (%py-exprlist toks)
+                    ; `t op= v` is `t = t op v`, and v is an expression
+                    ; list: `t += 1, 2` adds a tuple.  The target is
+                    ; evaluated twice for a subscript, which is wrong for an
                     ; expression with side effects and right for every
                     ; case this handles today.
-                    (let ((r (%py-test (rest (rest tgt)))))
+                    (let ((r (%py-exprlist (rest (rest tgt)))))
                       (pair
                         (%py-store (first tgt)
                           (list aug (first tgt) (first r)))
@@ -2241,7 +2273,7 @@
   (fn (self names acc)
     (if (null? names)
       (%py-reverse acc)
-      (self (rest names) (pair (%py-name->sym (first names)) acc)))))
+      (self (rest names) (pair (%py-target-sym (first names) "assign to") acc)))))
 
 (def %py-for-bind
   (fn (_ syms)
@@ -2736,12 +2768,14 @@
               handler
               (list (lit if) matcher handler (self (rest clauses))))))))))
 
+; (BODY) for a finally clause, () for none: `finally: pass` has an empty body
+; and is still a finally
 (def %py-finally
   (fn (_ toks)
     (let ((t (%py-skip-nl toks)))
       (if (%py-kw? (if (null? t) () (first t)) "finally")
         (let ((b (%py-block (rest t))))
-          (pair (first b) (rest b)))
+          (pair (list (first b)) (rest b)))
         (pair () t)))))
 
 ; try ... except ... else: the else body runs only when the try body
@@ -2778,7 +2812,8 @@
                                 (list (lit %set-first!) (lit %py-ok) #t)))
                             (list (lit if) (list (lit first) (lit %py-ok)) (first e) ())))))))
               (pair
-                (if (null? (first f)) guarded (%py-finally-form guarded (first f)))
+                (if (null? (first f)) guarded
+                  (%py-finally-form guarded (first (first f))))
                 (rest f))))))))))
 
 ; A body with a finally.  The finally body is emitted once, as a thunk, and
@@ -3120,13 +3155,22 @@
                 (list (lit one) (first r))
                 (Err raise (lit syntax) "invalid syntax" ())))))))))
 
+; The symbol a target name binds.  True, False, None and __debug__ read as
+; values (%py-builtins), and a value cannot be bound or deleted.
+(def %py-target-sym
+  (fn (_ s verb)
+    (let ((sym (%py-name->sym s)))
+      (if (symbol? sym) sym
+        (Err raise (lit syntax)
+          (Str8 append "cannot " (Str8 append verb (Str8 append " " s))) ())))))
+
 ; The form that stores v into a target tree.  A seq unpacks v once and stores
 ; each element in turn, a star taking a list of what the others leave.
 (def %py-assign
   (fn (self node v)
     (match
       ((eq? (first node) (lit name))
-        (list (lit set!) (%py-name->sym (first (rest node))) v))
+        (list (lit set!) (%py-target-sym (first (rest node)) "assign to") v))
       ((eq? (first node) (lit one)) (%py-store (first (rest node)) v))
       ((eq? (first node) (lit star))
         (Err raise (lit syntax)
@@ -3190,8 +3234,8 @@
     (match
       ((eq? (first node) (lit name))
         (let ((s (first (rest node))))
-          (list (lit set!) (%py-name->sym s)
-            (list (lit %py-name-gone) s (%py-name->sym s)))))
+          (let ((sym (%py-target-sym s "delete")))
+            (list (lit set!) sym (list (lit %py-name-gone) s sym)))))
       ((eq? (first node) (lit star))
         (Err raise (lit syntax) "cannot delete starred" ()))
       ((eq? (first node) (lit seq))
@@ -3241,7 +3285,11 @@
         ((eq? (first target) (lit %py-name-live))
           (list (lit set!) (List ref 2 target) value))
         (#t (Err raise (lit syntax) "cannot assign to this target" ())))
-      (list (lit set!) target value))))
+      ; a name, or a literal the expression parser answered as itself:
+      ; `1 = 2` would be (set! 1 2), which the engine does not survive
+      (if (symbol? target)
+        (list (lit set!) target value)
+        (Err raise (lit syntax) "cannot assign to literal" ())))))
 
 (def %py-else
   (fn (_ toks)

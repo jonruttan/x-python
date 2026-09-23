@@ -688,6 +688,7 @@
     (pair (lit zero-division) %py-exc-ZeroDivisionError)
     (pair (lit overflow)      %py-exc-OverflowError)
     (pair (lit syntax)        %py-exc-SyntaxError)
+    (pair (lit indent)        %py-exc-IndentationError)
     (pair (lit state)         %py-exc-RuntimeError)
     (pair (lit import)        %py-exc-ImportError)
     (pair (lit unicode-decode) %py-exc-UnicodeDecodeError)

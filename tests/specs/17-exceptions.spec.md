@@ -179,6 +179,18 @@ after a re-raise: name 'e' is not defined
 after a return: name 'e' is not defined
 ```
 
+### an indentation error is an IndentationError, which is a SyntaxError
+
+```python
+(python-run "for src in (\"def f():\\n  a\\n a\\n\", \"if 1:\\n        a\\n    b\\n\"):\n    try:\n        exec(src)\n    except IndentationError as e:\n        print(\"IndentationError\", str(e).split(\" (\")[0], isinstance(e, SyntaxError))\ntry:\n    exec(\"def f():\\n  a\\n a\\n\")\nexcept SyntaxError:\n    print(\"SyntaxError\")")
+```
+---
+```output
+IndentationError unindent does not match any outer indentation level True
+IndentationError unindent does not match any outer indentation level True
+SyntaxError
+```
+
 ## the errors the runtime already raised
 
 ### a bad subscript
@@ -327,4 +339,15 @@ enter
 exit
 fin
 v
+```
+
+### a finally whose body is pass is still a finally
+
+```python
+(python-run "for i in [1, 2]:\n    try:\n        break\n    finally:\n        pass\ntry:\n    x = 1\nfinally:\n    pass\n\n\ndef f():\n    try:\n        return \"r\"\n    finally:\n        pass\n\n\ntry:\n    raise ValueError\nexcept ValueError:\n    print(\"caught\")\nfinally:\n    pass\nprint(i, x, f())")
+```
+---
+```output
+caught
+1 1 r
 ```

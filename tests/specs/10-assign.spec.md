@@ -119,6 +119,14 @@ to come apart correctly on the right of an augmented operator.
 ---
     3
 
+### an augmented value is an expression list
+
+```python
+(python-run "x = [1]\nx += 2, 3\nt = ()\nt += 4, 5\nprint(x, t)")
+```
+---
+    [1, 2, 3] (4, 5)
+
 ## assign target lists
 
 ### a parenthesized or bracketed list of targets, and `(e)` is the name e
@@ -254,6 +262,26 @@ SyntaxError multiple starred expressions in assignment
 SyntaxError
 SyntaxError
 SyntaxError
+```
+
+### a literal or a constant name is not assignable
+
+```python
+(python-run "for src in (\"1 = 2\", \"1.5 = x\", \"None += 1\"):\n    try:\n        exec(src)\n    except SyntaxError:\n        print(\"SyntaxError\")\nfor src in (\"None = 1\", \"True = 1\", \"__debug__ = 1\", \"a, None = 1, 2\", \"del None\",\n            \"del a, False\", \"for None in []: pass\", \"[x for True in [1]]\"):\n    try:\n        exec(src)\n    except SyntaxError as e:\n        print(\"SyntaxError\", str(e).split(\" (\")[0])")
+```
+---
+```output
+SyntaxError
+SyntaxError
+SyntaxError
+SyntaxError cannot assign to None
+SyntaxError cannot assign to True
+SyntaxError cannot assign to __debug__
+SyntaxError cannot assign to None
+SyntaxError cannot delete None
+SyntaxError cannot delete False
+SyntaxError cannot assign to None
+SyntaxError cannot assign to True
 ```
 
 ## assign together
