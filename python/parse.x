@@ -3531,7 +3531,25 @@
             (self (rest toks) (%py-append (%py-reverse (self (%py-block-toks t) ())) acc)))
           (#t (self (rest toks) acc)))))))
 
-; Every name the program BINDS: assignment targets, def names, parameters.
+; past a `.` and the attribute name after it
+(def %py-attr-skip
+  (fn (_ toks)
+    (if (eq? (%py-tag (if (null? (rest toks)) () (first (rest toks)))) (lit tok-name))
+      (rest (rest toks))
+      (rest toks))))
+; past a lambda's parameters, to its `:` -- `lambda a=1: a` binds no a outside
+(def %py-lambda-skip
+  (fn (self toks)
+    (match
+      ((null? toks) toks)
+      ((%py-op-is? (first toks) ":") (rest toks))
+      (#t (self (rest toks))))))
+
+; Every name the program BINDS where %py-assign-targets declares it too:
+; assignment targets and the names after `for` and `as`.  A read of any other
+; mentioned name carries the check (%py-undefined), which is what a def or
+; class name needs: it is bound only when its statement runs.  The name after
+; a `.` is an attribute, and binds nothing.
 (def %py-bound-names
   (fn (self toks acc)
     (if (null? toks)
@@ -3545,10 +3563,8 @@
             (let ((n (if (null? (rest toks)) () (first (rest toks)))))
               (self (rest (rest toks))
                 (if (eq? (%py-tag n) (lit tok-name)) (pair (%py-val n) acc) acc))))
-          ((%py-kw? t "def")
-            (let ((n (if (null? (rest toks)) () (first (rest toks)))))
-              (self (rest (rest toks))
-                (if (eq? (%py-tag n) (lit tok-name)) (pair (%py-val n) acc) acc))))
+          ((%py-op-is? t ".") (self (%py-attr-skip toks) acc))
+          ((%py-kw? t "lambda") (self (%py-lambda-skip (rest toks)) acc))
           ((if (eq? (%py-tag t) (lit tok-name))
                 (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
@@ -3586,6 +3602,9 @@
             (self (rest (rest toks))
               (pair (%py-name->sym (%py-val (first (rest toks)))) acc)))
           ((%py-kw? t "def") (self (%py-skip-def (rest toks) 0) acc))
+          ; `obj.x += 1` binds no x, and a lambda's parameters are its own
+          ((%py-op-is? t ".") (self (%py-attr-skip toks) acc))
+          ((%py-kw? t "lambda") (self (%py-lambda-skip (rest toks)) acc))
           ((if (eq? (%py-tag t) (lit tok-name))
                 (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
