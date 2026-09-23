@@ -86,6 +86,28 @@ name 'z' is not defined
 [1, 2] [3] [4]
 ```
 
+### an attribute, a def read ahead of it, and a lambda's parameter bind no name here
+
+```python
+(python-run "class C:\n    counted = 1\n\n\ndef err(name):\n    print(\"NameError\", name)\n\n\nC.only_attr = 2\nC.counted += 1\ntry:\n    print(only_attr)\nexcept NameError as e:\n    err(e)\ntry:\n    print(counted)\nexcept NameError as e:\n    err(e)\ntry:\n    print(late_def)\nexcept NameError as e:\n    err(e)\n\n\ndef late_def():\n    return \"late_def\"\n\n\ng = lambda lam_arg=1: lam_arg\ntry:\n    print(lam_arg)\nexcept NameError as e:\n    err(e)\nprint(late_def(), g(), C.counted, C.only_attr)")
+```
+---
+```output
+NameError name 'only_attr' is not defined
+NameError name 'counted' is not defined
+NameError name 'late_def' is not defined
+NameError name 'lam_arg' is not defined
+late_def 1 2 2
+```
+
+### a store to an attribute in a method leaves the global of that name alone
+
+```python
+(python-run "count = 10\n\n\nclass K:\n    def __init__(self):\n        self.count = 0\n\n    def bump(self):\n        self.count += 1\n        key = lambda count=5: count\n        return count, self.count, key()\n\n\nprint(K().bump())")
+```
+---
+    (10, 1, 5)
+
 ## names bound
 
 ### an assigned name is not undefined
