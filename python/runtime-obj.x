@@ -417,6 +417,7 @@
       ; records `a.f` makes on two reads hash alike, as in Python
       ((%py-bound-is v) (+ (%py-id (%py-bound-fn v)) (%py-hash (%py-bound-self v))))
       ((%py-gen-is v) (%py-id v))
+      ((%py-it-is v) (%py-id v))
       ((%py-class-is v) (%py-id v))
       ((%py-view-is v)
         (if (Str8 =? (%py-view-kind v) "dict_values")

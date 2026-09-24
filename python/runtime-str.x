@@ -60,6 +60,7 @@
       ((%py-set-is obj) (%py-set-attr obj name))
       ((%py-tuple-is obj) (%py-tuple-attr obj name))
       ((%py-gen-is obj) (%py-gen-attr obj name))
+      ((%py-it-is obj) (%py-it-attr obj name))
       ((%py-bound-is obj) (%py-bound-attr obj name))
       ((%py-super-is obj) (%py-super-attr obj name))
       ((%py-class-is obj) (%py-class-attr obj name))

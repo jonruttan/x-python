@@ -693,6 +693,23 @@
       (pair (lit write)
         (fn (_ self) (display "<generator object " (List ref 1 (first self)) ">"))))))
 
+; --- PY-ITER -----------------------------------------------------------------
+; A builtin iterator -- zip, map, enumerate, filter -- as its step and its
+; class.  The step answers the next item, %py-gen-done at a plain end, or
+; raises the StopIteration a source ended with (%py-iter-next); reading one
+; is a call, where a generator's step switches continuations.
+(def %py-it ())
+(def %py-it-new (fn (_ step cls) (%make-instance %py-it (list step cls))))
+(def %py-it-is (fn (_ v) (%type? v %py-it)))
+(def %py-it-step (fn (_ v) (first (first v))))
+(def %py-it-class (fn (_ v) (first (rest (first v)))))
+(set! %py-it
+  (%make-type
+    "PY-ITER"
+    (list
+      (pair (lit write)
+        (fn (_ self) (display "<" (%py-class-name (%py-it-class self)) " object>"))))))
+
 (def %py-tuple-new (fn (_ elems) (%make-instance %py-tuple elems)))
 (def %py-tuple-is (fn (_ v) (%type? v %py-tuple)))
 (def %py-tuple-elems (fn (_ v) (first v)))

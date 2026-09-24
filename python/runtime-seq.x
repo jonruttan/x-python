@@ -291,12 +291,19 @@
       #t
       (if (%py-obj-is v) (%py-list-is (%py-obj-native v)) #f))))
 
+; object of type 'zip' has no len()
+(def %py-no-len
+  (fn (_ v)
+    (Err raise (lit type)
+      (Str8 append "object of type '"
+        (Str8 append (%py-class-name (%py-type-of v)) "' has no len()"))
+      ())))
 (def %py-len
   (fn (_ v)
     (match
       ((%py-obj-is v)
         (let ((m (%py-dunder v "__len__")))
-          (if (null? m) (Err raise (lit type) "object of this type has no len()" ()) (m))))
+          (if (null? m) (%py-no-len v) (m))))
       ((%py-arr-is v) (%py-length (%py-arr-el v)))
       ((%py-mv-is v) (%py-mv-len v))
       ((%py-dq-is v) (%py-length (%py-dq-el v)))
@@ -307,7 +314,7 @@
       ((%py-view-is v) (%py-length (%py-view-elems v)))
       ((%py-str-is v) (%pb-len (%py-str-cps v)))
       ((%py-bytes-is v) (%pb-len (%py-bytes-list v)))
-      (#t (Err raise (lit type) "object of this type has no len()" ())))))
+      (#t (%py-no-len v)))))
 
 ; NEGATIVE INDICES COUNT FROM THE END, which is Python and not x.  -1 is the
 ; last element, and an index past either end raises IndexError rather than
@@ -669,6 +676,7 @@
         (%py-bytes-list v))
       ; a generator runs to its end; every consumer here wants the whole list
       ((%py-gen-is v) (%py-gen-drain v ()))
+      ((%py-it-is v) (%py-steps-drain (fn (_) (%py-iter-pull! v)) ()))
       ; A CALLER MAY NAME ITSELF IN THE REFUSAL.  "'int' object is not
       ; iterable" says nothing about what was being attempted; `','.join(5)`
       ; wants to talk about join.  Taken as a trailing argument so that the

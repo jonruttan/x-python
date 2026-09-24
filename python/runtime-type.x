@@ -1163,6 +1163,7 @@
       ((%py-obj-is v) (%py-obj-class v))
       ((%py-class-is v) %py-cls-type)
       ((%py-gen-is v) %py-cls-generator)
+      ((%py-it-is v) (%py-it-class v))
       ((%py-bound-is v) %py-cls-method)
       ((%py-fn-is v) (if (%py-user-fn? v) %py-cls-function %py-cls-builtin-function))
       ; an error the runtime raised by tag is an instance of the class the

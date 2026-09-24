@@ -802,36 +802,42 @@
       ((%py-subclass? c (first bs)) #t)
       (#t (self c (rest bs))))))
 
-; enumerate and filter are LAZY, like map: a generator pulling its source,
-; and ending with the StopIteration its source raised (%py-iter-step).
+; enumerate and filter are builtin iterators, like map (%py-it): a step over
+; the source opened at the call, ending with the StopIteration its source
+; raised (%py-iter-next).
 (def %py-enumerate
   (%py-sig!
     (fn (_ . a)
       (if (null? a)
         (Err raise (lit type) "enumerate() missing required argument 'iterable'" ())
         ())
-      (let ((it (%py-opt a 0 ())) (st (%py-opt a 1 0)))
-        (%py-gen-new
-          (fn (_ g)
-            (def src (%py-iter-open it))
-            (def go
-              (fn (self i)
-                (%seq (%py-yield g (%py-tuple-new (list i (%py-iter-step src))))
-                  (self (+ i 1)))))
-            (go st))
-          "enumerate")))
+      (%py-enumerate-over (%py-iter-open (%py-opt a 0 ())) (pair (%py-opt a 1 0) ())))
     "enumerate" (list "iterable" "start") 1 #f))
+; `at` is the count the next item gets, in a cell the step moves on
+(def %py-enumerate-over
+  (fn (_ src at)
+    (%py-it-new (fn (_) (%py-enumerate-item at (%py-iter-next src)))
+      %py-cls-enumerate)))
+(def %py-enumerate-item
+  (fn (_ at v) (if (same? v %py-gen-done) v (%py-enumerate-pair at (first at) v))))
+(def %py-enumerate-pair
+  (fn (_ at i v) (%seq (%set-first! at (+ i 1)) (%py-tuple-new (list i v)))))
 ; filter(None, it) keeps the truthy elements
 (def %py-filter
   (fn (_ f it)
-    (%py-gen-new
-      (fn (_ g)
-        (def src (%py-iter-open it))
-        (def go (fn (self) (%seq (%py-filter-one g f (%py-iter-step src)) (self))))
-        (go))
-      "filter")))
-(def %py-filter-one
-  (fn (_ g f v) (if (%py-truthy (if (null? f) v (f v))) (%py-yield g v) ())))
+    (%py-filter-over f (%py-iter-open it))))
+(def %py-filter-over
+  (fn (_ f src)
+    (%py-it-new (fn (_) (%py-filter-next f src)) %py-cls-filter)))
+(def %py-filter-next
+  (fn (self f src)
+    (%py-filter-keep self f src (%py-iter-next src))))
+(def %py-filter-keep
+  (fn (_ go f src v)
+    (match
+      ((same? v %py-gen-done) v)
+      ((%py-truthy (if (null? f) v (f v))) v)
+      (#t (go f src)))))
 
 ; reversed(): __reversed__ first, then the length/getitem protocol, then
 ; anything materialisable
