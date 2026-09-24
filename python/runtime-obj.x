@@ -409,6 +409,7 @@
       ((%py-barr-is v) (%py-unhashable v))
       ((%py-bytes-is v) (%py-cp-hash (%py-bytes-list v) 0))
       ((%py-sl-is v) (%py-set-hash (list (%py-sl-start v) (%py-sl-stop v) (%py-sl-step v)) 0))
+      ((%py-range-is v) (%py-range-hash v))
       ; an object hashes by identity unless its class says otherwise, so two
       ; instances are two keys
       ((%py-obj-is v) (%py-obj-hash v))

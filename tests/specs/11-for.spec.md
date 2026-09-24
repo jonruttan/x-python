@@ -118,13 +118,13 @@ answers.
 ---
     done
 
-### range is a list
+### range prints as a range, and list() reads its items
 
 ```python
-(python-run "print(range(4))")
+(python-run "print(range(4), list(range(4)))")
 ```
 ---
-    [0, 1, 2, 3]
+    range(0, 4) [0, 1, 2, 3]
 
 ### a zero step raises rather than looping forever
 

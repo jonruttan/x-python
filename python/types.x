@@ -53,6 +53,8 @@
   %py-barr %py-barr-new %py-barr-of-str %py-barr-is %py-barr-set!
   %py-dq %py-dq-new %py-dq-is %py-dq-max %py-dq-el %py-dq-set!
   %py-gen %py-gen-new %py-gen-is %py-gen-state
+  %py-it %py-it-new %py-it-is %py-it-step %py-it-class
+  %py-rng %py-range-new %py-range-is %py-range-start %py-range-stop %py-range-step
   %py-set %py-set-new %py-set-is %py-set-elems %py-set-set! %py-set-frozen?
   %py-view %py-view-new %py-view-is %py-view-kind %py-view-elems
   %py-list %py-list-new %py-list-is %py-list-elems %py-list-set!
@@ -709,6 +711,26 @@
     (list
       (pair (lit write)
         (fn (_ self) (display "<" (%py-class-name (%py-it-class self)) " object>"))))))
+
+; --- PY-RANGE ----------------------------------------------------------------
+; range(start, stop, step) as its three ints: the length, the items and
+; membership are arithmetic on them, and it is read a step at a time.
+(def %py-rng ())
+(def %py-range-new
+  (fn (_ start stop step) (%make-instance %py-rng (list start stop step))))
+(def %py-range-is (fn (_ v) (%type? v %py-rng)))
+(def %py-range-start (fn (_ v) (first (first v))))
+(def %py-range-stop (fn (_ v) (first (rest (first v)))))
+(def %py-range-step (fn (_ v) (first (rest (rest (first v))))))
+(set! %py-rng
+  (%make-type
+    "PY-RANGE"
+    (list
+      (pair (lit write)
+        (fn (_ self)
+          (display "range(" (%py-range-start self) ", " (%py-range-stop self))
+          (if (= (%py-range-step self) 1) () (display ", " (%py-range-step self)))
+          (display ")"))))))
 
 (def %py-tuple-new (fn (_ elems) (%make-instance %py-tuple elems)))
 (def %py-tuple-is (fn (_ v) (%type? v %py-tuple)))

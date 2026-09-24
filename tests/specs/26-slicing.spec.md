@@ -200,3 +200,13 @@ TypeError list indices must be integers or slices, not float
 TypeError list indices must be integers or slices, not NoneType
 t one
 ```
+
+### a slice object indexes as the subscript it stands for
+
+```python
+(python-run "print([1, 2, 3][slice(1, None)], (1, 2, 3)[slice(None, None, -1)], \"abc\"[slice(1, 2)], b\"abc\"[slice(2)])")
+```
+---
+```output
+[2, 3] (3, 2, 1) b b'ab'
+```
