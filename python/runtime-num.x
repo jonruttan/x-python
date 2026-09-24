@@ -1185,10 +1185,7 @@
         (let ((cs (match
                     ((%py-str-is s) (%py-str-cps s))
                     ((%py-bytes-is s) (%py-bytes-list s))
-                    (#t (Err raise (lit type)
-                          (Str8 append "object of type '"
-                            (Str8 append (%py-class-name (%py-type-of s)) "' has no len()"))
-                          ())))))
+                    (#t (%py-no-len s)))))
           (match
             ((not (= (%py-length cs) 1))
               (Err raise (lit value) "sep must be length 1." ()))

@@ -133,3 +133,15 @@ TypeError 'NoneType' object is not iterable
 TypeError 'float' object is not iterable
 TypeError 'int' object is not iterable
 ```
+
+### zip ends with the StopIteration its source raised
+
+```python
+(python-run "class Src20:\n    def __iter__(self):\n        return self\n\n    def __next__(self):\n        raise StopIteration(42)\n\n\ntry:\n    next(zip(Src20()))\nexcept StopIteration as e:\n    print(\"zip\", e.args)\ntry:\n    next(zip([1], Src20()))\nexcept StopIteration as e:\n    print(\"zip second\", e.args)\nprint(list(zip([1, 2], Src20())))")
+```
+---
+```output
+zip (42,)
+zip second (42,)
+[]
+```

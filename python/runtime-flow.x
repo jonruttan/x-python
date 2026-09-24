@@ -979,6 +979,18 @@
       (#t
         (Err raise (lit attribute)
           (Str8 append (Str8 append "'generator' object has no attribute '" name) "'") ())))))
+; a builtin iterator's own attributes: __next__ and __iter__
+(def %py-it-attr
+  (fn (_ it name)
+    (match
+      ((Str8 =? name "__next__") (fn (_) (%py-next it)))
+      ((Str8 =? name "__iter__") (fn (_) it))
+      (#t
+        (Err raise (lit attribute)
+          (Str8 append "'"
+            (Str8 append (%py-class-name (%py-it-class it))
+              (Str8 append "' object has no attribute '" (Str8 append name "'"))))
+          ())))))
 
 ; yield from: a generator is driven send/throw for send/throw, and its
 ; return value is the expression's value; any other iterable is yielded
@@ -986,7 +998,12 @@
 (def %py-yield-from
   (fn (_ g it)
     (if (not (%py-gen-is it))
-      (let ((nx (if (%py-obj-is it) (%py-dunder it "__next__") ())))
+      (let ((nx (match
+                  ((%py-obj-is it) (%py-dunder it "__next__"))
+                  ; a builtin iterator is read a step at a time too, so the
+                  ; StopIteration a source of its raises is the result
+                  ((%py-it-is it) (fn (_) (%py-it-answer ((%py-it-step it)))))
+                  (#t ()))))
         (if (null? nx)
           (do
             (def go (fn (self es) (if (null? es) () (%seq (%py-yield g (first es)) (self (rest es))))))
@@ -996,9 +1013,9 @@
           ; value when it has one, throw() when it has one, StopIteration's
           ; value is the result
           (do
-            (def snd (%py-dunder it "send"))
-            (def thr (%py-dunder it "throw"))
-            (def cls (%py-dunder it "close"))
+            (def snd (if (%py-obj-is it) (%py-dunder it "send") ()))
+            (def thr (if (%py-obj-is it) (%py-dunder it "throw") ()))
+            (def cls (if (%py-obj-is it) (%py-dunder it "close") ()))
             (def step
               (fn (self mode v)
                 (let ((r (guard (e (if (%py-exc-match e %py-exc-StopIteration)
@@ -1055,38 +1072,39 @@
     (def go (fn (self es acc) (if (null? es) acc (self (rest es) (%py-add acc (first es))))))
     (go (%py-iter-elems it) (if (null? st) 0 (first st)))))
 
-; map(f, it) is LAZY -- a generator pulling from its source -- so a
-; StopIteration raised by f ends it where a yield from expects.  f is called
-; through %py-apply-any, so map(tuple, ...) works like any other callable.
-; map(f, a, b, ...) walks the sources in step and stops with the shortest,
-; ending with the StopIteration that source raised (%py-iter-step).
-(def %py-step-all
-  (fn (self srcs)
-    (if (null? srcs) () (pair (%py-iter-step (first srcs)) (self (rest srcs))))))
+; map, zip, enumerate and filter are BUILTIN ITERATORS (%py-it): a step over
+; the sources opened at the call, one item a call.  A source's StopIteration
+; comes through as it was raised (%py-iter-next), so each ends with the one
+; its source ended with, as CPython's do.  f is called through %py-apply-any,
+; so map(tuple, ...) works like any other callable; map(f, a, b, ...) and zip
+; walk their sources in step and stop with the shortest.
 (def %py-map
   (fn (_ f . its)
-    (%py-gen-new
-      (fn (_ g)
-        (def srcs (%py-open-all its ()))
-        (def go
-          (fn (self) (%seq (%py-yield g (%py-apply-any f (%py-step-all srcs))) (self))))
-        (go))
-      "map")))
+    (if (null? its)
+      (Err raise (lit type) "map() must have at least two arguments." ())
+      (%py-map-over f (%py-open-all its ())))))
+(def %py-map-over
+  (fn (_ f srcs)
+    (%py-it-new (fn (_) (%py-map-apply f (%py-row srcs ()))) %py-cls-map)))
+(def %py-map-apply
+  (fn (_ f r) (if (same? r %py-gen-done) r (%py-apply-any f r))))
 (def %py-open-all
   (fn (self its acc)
     (if (null? its) (%py-reverse acc) (self (rest its) (pair (%py-iter-open (first its)) acc)))))
-(def %py-zip
-  (fn (_ . its)
-    (def lists (fn (self l) (if (null? l) () (pair (%py-iter-elems (first l)) (self (rest l))))))
-    (def go
-      (fn (self ls acc)
-        (if (if (null? ls) #t (%py-any-null? ls))
-          (%py-list-new (%py-reverse acc))
-          (self (%py-rests ls) (pair (%py-tuple-new (%py-firsts ls)) acc)))))
-    (go (lists its) ())))
-(def %py-any-null? (fn (self ls) (if (null? ls) #f (if (null? (first ls)) #t (self (rest ls))))))
-(def %py-firsts (fn (self ls) (if (null? ls) () (pair (first (first ls)) (self (rest ls))))))
-(def %py-rests (fn (self ls) (if (null? ls) () (pair (rest (first ls)) (self (rest ls))))))
+(def %py-zip (fn (_ . its) (%py-zip-over (%py-open-all its ()))))
+(def %py-zip-over
+  (fn (_ srcs)
+    (%py-it-new
+      (fn (_) (if (null? srcs) %py-gen-done (%py-row-tuple (%py-row srcs ()))))
+      %py-cls-zip)))
+(def %py-row-tuple (fn (_ r) (if (same? r %py-gen-done) r (%py-tuple-new r))))
+; the next item of each source, in order, or %py-gen-done once one has ended
+(def %py-row
+  (fn (self srcs acc)
+    (if (null? srcs) (%py-reverse acc)
+      (%py-row-add self (rest srcs) acc (%py-iter-next (first srcs))))))
+(def %py-row-add
+  (fn (_ go srcs acc v) (if (same? v %py-gen-done) v (go srcs (pair v acc)))))
 (def %py-all
   (fn (_ it)
     (def go (fn (self es) (if (null? es) #t (if (%py-truthy (first es)) (self (rest es)) #f))))
@@ -1142,23 +1160,34 @@
   (fn (_ it . d)
     (def pull
       (fn (_)
-        (if (%py-gen-is it)
-          (%py-gen-resume it (lit send) ())
-          (if (%py-obj-is it)
+        (match
+          ((%py-gen-is it) (%py-gen-resume it (lit send) ()))
+          ((%py-it-is it) (%py-it-answer ((%py-it-step it))))
+          ((%py-obj-is it)
             (let ((m (%py-dunder it "__next__")))
-              (if (null? m) (Err raise (lit type) "object is not an iterator" ()) (m)))
-            (Err raise (lit type) "object is not an iterator" ())))))
+              (if (null? m) (%py-not-iterator it) (m))))
+          (#t (%py-not-iterator it)))))
     (if (null? d)
       (pull)
       (guard (e (if (%py-exc-match e %py-exc-StopIteration) (first d) (error e)))
         (pull)))))
+; a builtin iterator's item, or the StopIteration its plain end raises
+(def %py-it-answer
+  (fn (_ v) (if (same? v %py-gen-done) (%py-raise-stop ()) v)))
+; 'list' object is not an iterator
+(def %py-not-iterator
+  (fn (_ v)
+    (Err raise (lit type)
+      (Str8 append "'"
+        (Str8 append (%py-class-name (%py-type-of v)) "' object is not an iterator"))
+      ())))
 ; iter(x): an object's own __iter__, or a generator over the source
 ; %py-iter-open makes of x -- so a value that is not iterable is refused here,
 ; as CPython refuses it, and not at the first next()
 (def %py-iter
   (fn (_ v)
     (match
-      ((%py-gen-is v) v)
+      ((if (%py-gen-is v) #t (%py-it-is v)) v)
       ((if (%py-obj-is v) (not (null? (%py-dunder v "__iter__"))) #f)
         ((%py-dunder v "__iter__")))
       (#t (%py-src-gen (%py-iter-open v))))))
@@ -1173,15 +1202,15 @@
         (go))
       "iterator")))
 
-; A for loop PULLS: a generator one value per iteration (its prints
-; interleave with the body's, and it may be infinite), anything else from
-; its materialized element list.
+; A for loop PULLS: a generator or a builtin iterator one value per iteration
+; (its prints interleave with the body's, and it may be infinite), anything
+; else from its materialized element list.
 ; `who` is %py-iter-elems' door: a caller may name itself in the refusal.
 (def %py-iter-open
   (fn (_ v . who)
     (def elems
       (fn (_) (if (null? who) (%py-iter-elems v) (%py-iter-elems v (first who)))))
-    (if (%py-gen-is v) v
+    (if (if (%py-gen-is v) #t (%py-it-is v)) v
       (if (%py-obj-is v)
         ; an object with __iter__ whose iterator has __next__ is pulled a
         ; step at a time too, so a __next__ that prints or raises does so
@@ -1203,23 +1232,28 @@
   (fn (_ src)
     (match
       ((%py-gen-is src) (%py-gen-pull src))
+      ((%py-it-is src)
+        (guard (e (if (%py-exc-match e %py-exc-StopIteration) %py-gen-done (error e)))
+          ((%py-it-step src))))
       ((eq? (first src) (lit %py-cursor))
         (guard (e (if (%py-exc-match e %py-exc-StopIteration) %py-gen-done (error e)))
           ((first (rest src)))))
       ((null? (first src)) %py-gen-done)
       (#t
         (let ((v (first (first src)))) (%set-first! src (rest (first src))) v)))))
-; The same pull with the source's StopIteration raised as it came: a map,
-; enumerate or filter ends with the one its source ended with, value and all,
-; as CPython's pass it through.
-(def %py-iter-step
+; The next item from an opened source, %py-gen-done at a plain end, or the
+; StopIteration the source raised, raised as it came: what a builtin
+; iterator's step reads its sources with.
+(def %py-iter-next
   (fn (_ src)
     (match
-      ((%py-gen-is src) (%py-gen-resume src (lit send) ()))
-      ((eq? (first src) (lit %py-cursor))
-        (let ((v ((first (rest src)))))
-          (if (same? v %py-gen-done) (%py-raise-stop ()) v)))
-      ((null? (first src)) (%py-raise-stop ()))
+      ((%py-it-is src) ((%py-it-step src)))
+      ((%py-gen-is src)
+        (if (eq? (%py-gen-status src) (lit done))
+          %py-gen-done
+          (%py-gen-resume src (lit send) ())))
+      ((eq? (first src) (lit %py-cursor)) ((first (rest src))))
+      ((null? (first src)) %py-gen-done)
       (#t
         (let ((v (first (first src)))) (%set-first! src (rest (first src))) v)))))
 
