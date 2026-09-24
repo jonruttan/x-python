@@ -387,11 +387,13 @@
   (fn (self es acc)
     (if (null? es) acc (self (rest es) (+ acc (%py-hash (first es)))))))
 (def %py-hash
-  ; TWELVE ARMS, so a match: what a value hashes to, one arm per kind.
+  ; What a value hashes to, one arm per kind, so a match.
   (fn (_ v)
     (match
       ((eq? v #t) 1)
       ((eq? v #f) 0)
+      ; None hashes to the constant CPython gives it
+      ((null? v) 4238894112)
       ; NotImplemented is a singleton, and Python lets it be hashed.  It
       ; reaches here as an ordinary pair that nothing else claims, so it used
       ; to fall through to "unhashable type".
@@ -402,15 +404,19 @@
         (+ (%py-hash (%py-cre v)) (* 1000003 (%py-hash (%py-cim v)))))
       ((eq? (%py-num-kind v) (lit int)) v)
       ((%py-str-is v) (%py-cp-hash (%py-str-cps v) 0))
+      ; bytes hash as the str of the same characters does, as in CPython; a
+      ; bytearray is unhashable
+      ((%py-barr-is v) (%py-unhashable v))
+      ((%py-bytes-is v) (%py-cp-hash (%py-bytes-list v) 0))
+      ((%py-sl-is v) (%py-set-hash (list (%py-sl-start v) (%py-sl-stop v) (%py-sl-step v)) 0))
       ; an object hashes by identity unless its class says otherwise, so two
       ; instances are two keys
-      ((%py-obj-is v)
-        (let ((m (%py-dunder v "__hash__"))) (if (null? m) (%py-id v) (m))))
+      ((%py-obj-is v) (%py-obj-hash v))
       ; a frozenset hashes on its elements; a set is unhashable
       ((%py-set-is v)
         (if (%py-set-frozen? v)
           (%py-set-hash (%py-set-elems v) 0)
-          (Err raise (lit type) "unhashable type: 'set'" ())))
+          (%py-unhashable v)))
       ; a function, generator or class hashes by identity, as in Python
       ((%py-fn-is v) (%py-id v))
       ; a bound method hashes by its function and its receiver, so the two
@@ -419,13 +425,64 @@
       ((%py-gen-is v) (%py-id v))
       ((%py-it-is v) (%py-id v))
       ((%py-class-is v) (%py-id v))
+      ; super(), classmethod(f), staticmethod(f) and property(f) too
+      ((%py-super-is v) (%py-id v))
+      ((%py-desc-is v) (%py-id v))
       ((%py-view-is v)
         (if (Str8 =? (%py-view-kind v) "dict_values")
           (%py-set-hash (%py-view-elems v) 0)
           (Err raise (lit type)
             (Str8 append (Str8 append "unhashable type: '" (%py-view-kind v)) "'") ())))
       ((%py-tuple-is v) (%py-set-hash (%py-tuple-elems v) 0))
-      (#t (Err raise (lit type) "unhashable type" ())))))
+      (#t (%py-unhashable v)))))
+
+; An instance hashes as its class decides (%py-hash-rule): by its __hash__,
+; by the builtin value it carries, not at all, or by identity when nothing
+; decides.
+(def %py-obj-hash
+  (fn (_ v)
+    (def rule (%py-hash-rule (%py-obj-class v)))
+    (match
+      ((null? rule) (%py-id v))
+      ((eq? rule (lit own)) (%py-hash-answer ((%py-dunder v "__hash__"))))
+      ((eq? rule (lit native))
+        (if (%py-hashable? (%py-native-of v)) (%py-hash (%py-native-of v)) (%py-unhashable v)))
+      (#t (%py-unhashable v)))))
+
+; What an instance's hash is decided by, read down its class and bases in
+; lookup order, to the first class that has a say: one carrying a builtin's
+; value (native), one defining __hash__ (own, or none when it is None), or one
+; defining __eq__ alone (none) -- CPython makes __hash__ None in such a class.
+; Nil when nothing decides.
+(def %py-hash-rule
+  (fn (_ cls)
+    (if (if (null? cls) #t (same? cls %py-cls-object))
+      ()
+      (%py-hash-rule-rows (%py-class-methods cls) (%py-class-bases cls)))))
+(def %py-hash-rule-rows
+  (fn (_ rows bs)
+    (def h (%py-alist-find "__hash__" rows))
+    (match
+      ((not (null? (%py-alist-find "%ctor" rows))) (lit native))
+      ((not (null? h)) (if (null? (rest h)) (lit none) (lit own)))
+      ((not (null? (%py-alist-find "__eq__" rows))) (lit none))
+      (#t (%py-hash-rule-bases bs)))))
+(def %py-hash-rule-bases
+  (fn (self bs)
+    (if (null? bs)
+      ()
+      (let ((r (%py-hash-rule (first bs))))
+        (if (null? r) (self (rest bs)) r)))))
+
+; What a __hash__ answered, as hash() answers it: a bool is its int, and
+; anything but an int is refused.
+(def %py-hash-answer
+  (fn (_ h)
+    (match
+      ((eq? h #t) 1)
+      ((eq? h #f) 0)
+      ((eq? (%py-num-kind h) (lit int)) h)
+      (#t (Err raise (lit type) "__hash__ method should return an integer" ())))))
 
 ; Is v a machine float?  The type-handle compare %py-num-kind uses, taken
 ; directly so the writer below can ask cheaply.
@@ -585,10 +642,30 @@
 (def %py-object-delattr
   (fn (_ self n) (%py-obj-drop-attr! self (%py-attr-name! n))))
 
+; object.__new__(cls) allocates an instance of cls.  A builtin class is
+; refused, as CPython refuses it: it carries its own constructor (%ctor), and
+; an instance without the value it builds would be no int or list at all.
+(def %py-object-new
+  (fn (_ . args)
+    (match
+      ((null? args)
+        (Err raise (lit type) "object.__new__(): not enough arguments" ()))
+      ((not (%py-class-is (first args)))
+        (Err raise (lit type)
+          (Str8 append "object.__new__(X): X is not a type object ("
+            (Str8 append (%py-type-name (first args)) ")")) ()))
+      ((not (null? (%py-alist-find "%ctor" (%py-class-methods (first args)))))
+        (Err raise (lit type)
+          (Str8 append "object.__new__("
+            (Str8 append (%py-class-name (first args))
+              (Str8 append ") is not safe, use "
+                (Str8 append (%py-class-name (first args)) ".__new__()")))) ()))
+      (#t (%py-obj-new (first args))))))
+
 (def %py-cls-object
-  ; object.__new__ ALLOCATES, and having it here is what makes a user
-  ; __new__ able to call super().__new__(cls) -- the bound self is the class,
-  ; and the explicit cls argument arrives after it, so the extra is absorbed.
+  ; object.__new__ allocates, and having it here is what makes a user
+  ; __new__ able to call super().__new__(cls), which reaches it unbound, as
+  ; CPython's static __new__ is reached.
   ;
   ; object.__init__ ACCEPTS AND DOES NOTHING, which is what `super().__init__()`
   ; reaches from a class whose base is object -- the commonest line in Python
@@ -596,7 +673,7 @@
   ; methods at all.  It answers None, as every __init__ must.
   (%py-class-new "object" ()
     (list
-      (pair "__new__" (fn (_ cls . args) (%py-obj-new cls)))
+      (pair "__new__" %py-object-new)
       (pair "__init__" (fn (_ self . args) ()))
       (pair "__setattr__" %py-object-setattr)
       (pair "__delattr__" %py-object-delattr))

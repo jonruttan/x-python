@@ -631,10 +631,11 @@
           (Err raise (lit type)
             (Str8 append (Str8 append "type '" (%py-class-name fin))
               "' is not an acceptable base type") ())
-          ; TWO BUILTIN BASES CANNOT BE COMBINED: an instance carries ONE
-          ; native value, so `class A(type, tuple)` has no answer to what it
-          ; would be.  Python calls this a layout conflict and refuses it too.
-          (if (> (%py-ctor-count bases 0) 1)
+          ; Two builtin bases cannot be combined unless one derives from the
+          ; other: an instance carries one native value, so `class A(type,
+          ; tuple)` has no answer to what it would be.  Python calls this a
+          ; layout conflict and refuses it too.
+          (if (eq? (%py-layout-base bases ()) #f)
             (Err raise (lit type)
               "multiple bases have instance lay-out conflict" ())
             (let ((cls (%py-class-new name bases methods (Str8 append "__main__." name))))
@@ -652,13 +653,20 @@
         (self (rest bs))
         (first bs)))))
 
-; How many of these bases bring a native value with them.
-(def %py-ctor-count
-  (fn (self bs n)
+; The builtin class whose native value these bases bring, WIN when none does:
+; each base's own, or the one the others derive from (`class O(mylist,
+; list)`).  Two that neither derives from answer #f.
+(def %py-layout-base
+  (fn (self bs win)
     (if (null? bs)
-      n
-      (self (rest bs)
-        (if (null? (%py-inherited-ctor (first bs))) n (+ n 1))))))
+      win
+      (let ((c (%py-ctor-class (first bs))))
+        (match
+          ((null? c) (self (rest bs) win))
+          ((null? win) (self (rest bs) c))
+          ((%py-subclass? c win) (self (rest bs) c))
+          ((%py-subclass? win c) (self (rest bs) win))
+          (#t #f))))))
 
 (def %py-set-names
   (fn (self cls rows)
