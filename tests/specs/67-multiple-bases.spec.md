@@ -51,3 +51,19 @@ False
 ```output
 raised
 ```
+
+### two builtin bases conflict unless one derives from the other
+
+```python
+(python-run "def attempt67(label, make):\n    try:\n        make()\n        print(label, \"ok\")\n    except TypeError as e:\n        print(label, \"TypeError\", e)\n\n\nclass L67(list):\n    pass\n\n\nclass I67(int):\n    pass\n\n\nclass T67(type):\n    pass\n\n\nattempt67(\"type, tuple\", lambda: type(\"A\", (type, tuple), {}))\nattempt67(\"int, str\", lambda: type(\"B\", (int, str), {}))\nattempt67(\"list, dict\", lambda: type(\"C\", (list, dict), {}))\nattempt67(\"int subclass, str\", lambda: type(\"D\", (I67, str), {}))\nattempt67(\"type subclass, int\", lambda: type(\"E\", (T67, int), {}))\nattempt67(\"list subclass, list\", lambda: type(\"F\", (L67, list), {}))\nattempt67(\"list, object\", lambda: type(\"G\", (list, object), {}))")
+```
+---
+```output
+type, tuple TypeError multiple bases have instance lay-out conflict
+int, str TypeError multiple bases have instance lay-out conflict
+list, dict TypeError multiple bases have instance lay-out conflict
+int subclass, str TypeError multiple bases have instance lay-out conflict
+type subclass, int TypeError multiple bases have instance lay-out conflict
+list subclass, list ok
+list, object ok
+```

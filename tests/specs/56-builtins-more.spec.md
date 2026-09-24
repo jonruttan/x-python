@@ -61,3 +61,55 @@ TypeError
 True
 4 0 0 1 1 81
 ```
+
+### hash: super and the descriptors by identity, None, bytes and slices, and a __hash__ that must answer an int
+
+```python
+(python-run "def f57(x):\n    def g():\n        return x\n    return g\n\n\nclass A57:\n    def __hash__(self):\n        return 123\n\n    def __repr__(self):\n        return \"a instance\"\n\n\nclass B57:\n    pass\n\n\nclass C57:\n    def __eq__(self, another):\n        return True\n\n\nclass D57:\n    def __hash__(self):\n        return None\n\n\nclass E57:\n    def __hash__(self):\n        return True\n\n\nfor label, th in ((\"super\", lambda: super(object, object)), (\"classmethod\", lambda: classmethod(hash)),\n                  (\"staticmethod\", lambda: staticmethod(hash)), (\"property\", lambda: property(len)),\n                  (\"iter\", lambda: iter(\"\")), (\"closure\", lambda: f57(1)), (\"object\", lambda: object()),\n                  (\"None\", lambda: None), (\"bytes\", lambda: b\"ab\"), (\"slice\", lambda: slice(1, 2)),\n                  (\"list\", lambda: []), (\"bytearray\", lambda: bytearray()), (\"A\", lambda: A57()),\n                  (\"B\", lambda: B57()), (\"C\", lambda: C57()), (\"D\", lambda: D57()), (\"E\", lambda: E57())):\n    try:\n        h = hash(th())\n        print(label, type(h).__name__, h if label in (\"A\", \"E\") else \"\")\n    except TypeError as e:\n        print(label, \"TypeError\", e)\nprint({A57(): 1}, hash(b\"ab\") == hash(\"ab\"), hash(slice(1, 2)) == hash(slice(1, 2)))")
+```
+---
+```output
+super int 
+classmethod int 
+staticmethod int 
+property int 
+iter int 
+closure int 
+object int 
+None int 
+bytes int 
+slice int 
+list TypeError unhashable type: 'list'
+bytearray TypeError unhashable type: 'bytearray'
+A int 123
+B int 
+C TypeError unhashable type: 'C57'
+D TypeError __hash__ method should return an integer
+E int 1
+{a instance: 1} True True
+```
+
+### a subclass hashes as its builtin, __eq__ alone makes a class unhashable, and set and dict refuse by name
+
+```python
+(python-run "from collections import namedtuple\n\n\nclass MyStr58(str):\n    pass\n\n\nclass MyList58(list):\n    pass\n\n\nclass MyInt58(int):\n    pass\n\n\nclass MySet58(set):\n    pass\n\n\nclass MyFrozen58(frozenset):\n    pass\n\n\nclass NoHash58:\n    __hash__ = None\n\n\nclass Base58:\n    def __hash__(self):\n        return 7\n\n\nclass EqChild58(Base58):\n    def __eq__(self, o):\n        return True\n\n\nclass HashChild58(EqChild58):\n    def __hash__(self):\n        return 9\n\n\nclass IntEq58(int):\n    def __eq__(self, o):\n        return True\n\n\nP58 = namedtuple(\"P58\", \"x y\")\nfor label, th in ((\"MyStr\", lambda: MyStr58(\"ab\")), (\"MyList\", lambda: MyList58()), (\"MyInt\", lambda: MyInt58(5)),\n                  (\"MySet\", lambda: MySet58()), (\"MyFrozen\", lambda: MyFrozen58([1])),\n                  (\"NoHash\", lambda: NoHash58()), (\"EqChild\", lambda: EqChild58()),\n                  (\"HashChild\", lambda: HashChild58()), (\"IntEq\", lambda: IntEq58(3)), (\"P\", lambda: P58(1, 2))):\n    try:\n        print(label, type(hash(th())).__name__)\n    except TypeError as e:\n        print(label, \"TypeError\", e)\nprint(hash(MyStr58(\"ab\")) == hash(\"ab\"), hash(MyInt58(5)) == 5, hash(P58(1, 2)) == hash((1, 2)),\n      hash(MyFrozen58([1])) == hash(frozenset([1])), hash(HashChild58()))\nfor label, th in ((\"set\", lambda: {NoHash58()}), (\"set()\", lambda: set([MyList58()])),\n                  (\"dict\", lambda: {EqChild58(): 1}), (\"dict list\", lambda: {[1]: 2}),\n                  (\"set of str\", lambda: {MyStr58(\"q\"), Base58(), Base58()})):\n    try:\n        print(label, len(th()))\n    except TypeError as e:\n        print(label, \"TypeError\", e)")
+```
+---
+```output
+MyStr int
+MyList TypeError unhashable type: 'MyList58'
+MyInt int
+MySet TypeError unhashable type: 'MySet58'
+MyFrozen int
+NoHash TypeError unhashable type: 'NoHash58'
+EqChild TypeError unhashable type: 'EqChild58'
+HashChild int
+IntEq TypeError unhashable type: 'IntEq58'
+P int
+True True True True 9
+set TypeError cannot use 'NoHash58' as a set element (unhashable type: 'NoHash58')
+set() TypeError cannot use 'MyList58' as a set element (unhashable type: 'MyList58')
+dict TypeError cannot use 'EqChild58' as a dict key (unhashable type: 'EqChild58')
+dict list TypeError cannot use 'list' as a dict key (unhashable type: 'list')
+set of str 3
+```

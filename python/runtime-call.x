@@ -385,6 +385,12 @@
 
 (def %py-super-attr
   (fn (_ sup name)
+    ; In a classmethod the super self is a class below the one super starts
+    ; from: a method then comes back unbound, and a classmethod binds that
+    ; class, as a lookup through the class would.
+    (def obj (%py-super-self sup))
+    (def cls? (if (%py-class-is obj) (%py-subclass? obj (%py-super-from sup)) #f))
+    (def owner (if cls? obj (%py-obj-class obj)))
     (let ((base (%py-class-base (%py-super-from sup))))
       (if (null? base)
         (Err raise (lit attribute)
@@ -404,16 +410,17 @@
             ; their meanings here too.
             ((%py-desc-is m)
               (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
-                (if (eq? k (lit static))
-                  f
-                  (if (eq? k (lit classmethod))
-                    (%py-bound-new f (%py-obj-class (%py-super-self sup)))
-                    (f (%py-super-self sup))))))
-            ((%py-desc-get? m)
-              ((%py-dunder m "__get__")
-                (%py-super-self sup) (%py-obj-class (%py-super-self sup))))
+                (match
+                  ((eq? k (lit static)) f)
+                  ((eq? k (lit classmethod)) (%py-bound-new f owner))
+                  (cls? m)
+                  (#t (f obj)))))
+            ((%py-desc-get? m) ((%py-dunder m "__get__") (if cls? () obj) owner))
             ((not (%py-fn-is m)) m)
-            (#t (%py-bound-new m (%py-super-self sup)))))))))
+            ; __new__ comes back unbound whatever the self, as the instance
+            ; path reads it: CPython makes it a staticmethod
+            ((if cls? #t (Str8 =? name "__new__")) m)
+            (#t (%py-bound-new m obj))))))))
 
 ; --- Builtins that render ----------------------------------------------------
 ;
@@ -874,23 +881,39 @@
       ((%py-dict-is v) #f)
       ((%py-set-is v) (%py-set-frozen? v))
       ((%py-dq-is v) #f)
+      ((%py-barr-is v) #f)
+      ; an instance is as its class decides (%py-hash-rule)
+      ((%py-obj-is v)
+        (let ((rule (%py-hash-rule (%py-obj-class v))))
+          (match
+            ((null? rule) #t)
+            ((eq? rule (lit own)) #t)
+            ((eq? rule (lit native)) (%py-hashable? (%py-native-of v)))
+            (#t #f))))
       (#t #t))))
+; cannot use 'list' as a set element (unhashable type: 'list'), ROLE being
+; what v was to be
 (def %py-check-hashable!
+  (fn (_ v role)
+    (if (%py-hashable? v)
+      ()
+      (let ((name (%py-type-name v)))
+        (Err raise (lit type)
+          (Str8 append "cannot use '"
+            (Str8 append name
+              (Str8 append "' as "
+                (Str8 append role
+                  (Str8 append " (unhashable type: '" (Str8 append name "')")))))) ())))))
+; unhashable type: 'list'
+(def %py-unhashable
   (fn (_ v)
-    (if (%py-hashable? v) ()
-      (Err raise (lit type)
-        (Str8 append (Str8 append "unhashable type: '" (%py-type-name v)) "'") ()))))
-(def %py-type-name
-  (fn (_ v)
-    (match
-      ((%py-list-is v) "list")
-      ((%py-dict-is v) "dict")
-      ((%py-set-is v) "set")
-      (#t "object"))))
+    (Err raise (lit type)
+      (Str8 append (Str8 append "unhashable type: '" (%py-type-name v)) "'") ())))
+(def %py-type-name (fn (_ v) (%py-class-name (%py-type-of v))))
 ; append v unless an equal element is already there
 (def %py-set-put
   (fn (_ es v)
-    (%py-check-hashable! v)
+    (%py-check-hashable! v "a set element")
     (if (%py-set-has? v es) es (%py-append-elem es v))))
 (def %py-set-fold
   (fn (self es vs)

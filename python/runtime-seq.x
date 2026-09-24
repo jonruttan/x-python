@@ -751,7 +751,11 @@
 
 (def %py-mkdict
   (fn (_ . entries)
-    (def check (fn (self es) (if (null? es) () (%seq (%py-check-hashable! (first (first es))) (self (rest es))))))
+    (def check
+      (fn (self es)
+        (if (null? es)
+          ()
+          (%seq (%py-check-hashable! (first (first es)) "a dict key") (self (rest es))))))
     (check entries)
     (%py-dict-new entries)))
 

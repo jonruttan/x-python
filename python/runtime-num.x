@@ -857,13 +857,29 @@
   (fn (self a l)
     (if (null? l) #f (if (%py-eq a (first l)) #t (self a (rest l))))))
 
+; An iterator is read up to the first equal item and no further, as in
+; CPython: `2 in gen` leaves the rest of gen unread.
+(def %py-in-pull
+  (fn (self a src)
+    (def v (%py-iter-pull! src))
+    (match
+      ((same? v %py-gen-done) #f)
+      ((%py-eq a v) #t)
+      (#t (self a src)))))
+
+; argument of type 'int' is not a container or iterable
+(def %py-in-refusal
+  (fn (_ v)
+    (Str8 append "argument of type '"
+      (Str8 append (%py-type-name v) "' is not a container or iterable"))))
+
 (def %py-in
   (fn (_ a b)
     (match
       ((%py-obj-is b)
         (let ((m (%py-dunder b "__contains__")))
           (if (null? m)
-            (%py-in-walk a (%py-iter-elems b))
+            (%py-in-pull a (%py-iter-open b (%py-in-refusal b)))
             (%py-truthy (m a)))))
       ((%py-arr-is b) (%py-in-walk a (%py-arr-el b)))
       ((%py-dq-is b) (%py-in-walk a (%py-dq-el b)))
@@ -877,12 +893,15 @@
             (%py-in-walk (%py-boolnorm a) (%py-bytes-list b))
             (if (%py-arr-is a)
               (%pb-in? (%py-arr-buffer a) (%py-bytes-list b))
-              (Err raise (lit type) "a bytes-like object is required" ())))))
+              (Err raise (lit type)
+                (Str8 append "a bytes-like object is required, not '"
+                  (Str8 append (%py-type-name a) "'")) ())))))
       ((%py-str-is b)
         (if (%py-str-is a)
           (%pb-in? (%py-str-cps a) (%py-str-cps b))
           (Err raise (lit type)
-            "'in <string>' requires string as left operand" ())))
+            (Str8 append "'in <string>' requires string as left operand, not "
+              (%py-type-name a)) ())))
       ((%py-set-is b) (%py-set-has? a (%py-set-elems b)))
       ((%py-list? b) (%py-in-walk a (%py-list-elems b)))
       ((%py-tuple-is b) (%py-in-walk a (%py-tuple-elems b)))
@@ -892,7 +911,9 @@
             (fn (self es acc)
               (if (null? es) acc (self (rest es) (pair (first (first es)) acc)))))
           (%py-in-walk a (keys (%py-dict-entries b) ()))))
-      (#t (Err raise (lit type) "argument is not iterable" ())))))
+      ((if (%py-gen-is b) #t (%py-it-is b)) (%py-in-pull a b))
+      ((%py-view-is b) (%py-in-walk a (%py-view-elems b)))
+      (#t (%py-in-pull a (%py-iter-open b (%py-in-refusal b)))))))
 
 (%py-sweep!)
 ; --- Numeric builtins --------------------------------------------------------

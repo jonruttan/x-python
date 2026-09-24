@@ -258,3 +258,21 @@ b'\x04\x05\x00\x01' b'\x00\x01\x04\x05' b'\x00\x01'
 (1, 2, 3, 4) [1, 2] ab bytearray(b'xy')
 tuple bytes
 ```
+
+### a function, method, generator, bool, range or None type is no base
+
+```python
+(python-run "def gen71():\n    yield\n\n\nclass K71:\n    def m(self):\n        pass\n\n\nfor label, base in ((\"builtin\", type(len)), (\"bound builtin\", type([].append)), (\"function\", type(gen71)),\n                    (\"method\", type(K71().m)), (\"generator\", type(gen71())), (\"NoneType\", type(None)),\n                    (\"bool\", bool), (\"range\", range)):\n    try:\n        class X71(base):\n            pass\n        print(label, \"ok\")\n    except TypeError as e:\n        print(label, \"TypeError\", e)\nprint([k for k in type(len).__dict__ if k.startswith(\"%\")], [k for k in range.__dict__ if k.startswith(\"%\")])")
+```
+---
+```output
+builtin TypeError type 'builtin_function_or_method' is not an acceptable base type
+bound builtin TypeError type 'builtin_function_or_method' is not an acceptable base type
+function TypeError type 'function' is not an acceptable base type
+method TypeError type 'method' is not an acceptable base type
+generator TypeError type 'generator' is not an acceptable base type
+NoneType TypeError type 'NoneType' is not an acceptable base type
+bool TypeError type 'bool' is not an acceptable base type
+range TypeError type 'range' is not an acceptable base type
+[] []
+```

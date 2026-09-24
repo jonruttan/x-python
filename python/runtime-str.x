@@ -86,13 +86,14 @@
 ; -- and a user class's attribute is its function, unbound, callable with an
 ; explicit self.  A builtin class other than str has no such surface yet.
 
-; A class's own alist, as dict rows -- minus the "%ctor" key, which is this
-; runtime's own and which no Python identifier can spell.
+; A class's own alist, as dict rows -- minus the "%ctor" and "%final" keys,
+; which are this runtime's own and which no Python identifier can spell.
 (def %py-class-rows
   (fn (self cls)
     ((fn (go rows)
        (if (null? rows) ()
-         (if (Str8 =? (first (first rows)) "%ctor")
+         (if (if (Str8 =? (first (first rows)) "%ctor") #t
+               (Str8 =? (first (first rows)) "%final"))
            (go (rest rows))
            ; __dict__ IS A DICT, so the names cross over: they are the
            ; platform's strings in the method table and strs once they are

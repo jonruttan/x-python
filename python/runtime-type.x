@@ -923,14 +923,18 @@
 ; The types a callable, a generator and a bound method answer to.  CPython
 ; separates a def from a builtin, and the seventh signature field is what
 ; tells them apart here: a def or a lambda records one, a builtin does not.
-(def %py-cls-function (%py-class-new "function" %py-cls-object () "function"))
+; None of them, nor NoneType, is an acceptable base, as in CPython.
+(def %py-cls-function
+  (%py-class-new "function" %py-cls-object (list (pair "%final" #t)) "function"))
 (def %py-cls-builtin-function
-  (%py-class-new "builtin_function_or_method" %py-cls-object ()
+  (%py-class-new "builtin_function_or_method" %py-cls-object (list (pair "%final" #t))
     "builtin_function_or_method"))
-(def %py-cls-generator (%py-class-new "generator" %py-cls-object () "generator"))
-(def %py-cls-method (%py-class-new "method" %py-cls-object () "method"))
+(def %py-cls-generator
+  (%py-class-new "generator" %py-cls-object (list (pair "%final" #t)) "generator"))
+(def %py-cls-method
+  (%py-class-new "method" %py-cls-object (list (pair "%final" #t)) "method"))
 (def %py-cls-NoneType
-  (%py-class-new "NoneType" %py-cls-object () "NoneType"))
+  (%py-class-new "NoneType" %py-cls-object (list (pair "%final" #t)) "NoneType"))
 
 ; types.SimpleNamespace: an object that is only its attributes.  A mapping
 ; given first sets them, then the keywords do; it prints them in the order they

@@ -79,3 +79,20 @@ Point(1, 2)
 Base.__new__ for Sub
 Sub
 ```
+
+### object.__new__ refuses a non-class and a builtin class
+
+```python
+(python-run "class Foo65:\n    def __new__(cls):\n        print(\"in __new__\")\n        raise RuntimeError\n\n    def __init__(self):\n        self.attr = \"something\"\n\n\no65 = object.__new__(Foo65)\nprint(hasattr(o65, \"attr\"), isinstance(o65, Foo65))\no65.__init__()\nprint(o65.attr, type(object.__new__(object)).__name__)\n\n\nclass BadInit65:\n    def __init__(self):\n        return 10\n\n\nfor label, th in ((\"1\", lambda: object.__new__(1)), (\"None\", lambda: object.__new__(None)),\n                  (\"int\", lambda: object.__new__(int)), (\"list\", lambda: object.__new__(list)),\n                  (\"empty\", lambda: object.__new__()), (\"init\", lambda: BadInit65())):\n    try:\n        print(label, th())\n    except TypeError as e:\n        print(label, \"TypeError\", e)")
+```
+---
+```output
+False True
+something object
+1 TypeError object.__new__(X): X is not a type object (int)
+None TypeError object.__new__(X): X is not a type object (NoneType)
+int TypeError object.__new__(int) is not safe, use int.__new__()
+list TypeError object.__new__(list) is not safe, use list.__new__()
+empty TypeError object.__new__(): not enough arguments
+init TypeError __init__() should return None, not 'int'
+```

@@ -145,3 +145,32 @@ zip (42,)
 zip second (42,)
 []
 ```
+
+## membership
+
+### in reads a view, an iterator only up to its first match, and refuses what is neither container nor iterable
+
+```python
+(python-run "d22 = {1: 2, 3: 4}\nprint(1 in d22.keys(), 5 in d22.keys(), 2 in d22.values(), 9 in d22.values())\nprint((1, 2) in d22.items(), (1, 3) in d22.items(), 1 not in d22.keys())\n\n\ndef gen22():\n    for i in range(5):\n        print(\"yield\", i)\n        yield i\n\n\ng22 = gen22()\nprint(2 in g22)\nprint(next(g22))\nprint(9 in g22)\nprint(3 in map(abs, [-1, -3]), 4 in map(abs, [-1, -3]), (1, 2) in zip([1], [2]))\n\n\nclass It22:\n    def __init__(self):\n        self.n = 0\n\n    def __iter__(self):\n        return self\n\n    def __next__(self):\n        self.n += 1\n        if self.n > 3:\n            raise StopIteration\n        return self.n\n\n\nclass Seq22:\n    def __getitem__(self, i):\n        if i >= 3:\n            raise IndexError\n        return i * 10\n\n\nclass Iter22:\n    def __iter__(self):\n        return iter([1, 2])\n\n\nprint(2 in It22(), 7 in It22(), 20 in Seq22(), 5 in Seq22(), 2 in Iter22(), 3 in Iter22())\n\n\nclass Nothing22:\n    pass\n\n\nfor label, th in ((\"int\", lambda: 1 in 5), (\"None\", lambda: 1 in None), (\"obj\", lambda: 1 in Nothing22()),\n                  (\"float\", lambda: 1 in 2.5), (\"int in str\", lambda: 1 in \"abc\"),\n                  (\"str in bytes\", lambda: \"a\" in b\"abc\")):\n    try:\n        print(label, th())\n    except TypeError as e:\n        print(label, \"TypeError\", e)")
+```
+---
+```output
+True False True False
+True False False
+yield 0
+yield 1
+yield 2
+True
+yield 3
+3
+yield 4
+False
+True False True
+True False True False True False
+int TypeError argument of type 'int' is not a container or iterable
+None TypeError argument of type 'NoneType' is not a container or iterable
+obj TypeError argument of type 'Nothing22' is not a container or iterable
+float TypeError argument of type 'float' is not a container or iterable
+int in str TypeError 'in <string>' requires string as left operand, not int
+str in bytes TypeError a bytes-like object is required, not 'str'
+```
