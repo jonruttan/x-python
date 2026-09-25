@@ -1112,38 +1112,32 @@
       (if (%py-kw? (first toks) "for") #t (self (rest toks))))))
 
 ; ((sym (List ref N %py-unpacked)) ...) for a tuple target's inner let
+; Each target of a target list, bound to its place in the unpacked values:
+; the first, then the first of the rest, and so on down the list.
 (def %py-comp-refs
-  (fn (self syms i acc)
+  (fn (self syms at acc)
     (if (null? syms)
       (%py-reverse acc)
-      (self (rest syms) (+ i 1)
-        (pair
-          (list (first syms)
-            (list (lit List) (lit ref) i (lit %py-unpacked)))
-          acc)))))
+      (self (rest syms) (list (lit rest) at)
+        (pair (list (first syms) (list (lit first) at)) acc)))))
 
-(def %py-comp-bind
+; A clause's body as a function of one item: a single name is the
+; function's parameter, and a target list unpacks the item.
+(def %py-comp-body
   (fn (_ syms inner)
     (if (null? (rest syms))
-      (list (lit let)
-        (list (list (first syms) (list (lit first) (lit %py-items))))
-        inner)
-      (list (lit let)
-        (list (list (lit %py-unpacked)
-                (list (lit %py-unpack) (list (lit first) (lit %py-items))
-                      (%py-count syms))))
-        (list (lit let) (%py-comp-refs syms 0 ()) inner)))))
+      (list (lit fn) (list (lit _) (first syms)) inner)
+      (list (lit fn) (list (lit _) (lit %py-item))
+        (list (lit let)
+          (list (list (lit %py-unpacked)
+                  (list (lit %py-unpack) (lit %py-item) (%py-count syms))))
+          (list (lit let) (%py-comp-refs syms (lit %py-unpacked) ()) inner))))))
 
+; The body runs on each item of the source the iterable opens, read a step
+; at a time where the source is one (%py-comp-each).
 (def %py-comp-loop
   (fn (_ syms iter inner)
-    (list
-      (list (lit fn) (list (lit self) (lit %py-items))
-        (list (lit if) (list (lit null?) (lit %py-items))
-          ()
-          (list (lit %seq)
-            (%py-comp-bind syms inner)
-            (list (lit self) (list (lit rest) (lit %py-items))))))
-      (list (lit %py-iter-elems) iter))))
+    (list (lit %py-comp-each) (list (lit %py-iter-open) iter) (%py-comp-body syms inner))))
 
 ; (for SYMS ITER-FORM) and (if COND-FORM), in source order.  The first iterable
 ; is evaluated in the enclosing scope, as in Python, so it is compiled before the

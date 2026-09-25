@@ -1275,6 +1275,24 @@
       ((null? (first src)) %py-gen-done)
       (#t
         (let ((v (first (first src)))) (%set-first! src (rest (first src))) v)))))
+; A comprehension clause runs F on each item of a source %py-iter-open
+; opened.  A container's items are walked as the list they already are;
+; anything read a step at a time -- a generator, an iterator, a range, an
+; object's __iter__ -- is pulled one item per call, so a generator
+; expression over one reads it in step with its own consumer, and a
+; comprehension's prints interleave with its source's as in CPython.
+(def %py-comp-each
+  (fn (_ src f)
+    (if (if (%py-gen-is src) #f (if (%py-it-is src) #f (not (eq? (first src) (lit %py-cursor)))))
+      (%py-comp-walk (first src) f)
+      (%py-comp-pull src f))))
+(def %py-comp-walk
+  (fn (self l f) (if (null? l) () (%seq (f (first l)) (self (rest l) f)))))
+(def %py-comp-pull
+  (fn (self src f)
+    (def v (%py-iter-pull! src))
+    (if (same? v %py-gen-done) () (%seq (f v) (self src f)))))
+
 ; The next item from an opened source, %py-gen-done at a plain end, or the
 ; StopIteration the source raised, raised as it came: what a builtin
 ; iterator's step reads its sources with.
