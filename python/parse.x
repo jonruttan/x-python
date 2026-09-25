@@ -749,9 +749,13 @@
             (self (rest ts) (pair (first ts) acc))))))
     (let ((sp (split (rest toks) ())))
       (let ((sig (%py-params-of (first sp)))
-            ; a lambda body is a function's, for a yield in it (%py-yield-expr)
-            (b (%py-scoped (%py-param-syms (%py-params-of (first sp)))
-                 (fn (_) (%py-in-fn (fn (_) (%py-plain-test (rest sp))))))))
+            ; a lambda body is a function's, for a yield in it (%py-yield-expr),
+            ; and owns its parameters (%py-fn-names)
+            (b (let ((ps (%py-param-syms (%py-params-of (first sp)))))
+                 (%py-scoped ps
+                   (fn (_)
+                     (%py-in-fn
+                       (fn (_) (%py-fn-names ps () () (fn (_) (%py-plain-test (rest sp)))))))))))
         (def names (first sig))
         (def syms (%py-strs->syms names))
         (def dflts (first (rest sig)))
@@ -766,7 +770,7 @@
             (%py-param-syms sig)))
         (def body
           ((%py-fn-prelude "<lambda>" names dflts rest-sym () kwonly nreq)
-            (if (null? own) (first b) (list (lit let) (%py-lets own ()) (first b)))))
+            (if (null? own) (first b) (list (lit let) (%py-lets own () ()) (first b)))))
         (def sig-form
           (list (lit %py-sig!) (list (lit fn) (pair (lit _) (lit %py-more)) body)
             "<lambda>" (pair (lit list) names) nreq (not (null? rest-sym)) ()
@@ -1670,6 +1674,7 @@
         (list "KeyError"          (lit %py-exc-KeyError))
         (list "AttributeError"    (lit %py-exc-AttributeError))
         (list "NameError"         (lit %py-exc-NameError))
+        (list "UnboundLocalError" (lit %py-exc-UnboundLocalError))
         (list "TypeError"         (lit %py-exc-TypeError))
         (list "ValueError"        (lit %py-exc-ValueError))
         (list "AssertionError"    (lit %py-exc-AssertionError))
@@ -1777,6 +1782,19 @@
 ; %py-deleted, so it stays a bare symbol.
 (def %py-scope-syms (pair () ()))
 
+; The def being compiled, for the reads that may find one of its names
+; unbound, as symbols: the names it owns -- its parameters and the names its
+; body binds -- and the names the defs around it own (%py-free-names).  A
+; lambda owns its parameters.  A class body owns none: what it reads of the def
+; around it is free to it, as to a def nested there.  Both nil outside a def.
+(def %py-own-names (pair () ()))
+(def %py-free-names (pair () ()))
+; Those of them bound for certain where the compile has reached: the
+; parameters; a for loop's names, in its body; what a statement binds, for the
+; statements after it in its block; and in a nested def or lambda, what was
+; bound where it is written, as only `del` unbinds a name.
+(def %py-bound-now (pair () ()))
+
 ; How many def bodies the compile is inside: `return` is a statement only
 ; inside one.  The count comes back down however the compile ends.
 (def %py-fn-depth (pair 0 ()))
@@ -1806,6 +1824,56 @@
         (let ((r (guard (e (%seq (%set-first! %py-scope-syms outer) (error e))) (thunk))))
           (%seq (%set-first! %py-scope-syms outer) r))))))
 
+; Compile with the def's names set to own, free and bound, and set back however
+; the compile ends.
+(def %py-names-as
+  (fn (_ own free bound thunk)
+    (def o (first %py-own-names))
+    (def f (first %py-free-names))
+    (def b (first %py-bound-now))
+    (def back!
+      (fn (_)
+        (%seq (%seq (%set-first! %py-own-names o) (%set-first! %py-free-names f))
+          (%set-first! %py-bound-now b))))
+    (%seq (%seq (%set-first! %py-own-names own) (%set-first! %py-free-names free))
+      (%seq (%set-first! %py-bound-now bound)
+        (let ((r (guard (e (%seq (back!) (error e))) (thunk))))
+          (%seq (back!) r))))))
+
+; A def or lambda body: params are bound from its start, and its body binds
+; locals; globals are the names it declares global.  What the defs around it
+; own is free to it, and what was bound where it is written stays bound, less
+; the names it binds or declares global itself.
+(def %py-fn-names
+  (fn (_ params locals globals thunk)
+    (def own (%py-append params locals))
+    (def mine (%py-append own globals))
+    (%py-names-as own
+      (%py-minus (%py-append (first %py-own-names) (first %py-free-names)) mine)
+      (%py-append params (%py-minus (first %py-bound-now) mine))
+      thunk)))
+
+; Compile with syms bound for certain too, and set back after: what a block
+; binds is bound for certain only inside it.
+(def %py-bound-in
+  (fn (_ syms thunk)
+    (%py-names-as (first %py-own-names) (first %py-free-names) (%py-bound-plus syms)
+      thunk)))
+; syms bound for certain from here to the end of the block
+(def %py-bound!
+  (fn (_ syms) (%set-first! %py-bound-now (%py-bound-plus syms))))
+; the names bound for certain with syms added; only a def's names are read
+; through the check, so only they are kept, once each
+(def %py-bound-plus
+  (fn (self syms)
+    (match
+      ((null? syms) (first %py-bound-now))
+      ((%py-seen? (first syms) (first %py-bound-now)) (self (rest syms)))
+      ((if (%py-seen? (first syms) (first %py-own-names)) #t
+          (%py-seen? (first syms) (first %py-free-names)))
+        (pair (first syms) (self (rest syms))))
+      (#t (self (rest syms))))))
+
 ; The names a parameter list binds, as symbols: the positional ones, *rest,
 ; **kw and the keyword-only ones.
 (def %py-param-syms
@@ -1826,9 +1894,10 @@
           (self (rest n) (%py-append (%py-syms-of (first n) ()) acc))))
       (#t (self (rest toks) acc)))))
 
-; Compile part of a comprehension with the names its for clauses bind in scope.
-; They are its iteration names too, which a `:=` inside it, or inside a
-; comprehension nested in it, may not rebind (%py-walrus).
+; Compile part of a comprehension with the names its for clauses bind in scope,
+; and bound for certain there.  They are its iteration names too, which a `:=`
+; inside it, or inside a comprehension nested in it, may not rebind
+; (%py-walrus).
 (def %py-comp-iter-syms (pair () ()))
 (def %py-comp-scoped
   (fn (_ elems thunk)
@@ -1837,12 +1906,13 @@
     (%set-first! %py-comp-iter-syms (%py-append syms outer))
     (def r
       (guard (e (%seq (%set-first! %py-comp-iter-syms outer) (error e)))
-        (%py-scoped syms thunk)))
+        (%py-scoped syms (fn (_) (%py-bound-in syms thunk)))))
     (%seq (%set-first! %py-comp-iter-syms outer) r)))
 
-; A read of a deleted-name candidate, or of a name the program never binds and
-; no enclosing scope binds either, goes through the check; every other name is
-; the bare symbol it always was.
+; A read of a def's name where it may be unbound (%py-own-names), of a
+; deleted-name candidate, or of a name the program never binds and no enclosing
+; scope binds either, goes through a check; every other name is the bare
+; symbol it always was.
 ; The names the class body being compiled binds at its own level, as text
 ; (%py-class-level-names), or nil: outside a class body, and inside a def or
 ; lambda written in one (%py-in-fn), whose body does not see them.  A read of
@@ -1857,12 +1927,41 @@
 (def %py-name-read-outer
   (fn (_ s)
     (let ((sym (%py-name->sym s)))
-      (if (if (%py-del-member? s (first %py-del-names)) #t
+      (match
+        ((%py-seen? sym (first %py-own-names)) (%py-def-read s sym (lit %py-local-live)))
+        ((%py-seen? sym (first %py-free-names)) (%py-def-read s sym (lit %py-free-live)))
+        ((if (%py-del-member? s (first %py-del-names)) #t
             (if (%py-del-member? s (first %py-undef-names))
               (not (%py-seen? sym (first %py-scope-syms)))
               #f))
-        (list (lit %py-name-live) s sym)
-        sym))))
+          (list (lit %py-name-live) s sym))
+        (#t sym)))))
+
+; A def's name is read bare where it is bound for certain, and through check
+; -- %py-local-live or %py-free-live -- everywhere else; a `del` of it
+; anywhere leaves it bound for certain nowhere.
+(def %py-def-read
+  (fn (_ s sym check)
+    (if (if (%py-del-member? s (first %py-del-names)) #f
+          (%py-seen? sym (first %py-bound-now)))
+      sym
+      (list check s sym))))
+
+; Is form a name read through a check (%py-name-read-outer)?
+(def %py-checked-read?
+  (fn (_ form)
+    (match
+      ((eq? (first form) (lit %py-name-live)) #t)
+      ((eq? (first form) (lit %py-local-live)) #t)
+      (#t (eq? (first form) (lit %py-free-live))))))
+; the name a read form stands for, bare or through a check, as a list of its
+; symbol; nil for any other form
+(def %py-read-syms
+  (fn (_ form)
+    (match
+      ((symbol? form) (list form))
+      ((if (pair? form) (%py-checked-read? form) #f) (list (List ref 2 form)))
+      (#t ()))))
 
 (def %py-name->sym
   (fn (_ s)
@@ -1968,14 +2067,62 @@
               (not (%py-block? (first (rest toks))))))
         (let ((sp (%py-line-of (rest toks) ())))
           (pair
-            (%py-body-seq (first (%py-stmts (%py-semi->nl (first sp)) ())))
+            (%py-body-seq (%py-block-stmts (%py-semi->nl (first sp))))
             (rest sp)))
       (let ((t (%py-skip-nl (rest toks))))
         (if (not (%py-block? (if (null? t) () (first t))))
           (Err raise (lit indent) "expected an indented block" ())
           (pair
-            (%py-body-seq (first (%py-stmts (%py-semi->nl (%py-block-toks (first t))) ())))
+            (%py-body-seq (%py-block-stmts (%py-semi->nl (%py-block-toks (first t)))))
             (rest t))))))))
+
+; A block's statements, compiled; what they bind is bound for certain only
+; inside it (%py-bound-in).  What was bound for certain at its end is left in
+; %py-block-bound for an if to join with its other branches, or %py-leaves
+; when the block ends in a return, raise, break or continue and so never
+; reaches what follows it.
+(def %py-block-bound (pair () ()))
+(def %py-leaves (list (lit %py-leaves)))
+(def %py-block-stmts
+  (fn (_ toks)
+    (first
+      (%py-bound-in ()
+        (fn (_)
+          (let ((r (%py-stmts toks ())))
+            (%set-first! %py-block-bound
+              (if (%py-leaves? (first r)) %py-leaves (first %py-bound-now)))
+            r))))))
+(def %py-leaves?
+  (fn (self forms)
+    (match
+      ((null? forms) #f)
+      ((not (null? (rest forms))) (self (rest forms)))
+      ((not (pair? (first forms))) #f)
+      (#t
+        (let ((h (first (first forms))))
+          (match
+            ((eq? h (lit %py-return)) #t)
+            ((eq? h (lit %py-break)) #t)
+            ((eq? h (lit %py-continue)) #t)
+            ((eq? h (lit %py-raise-any)) #t)
+            ((eq? h (lit %py-raise-from)) #t)
+            (#t (eq? h (lit %py-reraise)))))))))
+
+; What is bound for certain where two branches meet: what both bound, or what
+; one bound when the other leaves.
+(def %py-bound-join
+  (fn (_ a b)
+    (match
+      ((same? a %py-leaves) b)
+      ((same? b %py-leaves) a)
+      (#t (%py-keep a b)))))
+; the members of a that are in b
+(def %py-keep
+  (fn (self a b)
+    (match
+      ((null? a) ())
+      ((%py-seen? (first a) b) (pair (first a) (self (rest a) b)))
+      (#t (self (rest a) b)))))
 
 ; (line-tokens . rest-from-the-newline)
 (def %py-line-of
@@ -2158,9 +2305,12 @@
       (let ((it (first items)))
         (let ((mgr (first it)) (name (rest it)))
           (list (lit let) (list (list (lit %py-mgr) mgr))
-            (list (lit let)
-              (list (list (if (null? name) (lit %py-unused) name)
-                      (%py-with-enter async?)))
+            ; `as NAME` stores to the name its scope holds, as an assignment
+            ; does, so it is still bound after the with
+            (list (lit %seq)
+              (if (null? name)
+                (%py-with-enter async?)
+                (list (lit set!) name (%py-with-enter async?)))
               ; a cell, so the normal exit is taken only when the body ran to
               ; the end: a handler that swallowed an exception has already
               ; called __exit__ and must not call it twice
@@ -2209,6 +2359,18 @@
               (self (rest after) acc2)
               (pair (%py-reverse acc2) after))))))))
 
+; The body after the items, compiled with the names they bind with `as` bound
+; for certain in it.
+(def %py-with-block
+  (fn (_ items)
+    (def names
+      (fn (self its)
+        (match
+          ((null? its) ())
+          ((null? (rest (first its))) (self (rest its)))
+          (#t (pair (rest (first its)) (self (rest its)))))))
+    (%py-bound-in (names (first items)) (fn (_) (%py-block (rest items))))))
+
 (set! %py-stmt
   (fn (_ toks)
     (let ((t (first toks)))
@@ -2228,7 +2390,7 @@
           (let ((sp (%py-line-of (rest toks) ()))) (pair () (rest sp))))
         ((%py-kw? t "with")
           (let ((items (%py-with-items (rest toks) ())))
-            (let ((blk (%py-block (rest items))))
+            (let ((blk (%py-with-block items)))
               (pair (%py-with-body (first items) (first blk)) (rest blk)))))
         ((%py-kw? t "import") (%py-import-list (rest toks) ()))
         ((%py-kw? t "from")
@@ -2263,13 +2425,11 @@
         ; non-nil value to x, so the bare value in an x `if` was silently wrong.
         ; bool() stated the rule once in %py-truthy; conditions now ask it.
         ((%py-kw? t "if")
-          (let ((c (%py-test (rest toks))))
-            (let ((b (%py-block (rest c))))
-              (let ((e (%py-else (rest b))))
-                (pair
-                  (list (lit if) (list (lit %py-truthy) (first c))
-                    (first b) (first e))
-                  (rest e))))))
+          (let ((r (%py-if-chain (rest toks))))
+            ; what each branch that falls through binds is bound after it
+            (if (same? (first %py-block-bound) %py-leaves) ()
+              (%set-first! %py-bound-now (first %py-block-bound)))
+            r))
         ; `async def`, `async for`, `async with` -- the last two only inside
         ; an async def, which is what makes either a SyntaxError elsewhere
         ((%py-kw? t "async")
@@ -2365,6 +2525,8 @@
                     ; expression with side effects and right for every
                     ; case this handles today.
                     (let ((r (%py-exprlist (rest (rest tgt)))))
+                      ; a name is bound for the statements after this one
+                      (%py-bound! (%py-read-syms (first tgt)))
                       (pair
                         (%py-store (first tgt)
                           (list aug (first tgt) (first r)))
@@ -2520,7 +2682,7 @@
       (let ((n (%py-for-names toks ())))
         (let ((syms (%py-syms-of (first n) ())))
           (let ((it (%py-exprlist (rest n))))
-            (let ((b (%py-block (rest it))))
+            (let ((b (%py-bound-in syms (fn (_) (%py-block (rest it))))))
               (let ((e (%py-loop-else (rest b))))
                 (pair
                   (%py-loop-tail
@@ -2551,7 +2713,7 @@
 (def %py-async-with
   (fn (_ toks)
     (let ((items (%py-with-items toks ())))
-      (let ((blk (%py-block (rest items))))
+      (let ((blk (%py-with-block items)))
         (pair (%py-with-body-of (first items) (first blk) #t) (rest blk))))))
 
 (def %py-for
@@ -2561,7 +2723,8 @@
       (let ((n (%py-for-names toks ())))
         (let ((syms (%py-syms-of (first n) ())))
           (let ((it (%py-exprlist (rest n))))
-            (let ((b (%py-block (rest it))))
+            ; the loop's names are bound for certain in its body
+            (let ((b (%py-bound-in syms (fn (_) (%py-block (rest it))))))
               ; THE LOOP PULLS ONE ITEM AT A TIME from %py-iter-open's source:
               ; a generator yields lazily (its prints interleave with the
               ; body's), anything else is its materialized element list.
@@ -3156,13 +3319,16 @@
       (#t (self (rest toks) acc)))))
 
 ; A class body's statements, compiled with its own names readable (%py-cread)
-; and set back however the compile ends.
+; and set back however the compile ends.  What they read of a def around them
+; is free to them (%py-own-names).
 (def %py-class-body-of
   (fn (_ toks)
     (def outer (first %py-class-level))
     (%set-first! %py-class-level (%py-class-level-names toks ()))
     (def r (guard (e (%seq (%set-first! %py-class-level outer) (error e)))
-             (%py-class-methods-of toks ())))
+             (%py-names-as () (%py-append (first %py-own-names) (first %py-free-names))
+               (first %py-bound-now)
+               (fn (_) (%py-class-methods-of toks ())))))
     (%seq (%set-first! %py-class-level outer) (first r))))
 
 (def %py-class-block
@@ -3190,6 +3356,8 @@
       (%set-first! %py-current-class (%py-name->sym (%py-val n)))
       (let ((r (%py-class-block toks)))
         (%set-first! %py-current-class outer)
+        ; the name is bound for the statements after this one
+        (%py-bound! (list (%py-name->sym (%py-val n))))
         (pair
           (list (lit set!) (%py-name->sym (%py-val n))
             (list (lit let) (list (list (lit %py-crows) (list (lit pair) () ())))
@@ -3419,6 +3587,8 @@
             (self (rest s) (pair (%py-target-tree (first s)) acc))))))
     (let ((tv (targets toks ())))
       (let ((v (%py-exprlist (rest tv))))
+        ; the names are bound for the statements after this one
+        (%py-bound! (%py-trees-syms (first tv) ()))
         (pair
           (if (null? (rest (first tv)))
             (%py-assign (first (first tv)) (first v))
@@ -3429,16 +3599,31 @@
   (fn (self nodes)
     (if (null? nodes) ()
       (pair (%py-assign (first nodes) (lit %py-assigned)) (self (rest nodes))))))
+; The names a list of target trees binds, as symbols, onto acc.  A star's
+; target is the one node after the tag.
+(def %py-trees-syms
+  (fn (self nodes acc)
+    (if (null? nodes) acc
+      (let ((node (first nodes)))
+        (self (rest nodes)
+          (match
+            ((eq? (first node) (lit name)) (pair (%py-name->sym (first (rest node))) acc))
+            ((eq? (first node) (lit star)) (self (rest node) acc))
+            ((eq? (first node) (lit seq)) (self (first (rest node)) acc))
+            (#t acc)))))))
 
 ; `del` takes a target list too: each name unbound, each subscript, slice and
 ; attribute deleted from, and a seq's targets one by one.
 (def %py-delete
   (fn (self node)
     (match
+      ; the name is read first, so deleting one that is already gone is the
+      ; error reading it is; a set! still, which the REPL does not echo
       ((eq? (first node) (lit name))
         (let ((s (first (rest node))))
           (let ((sym (%py-target-sym s "delete")))
-            (list (lit set!) sym (list (lit %py-name-gone) s sym)))))
+            (list (lit set!) sym
+              (list (lit %seq) (%py-name-read-outer s) (lit %py-deleted))))))
       ((eq? (first node) (lit star))
         (Err raise (lit syntax) "cannot delete starred" ()))
       ((eq? (first node) (lit seq))
@@ -3483,9 +3668,10 @@
         ; `l[1:3] = xs` replaces that span, and may change the length
         ((eq? (first target) (lit %py-slice))
           (pair (lit %py-setslice) (%py-append (rest target) (list value))))
-        ; a name a `del` mentions reads through a check; assigning to it
-        ; binds the name the check was wrapped around
-        ((eq? (first target) (lit %py-name-live))
+        ; a name that may be unbound reads through a check
+        ; (%py-name-read-outer); assigning to it binds the name the check was
+        ; wrapped around
+        ((%py-checked-read? target)
           (list (lit set!) (List ref 2 target) value))
         (#t (Err raise (lit syntax) "cannot assign to this target" ())))
       ; a name, or a literal the expression parser answered as itself:
@@ -3498,19 +3684,26 @@
   (fn (_ toks)
     (let ((t (%py-skip-nl toks)))
       (match
-        ((null? t) (pair () t))
-        ((%py-kw? (first t) "else")
+        ((%py-kw? (if (null? t) () (first t)) "else")
           (let ((b (%py-block (rest t))))
             (pair (first b) (rest b))))
-        ((%py-kw? (first t) "elif")
-          (let ((c (%py-test (rest t))))
-            (let ((b (%py-block (rest c))))
-              (let ((e (%py-else (rest b))))
-                (pair
-                  (list (lit if) (list (lit %py-truthy) (first c))
-                    (first b) (first e))
-                  (rest e))))))
-        (#t (pair () t))))))
+        ((%py-kw? (if (null? t) () (first t)) "elif") (%py-if-chain (rest t)))
+        ; none: the test may have been false, which binds nothing
+        (#t (%seq (%set-first! %py-block-bound (first %py-bound-now)) (pair () t)))))))
+
+; `if` or `elif`: the test, its block, and the elif, else or nothing after it.
+; What its branches that fall through all bound for certain is left in
+; %py-block-bound, as a block's is.
+(def %py-if-chain
+  (fn (_ toks)
+    (let ((c (%py-test toks)))
+      (let ((b (%py-block (rest c))))
+        (let ((a (first %py-block-bound)))
+          (let ((e (%py-else (rest b))))
+            (%set-first! %py-block-bound (%py-bound-join a (first %py-block-bound)))
+            (pair
+              (list (lit if) (list (lit %py-truthy) (first c)) (first b) (first e))
+              (rest e))))))))
 
 ; `def NAME ( params ) : BLOCK`
 
@@ -3550,25 +3743,28 @@
             (%set-first! %py-in-async (first %py-async-me))
             (let ((outer-self (first %py-current-self)))
               (%set-first! %py-current-self (if (null? syms) () (first syms)))
-              ; the parameters and the names the body binds, less the ones it
-              ; declares global or nonlocal, are this body's own for
-              ; %py-name-read
-              (let ((b (%py-scoped
-                         (%py-append all-syms
-                           (%py-minus (%py-assign-targets (%py-block-contents after) ())
-                             declared))
-                         (fn (_) (%py-in-fn (fn (_) (%py-block after)))))))
-                ; A FUNCTION'S ASSIGNMENTS ARE ITS OWN.  The module-level scan
-                ; skips def bodies, so their targets are hoisted HERE instead,
-                ; as a `let` (NOT `def`: x's `def` decides global-versus-local
-                ; by save-stack depth, and under TCO that stack can be empty,
-                ; so a body `def` clobbered the module's name with nil).
-                ; Parameters are already bound and are not re-declared.
-                (let ((locals (%py-minus
-                                (%py-dedupe () (%py-assign-targets (%py-block-contents after) ()) ())
-                                (%py-append declared all-syms))))
+              ; A FUNCTION'S ASSIGNMENTS ARE ITS OWN.  The module-level scan
+              ; skips def bodies, so their targets are hoisted HERE instead,
+              ; as a `let` (NOT `def`: x's `def` decides global-versus-local
+              ; by save-stack depth, and under TCO that stack can be empty,
+              ; so a body `def` clobbered the module's name with nil).
+              ; Parameters are already bound and are not re-declared; the
+              ; rest start out unbound, as %py-deleted.
+              (let ((locals (%py-minus
+                              (%py-dedupe () (%py-assign-targets (%py-block-contents after) ()) ())
+                              (%py-append declared all-syms))))
+                ; the parameters and the names the body binds, less the ones it
+                ; declares global or nonlocal, are this body's own for
+                ; %py-name-read
+                (let ((b (%py-scoped (%py-append all-syms locals)
+                           (fn (_)
+                             (%py-in-fn
+                               (fn (_)
+                                 (%py-fn-names all-syms locals (%py-strs->syms (first decls))
+                                   (fn (_) (%py-block after)))))))))
                   (def body0
-                    (if (null? locals) (first b) (list (lit let) (%py-lets locals ()) (first b))))
+                    (if (null? locals) (first b)
+                      (list (lit let) (%py-lets locals (lit %py-deleted) ()) (first b))))
                   ; Every argument arrives in the %py-more tail and the prelude
                   ; binds the parameters from it, so a call with too few or too
                   ; many is refused here rather than bound to nil by x.
@@ -3695,11 +3891,12 @@
             (if (if skip-block #f (self (%py-block-toks t) #f)) #t (self (rest toks) #f)))
           (#t (self (rest toks) skip-block)))))))
 
+; a let's bindings: each of syms to the form v
 (def %py-lets
-  (fn (self syms acc)
+  (fn (self syms v acc)
     (if (null? syms)
       (%py-reverse acc)
-      (self (rest syms) (pair (list (first syms) ()) acc)))))
+      (self (rest syms) v (pair (list (first syms) v) acc)))))
 
 (def %py-minus
   (fn (self syms drop)
@@ -4029,6 +4226,9 @@
     ; names it still has to carry the check
     (%set-first! %py-del-names (%py-del-targets %toks ()))
     (%set-first! %py-scope-syms ())
+    (%set-first! %py-own-names ())
+    (%set-first! %py-free-names ())
+    (%set-first! %py-bound-now ())
     (%set-first! %py-fn-depth 0)
     (def %targets (%py-dedupe () (%py-assign-targets %toks ()) ()))
     (def %undef
