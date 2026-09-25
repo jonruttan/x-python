@@ -1166,6 +1166,7 @@
       ((%py-sl-is v) %py-cls-slice)
       ((%py-dq-is v) %py-cls-deque)
       ((%py-range-is v) %py-cls-range)
+      ((%py-desc-is v) (%py-desc-class v))
       ((%py-obj-is v) (%py-obj-class v))
       ((%py-class-is v) %py-cls-type)
       ((%py-gen-is v) %py-cls-generator)

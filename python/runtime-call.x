@@ -414,7 +414,7 @@
                   ((eq? k (lit static)) f)
                   ((eq? k (lit classmethod)) (%py-bound-new f owner))
                   (cls? m)
-                  (#t (f obj)))))
+                  (#t (%py-prop-get m obj name)))))
             ((%py-desc-get? m) ((%py-dunder m "__get__") (if cls? () obj) owner))
             ((not (%py-fn-is m)) m)
             ; __new__ comes back unbound whatever the self, as the instance
@@ -760,9 +760,10 @@
         (if (if (null? h) #f (not (same? h %py-object-delattr)))
           (%seq ((%py-bind-method h o) (%py-str-of-x n)) ())
           (let ((d (%py-method-find (%py-obj-class o) n)))
-            (if (%py-desc-delete? d)
-              (%seq ((%py-dunder d "__delete__") o) ())
-              (%py-obj-drop-attr! o n)))))))))
+            (match
+              ((%py-prop? d) (%py-prop-del d o n))
+              ((%py-desc-delete? d) (%seq ((%py-dunder d "__delete__") o) ()))
+              (#t (%py-obj-drop-attr! o n))))))))))
 (def %py-attr-drop
   (fn (self as n)
     (if (null? as) ()

@@ -1591,9 +1591,9 @@
         (list "object"  (lit %py-cls-object))
         ; the three that make a decorated def mean something
         (list "bytes"        (lit %py-cls-bytes))
-        (list "staticmethod" (lit %py-staticmethod))
-        (list "classmethod"  (lit %py-classmethod))
-        (list "property"     (lit %py-property))
+        (list "staticmethod" (lit %py-cls-staticmethod))
+        (list "classmethod"  (lit %py-cls-classmethod))
+        (list "property"     (lit %py-cls-property))
         (list "type"    (lit %py-cls-type))
         (list "int"     (lit %py-cls-int))
         (list "float"   (lit %py-cls-float))

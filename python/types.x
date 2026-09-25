@@ -67,7 +67,8 @@
   %py-obj %py-obj-new %py-obj-is %py-obj-class %py-obj-attrs %py-obj-set-attrs!
   %py-obj-native %py-obj-native! %py-native-of
   %py-super-t %py-super-new %py-super-is %py-super-from %py-super-self
-  %py-desc %py-desc-new %py-desc-is %py-desc-kind %py-desc-fn)
+  %py-desc %py-desc-new %py-desc-is %py-desc-kind %py-desc-fn
+  %py-prop-new %py-desc-fset %py-desc-fdel %py-desc-doc)
 
 ; Fetch the type prims from the catalog (ns `type` is de-registered, R5).
 (def %make-type (prim-ref (lit type) (lit make)))
@@ -833,11 +834,19 @@
 ; three a method is without stealing a shape a class attribute might want --
 ; a tagged pair would collide with a list attribute, since an instance is a
 ; cell too.
+; The payload is (KIND FN FSET FDEL DOC): FN is the function, a property's
+; getter; the last three are a property's setter, deleter and doc, nil
+; where it has none.
 (def %py-desc ())
-(def %py-desc-new (fn (_ kind f) (%make-instance %py-desc (pair kind f))))
+(def %py-desc-new (fn (_ kind f) (%make-instance %py-desc (list kind f () () ()))))
+(def %py-prop-new
+  (fn (_ fget fset fdel doc) (%make-instance %py-desc (list (lit property) fget fset fdel doc))))
 (def %py-desc-is (fn (_ v) (%type? v %py-desc)))
 (def %py-desc-kind (fn (_ d) (first (first d))))
-(def %py-desc-fn (fn (_ d) (rest (first d))))
+(def %py-desc-fn (fn (_ d) (first (rest (first d)))))
+(def %py-desc-fset (fn (_ d) (first (rest (rest (first d))))))
+(def %py-desc-fdel (fn (_ d) (first (rest (rest (rest (first d)))))))
+(def %py-desc-doc (fn (_ d) (first (rest (rest (rest (rest (first d))))))))
 (set! %py-desc
   (%make-type
     "PY-DESC"
