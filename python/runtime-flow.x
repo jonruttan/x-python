@@ -1206,6 +1206,7 @@
       ((if (%py-gen-is v) #t (%py-it-is v)) v)
       ((if (%py-obj-is v) (not (null? (%py-dunder v "__iter__"))) #f)
         ((%py-dunder v "__iter__")))
+      ((%py-range-is v) (%py-range-iter v))
       (#t (%py-src-gen (%py-iter-open v))))))
 (def %py-src-gen
   (fn (_ src)
@@ -1243,7 +1244,8 @@
                 (if (null? nx)
                   (pair (%py-iter-answer it) ())
                   (list (lit %py-cursor) nx))))))
-        (pair (elems) ())))))
+        ; a range is read a step at a time too, never built
+        (if (%py-range-is v) (%py-range-iter v) (pair (elems) ()))))))
 (def %py-iter-pull!
   (fn (_ src)
     (match

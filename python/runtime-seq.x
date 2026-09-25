@@ -73,6 +73,8 @@
       ; two slices are equal when their three parts are, and equal nothing else
       ((%py-sl-is a) (%py-sl-eq a b))
       ((%py-sl-is b) #f)
+      ((%py-range-is a) (%py-range-eq a b))
+      ((%py-range-is b) #f)
       ((if (%py-dq-is a) #t (%py-dq-is b)) (%py-dq-eq a b))
       ((%py-str-is a) (if (%py-str-is b) (%pb-eq? (%py-str-cps a) (%py-str-cps b)) #f))
       ((%py-str-is b) #f)
@@ -307,6 +309,7 @@
       ((%py-arr-is v) (%py-length (%py-arr-el v)))
       ((%py-mv-is v) (%py-mv-len v))
       ((%py-dq-is v) (%py-length (%py-dq-el v)))
+      ((%py-range-is v) (%py-range-len v))
       ((%py-dict? v) (%py-length (%py-dict-entries v)))
       ((%py-tuple-is v) (%py-length (%py-tuple-elems v)))
       ((%py-list? v) (%py-length (%py-list-elems v)))
@@ -345,6 +348,10 @@
       ((%py-obj-is v)
         (let ((m (%py-dunder v "__getitem__")))
           (if (null? m) (Err raise (lit type) "object is not subscriptable" ()) (m i))))
+      ; a slice object indexes as the subscript it stands for, s[slice(1, 2)]
+      ; as s[1:2]
+      ((%py-sl-is i) (%py-slice v (%py-sl-start i) (%py-sl-stop i) (%py-sl-step i)))
+      ((%py-range-is v) (%py-range-at v i))
       ((%py-arr-is v) (%py-arr-at v i))
       ((%py-mv-is v) (%py-mv-at v i))
       ((%py-dq-is v) (%py-dq-at v i))
@@ -664,6 +671,7 @@
       ((%py-arr-is v) (%py-arr-el v))
       ((%py-mv-is v) (%py-mv-elems v))
       ((%py-dq-is v) (%py-dq-el v))
+      ((%py-range-is v) (%py-range-elems v))
       ; Iterating a dict yields its KEYS, as in Python.
       ((%py-dict? v) (%py-dkeys (%py-dict-entries v)))
       ((%py-tuple-is v) (%py-tuple-elems v))
@@ -685,16 +693,12 @@
       (#t (Err raise (lit type)
             (if (null? who) (%py-not-iterable v) (first who)) ())))))
 
-; range(stop) / range(start, stop) / range(start, stop, step)
-;
-; EAGER, and that is a simplification with a known cost: Python 3's range is
-; lazy, so `range(10000000)` is free there and a ten-million element list here.
-; Every conformance program that uses range walks all of it, so the difference
-; is memory rather than answers -- but it is a difference, and it is written
-; down rather than discovered.
-;
-; A zero step raises rather than looping forever.  There is no depth limit on
-; non-tail calls here (x-lang#56), so an unbounded loop is an OOM.
+; range(stop) / range(start, stop) / range(start, stop, step) is a PY-RANGE
+; (types.x): its three ints.  The length, an item and membership are
+; arithmetic on them, so range(1 << 32) costs what range(3) does, and a loop
+; reads it a step at a time (%py-range-iter).  A zero step is refused.
+
+; the items from i up to stop, as a list, for a caller that takes them all
 (def %py-range-build
   (fn (self i stop step acc)
     (if (if (> step 0) (>= i stop) (<= i stop))
@@ -735,7 +739,165 @@
                        (first (rest (rest args)))))))
         (if (= step 0)
           (Err raise (lit value) "range() arg 3 must not be zero" ())
-          (%py-list-new (%py-range-build start stop step ())))))))
+          (%py-range-new start stop step))))))
+
+; How many items: the distance over the step, rounded up, or none when the
+; step walks away from stop.
+(def %py-range-length
+  (fn (_ r)
+    (def start (%py-range-start r))
+    (def stop (%py-range-stop r))
+    (def step (%py-range-step r))
+    (match
+      ((= step 1) (if (< start stop) (- stop start) 0))
+      ((> step 0) (if (< start stop) (Num quotient (+ (- stop start) (- step 1)) step) 0))
+      ((> start stop) (Num quotient (- (- start stop) (+ step 1)) (- 0 step)))
+      (#t 0))))
+
+; len(r): the length, which may pass the machine word, and len() refuses one
+; that does, as CPython does
+(def %py-range-len
+  (fn (_ r)
+    (def n (%py-range-length r))
+    (if (if (eq? (%py-typeof-prim n) %py-th-big) (> n %py-index-max) #f)
+      (Err raise (lit overflow) "Python int too large to convert to C ssize_t" ())
+      n)))
+
+; r[i], counted from the end when negative and refused past either end
+(def %py-range-at
+  (fn (_ r i)
+    (def n (%py-range-length r))
+    (def j (%py-seq-index i "range"))
+    (def k (if (< j 0) (+ n j) j))
+    (if (if (< k 0) #t (>= k n))
+      (Err raise (lit index) "range object index out of range" ())
+      (+ (%py-range-start r) (* k (%py-range-step r))))))
+
+; r[a:b:c] is a range: the slice resolved against the length, as
+; slice.indices resolves it, then carried through start and step
+(def %py-range-slice
+  (fn (_ r start stop st)
+    (def b (%py-sl-bounds (%py-range-length r) start stop st))
+    (def r0 (%py-range-start r))
+    (def rs (%py-range-step r))
+    (%py-range-new (+ r0 (* (first b) rs)) (+ r0 (* (rest b) rs)) (* rs st))))
+
+; Is the int k one of r's items: inside the bounds, on a step
+(def %py-range-holds?
+  (fn (_ r k)
+    (def start (%py-range-start r))
+    (def step (%py-range-step r))
+    (match
+      ((> step 0)
+        (if (if (<= start k) (< k (%py-range-stop r)) #f)
+          (if (= step 1) #t (= (Num modulo (- k start) step) 0))
+          #f))
+      ((if (>= start k) (> k (%py-range-stop r)) #f)
+        (= (Num modulo (- start k) (- 0 step)) 0))
+      (#t #f))))
+
+; x in r: an int (or a bool) is placed by arithmetic, as CPython places it;
+; anything else is compared with each item in turn
+(def %py-range-has?
+  (fn (_ r x)
+    (def k (%py-boolnorm x))
+    (if (eq? (%py-num-kind k) (lit int))
+      (%py-range-holds? r k)
+      (%py-in-pull x (%py-range-iter r)))))
+
+; r.count(x) and r.index(x), placed the same way
+(def %py-range-count
+  (fn (_ r x)
+    (def k (%py-boolnorm x))
+    (if (eq? (%py-num-kind k) (lit int))
+      (if (%py-range-holds? r k) 1 0)
+      (%py-range-tally x (%py-range-iter r) 0))))
+(def %py-range-tally
+  (fn (self x src n)
+    (def v (%py-iter-pull! src))
+    (match
+      ((same? v %py-gen-done) n)
+      ((%py-truthy (%py-eq x v)) (self x src (+ n 1)))
+      (#t (self x src n)))))
+(def %py-range-index
+  (fn (_ r x)
+    (def k (%py-boolnorm x))
+    (match
+      ((not (eq? (%py-num-kind k) (lit int))) (%py-range-find x (%py-range-iter r) 0))
+      ((%py-range-holds? r k)
+        (Num quotient (- k (%py-range-start r)) (%py-range-step r)))
+      (#t (Err raise (lit value) "range.index(x): x not in range" ())))))
+(def %py-range-find
+  (fn (self x src i)
+    (def v (%py-iter-pull! src))
+    (match
+      ((same? v %py-gen-done)
+        (Err raise (lit value) "sequence.index(x): x not in sequence" ()))
+      ((%py-truthy (%py-eq x v)) i)
+      (#t (self x src (+ i 1))))))
+
+; Two ranges are equal when they hold the same items: the same length, then
+; the same start past an empty one, then the same step past a single item.
+(def %py-range-eq
+  (fn (_ a b)
+    (if (%py-range-is b)
+      (let ((n (%py-range-length a)))
+        (match
+          ((not (= n (%py-range-length b))) #f)
+          ((= n 0) #t)
+          ((not (= (%py-range-start a) (%py-range-start b))) #f)
+          ((= n 1) #t)
+          (#t (= (%py-range-step a) (%py-range-step b)))))
+      #f)))
+
+; hash(r), alike for equal ranges: the length, and the start and step only
+; as far as they decide the items, as CPython hashes one
+(def %py-range-hash
+  (fn (_ r)
+    (def n (%py-range-length r))
+    (%py-hash
+      (%py-tuple-new
+        (match
+          ((= n 0) (list 0 () ()))
+          ((= n 1) (list 1 (%py-range-start r) ()))
+          (#t (list n (%py-range-start r) (%py-range-step r))))))))
+
+; iter(r): a range_iterator, a step reading the next value from a cell
+(def %py-range-iter
+  (fn (_ r)
+    (def at (list (%py-range-start r)))
+    (def stop (%py-range-stop r))
+    (def step (%py-range-step r))
+    (%py-it-new
+      (if (> step 0)
+        (fn (_)
+          (def v (first at))
+          (if (< v stop) (%seq (%set-first! at (+ v step)) v) %py-gen-done))
+        (fn (_)
+          (def v (first at))
+          (if (> v stop) (%seq (%set-first! at (+ v step)) v) %py-gen-done)))
+      %py-cls-range-iterator)))
+
+; reversed(r): the same items from the last back
+(def %py-range-reversed
+  (fn (_ r)
+    (def n (%py-range-length r))
+    (def step (%py-range-step r))
+    (def last (+ (%py-range-start r) (* (- n 1) step)))
+    (%py-range-iter (%py-range-new last (- last (* n step)) (- 0 step)))))
+
+; r's items as a list, for a caller that takes them all
+(def %py-range-elems
+  (fn (_ r)
+    (%py-range-build (%py-range-start r) (%py-range-stop r) (%py-range-step r) ())))
+
+(def %py-range-attr
+  (fn (_ r name)
+    (match
+      ((Str8 =? name "start") (%py-range-start r))
+      ((Str8 =? name "stop") (%py-range-stop r))
+      ((Str8 =? name "step") (%py-range-step r))
+      (#t (%py-class-row-attr %py-cls-range r name "range")))))
 
 ; --- Dicts -------------------------------------------------------------------
 ;

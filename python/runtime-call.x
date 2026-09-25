@@ -853,17 +853,19 @@
     (if (< i 0) (%py-reverse acc) (self g (- i 1) (pair (g i) acc)))))
 (def %py-reversed
   (fn (_ v)
-    (if (%py-obj-is v)
-      (let ((m (%py-dunder v "__reversed__")))
-        (if (not (null? m))
-          (m)
-          (let ((l (%py-dunder v "__len__")))
-            (let ((g (%py-dunder v "__getitem__")))
-              (if (if (null? l) #t (null? g))
-                (Err raise (lit type) "object is not reversible" ())
-                ; %py-rev-index already walks from the end
-                (%py-list-new (%py-rev-index g (- (l) 1) ())))))))
-      (%py-list-new (%py-reverse (%py-iter-elems v))))))
+    (match
+      ((%py-obj-is v)
+        (let ((m (%py-dunder v "__reversed__")))
+          (if (not (null? m))
+            (m)
+            (let ((l (%py-dunder v "__len__")))
+              (let ((g (%py-dunder v "__getitem__")))
+                (if (if (null? l) #t (null? g))
+                  (Err raise (lit type) "object is not reversible" ())
+                  ; %py-rev-index already walks from the end
+                  (%py-list-new (%py-rev-index g (- (l) 1) ()))))))))
+      ((%py-range-is v) (%py-range-reversed v))
+      (#t (%py-list-new (%py-reverse (%py-iter-elems v)))))))
 
 ; --- Sets --------------------------------------------------------------------
 ;

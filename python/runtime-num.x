@@ -911,6 +911,7 @@
             (fn (self es acc)
               (if (null? es) acc (self (rest es) (pair (first (first es)) acc)))))
           (%py-in-walk a (keys (%py-dict-entries b) ()))))
+      ((%py-range-is b) (%py-range-has? b a))
       ((if (%py-gen-is b) #t (%py-it-is b)) (%py-in-pull a b))
       ((%py-view-is b) (%py-in-walk a (%py-view-elems b)))
       (#t (%py-in-pull a (%py-iter-open b (%py-in-refusal b)))))))

@@ -366,6 +366,7 @@
       ((%py-arr-is v) (not (null? (%py-arr-el v))))
       ((%py-mv-is v) (< 0 (%py-mv-len v)))
       ((%py-dq-is v) (not (null? (%py-dq-el v))))
+      ((%py-range-is v) (not (= (%py-range-length v) 0)))
       ; __bool__, then __len__, then the value a subclass of a builtin carries:
       ; an int subclass at 0 is false, as its int is
       ((%py-obj-is v)
@@ -1164,6 +1165,7 @@
       ((%py-mv-is v) %py-cls-memoryview)
       ((%py-sl-is v) %py-cls-slice)
       ((%py-dq-is v) %py-cls-deque)
+      ((%py-range-is v) %py-cls-range)
       ((%py-obj-is v) (%py-obj-class v))
       ((%py-class-is v) %py-cls-type)
       ((%py-gen-is v) %py-cls-generator)
@@ -1367,6 +1369,7 @@
         ((%py-dq-is obj)
           (Err raise (lit type) "sequence index must be integer, not 'slice'" ()))
         ((= st 0) (Err raise (lit value) "slice step cannot be zero" ()))
+        ((%py-range-is obj) (%py-range-slice obj start stop st))
         ((%py-str-is obj)
           (let ((l (%py-str-cps obj)))
             (%py-str-new (%py-sl-pick l (%py-slice-idxs (%pb-len l) start stop st) ()))))
@@ -1416,6 +1419,20 @@
 ; NOT EVERY BUILTIN IS AN ACCEPTABLE BASE.  CPython refuses `class X(range)`
 ; and `class X(bool)` outright -- "type 'range' is not an acceptable base
 ; type" -- so the marker below says so, under a key no Python name can spell.
+; A range is a PY-RANGE value, never an instance, so its rows read it as is.
 (def %py-cls-range
   (%py-class-new "range" %py-cls-object
-    (pair (pair "%final" #t) (%py-lazy-methods %py-range)) "range"))
+    (list
+      (pair "%final" #t)
+      (pair "%ctor" %py-range)
+      (pair "count" (fn (_ r x) (%py-range-count r x)))
+      (pair "index" (fn (_ r x) (%py-range-index r x)))
+      (pair "__iter__" (fn (_ r) (%py-range-iter r)))
+      (pair "__reversed__" (fn (_ r) (%py-range-reversed r)))
+      (pair "__len__" (fn (_ r) (%py-len r)))
+      (pair "__contains__" (fn (_ r x) (%py-range-has? r x)))
+      (pair "__getitem__" (fn (_ r i) (%py-index r i))))
+    "range"))
+(def %py-cls-range-iterator
+  (%py-class-new "range_iterator" %py-cls-object (list (pair "%final" #t))
+    "range_iterator"))
