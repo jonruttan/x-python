@@ -82,3 +82,51 @@ cross the allocation ceiling.
 ```output
 3 13
 ```
+
+### a comprehension reads a generator or an iterator a step at a time, its prints in step
+
+```python
+(python-run "def src50():\n    for i in range(3):\n        print(\"yield\", i)\n        yield i\n\n\ndef f50(x):\n    print(\"f\", x)\n    return x * 10\n\n\nprint([f50(x) for x in src50()])\nprint(sum(f50(x) for x in src50()))\nprint({x % 3 for x in src50()}, {x: x * x for x in src50()})\n\n\nclass It50:\n    def __init__(self):\n        self.n = 0\n\n    def __iter__(self):\n        return self\n\n    def __next__(self):\n        self.n += 1\n        print(\"next\", self.n)\n        if self.n > 2:\n            raise StopIteration\n        return self.n\n\n\nprint([v * 2 for v in It50()])\nit50 = iter([1, 2, 3, 4])\nprint([v for v in it50 if v < 3], list(it50))")
+```
+---
+```output
+yield 0
+f 0
+yield 1
+f 1
+yield 2
+f 2
+[0, 10, 20]
+yield 0
+f 0
+yield 1
+f 1
+yield 2
+f 2
+30
+yield 0
+yield 1
+yield 2
+yield 0
+yield 1
+yield 2
+{0, 1, 2} {0: 0, 1: 1, 2: 4}
+next 1
+next 2
+next 3
+[2, 4]
+[1, 2] []
+```
+
+### a generator expression over range(10**20) ends where its consumer stops
+
+```python
+(python-run "g51 = (x * 2 for x in range(10**20))\nprint(next(g51), next(g51), any(x > 2 for x in range(10**20)), all(x < 2 for x in range(10**20)))\nprint([(a, b) for a, b in zip(range(10**20), \"ab\")], [a + b for a, b in [(1, 2), (4, 5)]])\nprint([(i, j) for i in range(3) for j in range(i)], [y for x in [[1, 2], [3]] for y in x if y != 2])\nprint([c for c in \"ab\"], [k for k in {\"x\": 1, \"y\": 2}], [b for b in b\"hi\"], [r for r in range(5, 0, -2)])")
+```
+---
+```output
+0 2 True False
+[(0, 'a'), (1, 'b')] [3, 9]
+[(1, 0), (2, 0), (2, 1)] [1, 3]
+['a', 'b'] ['x', 'y'] [104, 105] [5, 3, 1]
+```
