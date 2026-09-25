@@ -1315,13 +1315,15 @@
       ((= c 64) #t)
       (#t #f))))
 
-; Which pairs extend: a second `=`, or one of the four doubled operators.
+; Which pairs extend: a second `=` (`:=` among them, the assignment
+; expression), or one of the four doubled operators.
 (def %py-op-pair?
   (fn (_ a b)
     (match
       ((= b 61)
         (match
           ((= a 61) #t)
+          ((= a 58) #t)
           ((= a 33) #t)
           ((= a 60) #t)
           ((= a 62) #t)
@@ -1344,10 +1346,12 @@
 
 (def %py-op-pairable?
   (fn (_ c)
-    ; = ! < > / * + - %, | & ^ for |= &= ^=, and @ for @=; generated, as above
+    ; = ! < > / * + - %, | & ^ for |= &= ^=, @ for @=, and : for :=;
+    ; generated, as above
     (match
       ((= c 64) #t)
       ((= c 61) #t)
+      ((= c 58) #t)
       ((= c 33) #t)
       ((= c 60) #t)
       ((= c 62) #t)

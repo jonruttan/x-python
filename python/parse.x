@@ -751,7 +751,7 @@
       (let ((sig (%py-params-of (first sp)))
             ; a lambda body is a function's, for a yield in it (%py-yield-expr)
             (b (%py-scoped (%py-param-syms (%py-params-of (first sp)))
-                 (fn (_) (%py-in-fn (fn (_) (%py-test (rest sp))))))))
+                 (fn (_) (%py-in-fn (fn (_) (%py-plain-test (rest sp))))))))
         (def names (first sig))
         (def syms (%py-strs->syms names))
         (def dflts (first (rest sig)))
@@ -759,8 +759,14 @@
         (def rest-sym (if (null? rest-name) () (%py-name->sym rest-name)))
         (def kwonly (List ref 4 sig))
         (def nreq (- (%py-length names) (%py-length dflts)))
+        ; a `:=` in the body binds the lambda's own name, as one in a def body
+        ; does; the body's tokens are the ones its parse took
+        (def own
+          (%py-minus (%py-strs->syms (%py-walrus-names (%py-before (rest sp) (rest b)) ()))
+            (%py-param-syms sig)))
         (def body
-          ((%py-fn-prelude "<lambda>" names dflts rest-sym () kwonly nreq) (first b)))
+          ((%py-fn-prelude "<lambda>" names dflts rest-sym () kwonly nreq)
+            (if (null? own) (first b) (list (lit let) (%py-lets own ()) (first b)))))
         (def sig-form
           (list (lit %py-sig!) (list (lit fn) (pair (lit _) (lit %py-more)) body)
             "<lambda>" (pair (lit list) names) nreq (not (null? rest-sym)) ()
@@ -771,19 +777,64 @@
 
 (def %py-test
   (fn (self toks)
-    (if (%py-kw? (if (null? toks) () (first toks)) "lambda")
-      (%py-lambda-expr toks)
-    (if (%py-kw? (if (null? toks) () (first toks)) "yield")
-      (%py-yield-expr toks)
-    (let ((r (%py-or-e toks)))
-      (if (%py-kw? (if (null? (rest r)) () (first (rest r))) "if")
-        (let ((c (%py-or-e (rest (rest r)))))
-          (if (not (%py-kw? (if (null? (rest c)) () (first (rest c))) "else"))
-            (Err raise (lit syntax) "expected else after a conditional expression" ())
-            (let ((e (self (rest (rest c)))))
-              (pair (list (lit if) (list (lit %py-truthy) (first c)) (first r) (first e))
-                (rest e)))))
-        r))))))
+    (def t (if (null? toks) () (first toks)))
+    (match
+      ((%py-walrus-at? toks) (%py-walrus toks))
+      ((%py-kw? t "lambda") (%py-lambda-expr toks))
+      ((%py-kw? t "yield") (%py-yield-expr toks))
+      (#t
+        (let ((r (%py-or-e toks)))
+          (let ((nx (if (null? (rest r)) () (first (rest r)))))
+            (match
+              ((%py-op-is? nx ":=") (%py-walrus-refusal (first r)))
+              ((%py-kw? nx "if")
+                (let ((c (%py-or-e (rest (rest r)))))
+                  (if (not (%py-kw? (if (null? (rest c)) () (first (rest c))) "else"))
+                    (Err raise (lit syntax) "expected else after a conditional expression" ())
+                    (let ((e (self (rest (rest c)))))
+                      (pair (list (lit if) (list (lit %py-truthy) (first c)) (first r) (first e))
+                        (rest e))))))
+              (#t r))))))))
+
+; An assignment expression, `NAME := value`: the value is stored in NAME and
+; is the expression's answer.  NAME belongs to the scope the expression is
+; in, a comprehension's enclosing one included, since a comprehension binds
+; only its for targets; the scans that hoist a scope's names find it there
+; (%py-walrus-names).
+(def %py-walrus-at?
+  (fn (_ toks)
+    (if (if (null? toks) #f (eq? (%py-tag (first toks)) (lit tok-name)))
+      (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) ":=")
+      #f)))
+(def %py-walrus
+  (fn (_ toks)
+    (def name (%py-val (first toks)))
+    (def sym (%py-target-sym name "use assignment expressions with"))
+    (if (%py-seen? sym (first %py-comp-iter-syms))
+      (Err raise (lit syntax)
+        (Str8 append "assignment expression cannot rebind comprehension iteration variable '"
+          (Str8 append name "'")) ())
+      (let ((v (%py-test (rest (rest toks)))))
+        (pair (list (lit %seq) (list (lit set!) sym (first v)) sym) (rest v))))))
+; Only a name takes `:=`; the refusal names what stood there instead, in
+; CPython's words.
+(def %py-walrus-refusal
+  (fn (_ form)
+    (Err raise (lit syntax)
+      (Str8 append "cannot use assignment expressions with "
+        (match
+          ((not (pair? form)) "literal")
+          ((eq? (first form) (lit %py-str-new)) "literal")
+          ((eq? (first form) (lit %py-index)) "subscript")
+          ((eq? (first form) (lit %py-slice)) "subscript")
+          ((eq? (first form) (lit %py-getattr)) "attribute")
+          ((eq? (first form) (lit %py-call)) "function call")
+          ((eq? (first form) (lit %py-apply-any)) "function call")
+          ((eq? (first form) (lit %py-kwcall)) "function call")
+          ((eq? (first form) (lit %py-kwcall-attr)) "function call")
+          ((eq? (first form) (lit %py-mktuple)) "tuple")
+          (#t "expression")))
+      ())))
 
 ; One complete expression from a complete token list -- anything left over is a
 ; syntax error HERE, where the bracket that bounded it is known.
@@ -882,7 +933,7 @@
         (if (null? ps) ()
           (if (%py-kw-part? (first ps))
             (pair (list (lit pair) (%py-val (first (first ps)))
-                    (%py-expr-of (rest (rest (first ps)))))
+                    (%py-plain-expr-of (rest (rest (first ps)))))
               (self (rest ps)))
             (self (rest ps))))))
     (def spreads
@@ -955,7 +1006,7 @@
       (let ((kv (%py-colon-split (first parts) ())))
         (self (rest parts)
           (pair
-            (list (lit pair) (%py-expr-of (first kv)) (%py-expr-of (rest kv)))
+            (list (lit pair) (%py-plain-expr-of (first kv)) (%py-plain-expr-of (rest kv)))
             acc))))))
 
 (%py-sweep!)
@@ -1187,18 +1238,30 @@
           (if (eq? (%py-tag (first toks)) (lit tok-newline)) #t
             (%py-block? (first toks))))
       (pair (%py-reverse acc) toks)
-      (let ((r (%py-test toks)))
+      (let ((r (%py-plain-test toks)))
         (if (%py-op-is? (if (null? (rest r)) () (first (rest r))) ",")
           (self (rest (rest r)) (pair (first r) acc))
           (pair (%py-reverse (pair (first r) acc)) (rest r)))))))
 
 (def %py-exprlist
   (fn (_ toks)
-    (let ((r (%py-test toks)))
+    (let ((r (%py-plain-test toks)))
       (if (not (%py-op-is? (if (null? (rest r)) () (first (rest r))) ","))
         r
         (let ((m (%py-exprlist-rest (rest (rest r)) (list (first r)))))
           (pair (pair (lit %py-mktuple) (first m)) (rest m)))))))
+
+; Where CPython's grammar takes no bare assignment expression, one is refused:
+; an expression list -- a statement, an assignment's value, a return value --
+; eval's input, a lambda's body, a default, a keyword argument's value, and
+; a dict's key or value.  In brackets it may stand anywhere.
+(def %py-no-walrus!
+  (fn (_ toks)
+    (if (%py-walrus-at? toks) (Err raise (lit syntax) "invalid syntax" ()) ())))
+(def %py-plain-test
+  (fn (_ toks) (%seq (%py-no-walrus! toks) (%py-test toks))))
+(def %py-plain-expr-of
+  (fn (_ toks) (%seq (%py-no-walrus! toks) (%py-expr-of toks))))
 
 ; Arguments up to the closing paren.  A trailing comma is legal Python and costs
 ; one branch to accept.
@@ -1723,12 +1786,17 @@
 ; How many def bodies the compile is inside: `return` is a statement only
 ; inside one.  The count comes back down however the compile ends.
 (def %py-fn-depth (pair 0 ()))
+; A def or lambda body is a scope of its own, so the comprehensions around
+; it do not constrain its `:=` (%py-comp-iter-syms), and that comes back
+; too.
 (def %py-in-fn
   (fn (_ thunk)
     (def up! (fn (_ k) (%set-first! %py-fn-depth (+ (first %py-fn-depth) k))))
-    (%seq (up! 1)
-      (let ((r (guard (e (%seq (up! (- 0 1)) (error e))) (thunk))))
-        (%seq (up! (- 0 1)) r)))))
+    (def comps (first %py-comp-iter-syms))
+    (def back! (fn (_) (%seq (up! (- 0 1)) (%set-first! %py-comp-iter-syms comps))))
+    (%seq (%seq (up! 1) (%set-first! %py-comp-iter-syms ()))
+      (let ((r (guard (e (%seq (back!) (error e))) (thunk))))
+        (%seq (back!) r)))))
 
 ; Compile with syms added to the local names, and take them off again however
 ; the compile ends.
@@ -1760,8 +1828,18 @@
       (#t (self (rest toks) acc)))))
 
 ; Compile part of a comprehension with the names its for clauses bind in scope.
+; They are its iteration names too, which a `:=` inside it, or inside a
+; comprehension nested in it, may not rebind (%py-walrus).
+(def %py-comp-iter-syms (pair () ()))
 (def %py-comp-scoped
-  (fn (_ elems thunk) (%py-scoped (%py-comp-targets elems ()) thunk)))
+  (fn (_ elems thunk)
+    (def syms (%py-comp-targets elems ()))
+    (def outer (first %py-comp-iter-syms))
+    (%set-first! %py-comp-iter-syms (%py-append syms outer))
+    (def r
+      (guard (e (%seq (%set-first! %py-comp-iter-syms outer) (error e)))
+        (%py-scoped syms thunk)))
+    (%seq (%set-first! %py-comp-iter-syms outer) r)))
 
 ; A read of a deleted-name candidate, or of a name the program never binds and
 ; no enclosing scope binds either, goes through the check; every other name is
@@ -1790,7 +1868,16 @@
 ; BOTH parser doors check the brackets, because `eval` comes in through this
 ; one and never touches python-parse below.
 (def python-parse-expr
-  (fn (_ toks) (%seq (%py-groups-ok toks) (%py-test toks))))
+  (fn (_ toks)
+    (%py-groups-ok toks)
+    (def r (%py-plain-test toks))
+    ; an eval's `:=` names have no hoist behind them, so they are declared
+    ; here, as a program's own are (%py-decls: only a name not yet bound)
+    (def names (%py-walrus-names toks ()))
+    (if (null? names)
+      r
+      (pair (pair (lit do) (%py-append (%py-decls (%py-strs->syms names) ()) (list (first r))))
+        (rest r)))))
 
 (%py-sweep!)
 ; --- Statements --------------------------------------------------------------
@@ -2645,7 +2732,7 @@
   (fn (_ toks t)
     (match
       ((null? toks) ())
-      ((%py-op-is? (first toks) "=") (list (%py-expr-of (rest toks))))
+      ((%py-op-is? (first toks) "=") (list (%py-plain-expr-of (rest toks))))
       ((%py-op-is? (first toks) ":") (%py-param-default (%py-skip-to-eq (rest toks)) t))
       (#t (Err raise (lit syntax) "expected , or = after a parameter name" t)))))
 (def %py-skip-to-eq
@@ -3672,6 +3759,16 @@
       ((null? toks) toks)
       ((%py-op-is? (first toks) ":") (rest toks))
       (#t (self (rest toks))))))
+; past a lambda's body, to the `,` or line end that closes it at this level:
+; a `:=` there binds the lambda's own name (%py-lambda-expr), not this scope's
+(def %py-lambda-body-skip
+  (fn (self toks)
+    (match
+      ((null? toks) toks)
+      ((%py-op-is? (first toks) ",") toks)
+      ((eq? (%py-tag (first toks)) (lit tok-newline)) toks)
+      ((%py-block? (first toks)) toks)
+      (#t (self (rest toks))))))
 
 ; Every name the program BINDS where %py-assign-targets declares it too:
 ; assignment targets and the names after `for` and `as`.  A read of any other
@@ -3692,11 +3789,13 @@
               (self (rest (rest toks))
                 (if (eq? (%py-tag n) (lit tok-name)) (pair (%py-val n) acc) acc))))
           ((%py-op-is? t ".") (self (%py-attr-skip toks) acc))
-          ((%py-kw? t "lambda") (self (%py-lambda-skip (rest toks)) acc))
+          ((%py-kw? t "lambda") (self (%py-lambda-body-skip (%py-lambda-skip (rest toks))) acc))
           ((if (eq? (%py-tag t) (lit tok-name))
                 (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
             (self (rest toks) (pair (%py-val t) acc)))
+          ((eq? (%py-tag t) (lit tok-group))
+            (self (rest toks) (%py-walrus-names (%py-group-of t) acc)))
           (#t (self (rest toks) acc)))))))
 
 (def %py-assign-targets
@@ -3732,11 +3831,14 @@
           ((%py-kw? t "def") (self (%py-skip-def (rest toks) 0) acc))
           ; `obj.x += 1` binds no x, and a lambda's parameters are its own
           ((%py-op-is? t ".") (self (%py-attr-skip toks) acc))
-          ((%py-kw? t "lambda") (self (%py-lambda-skip (rest toks)) acc))
+          ((%py-kw? t "lambda") (self (%py-lambda-body-skip (%py-lambda-skip (rest toks))) acc))
           ((if (eq? (%py-tag t) (lit tok-name))
                 (%py-assign-op? (if (null? (rest toks)) () (first (rest toks))))
                 #f)
             (self (rest toks) (pair (%py-name->sym (%py-val t)) acc)))
+          ((eq? (%py-tag t) (lit tok-group))
+            (self (rest toks)
+              (%py-append (%py-strs->syms (%py-walrus-names (%py-group-of t) ())) acc)))
           (#t (self (rest toks) acc)))))))
 
 ; The name after `as` in an except clause.
@@ -3755,11 +3857,27 @@
         #t #f)
       #f)))
 
-; `=` or any augmented form: all of them bind the name.
+; `=`, any augmented form, or `:=`: all of them bind the name.
 (def %py-assign-op?
   (fn (_ t)
-    (if (%py-op-is? t "=") #t
-      (if (null? (%py-op-sym t %py-aug-ops)) #f #t))))
+    (match
+      ((%py-op-is? t "=") #t)
+      ((%py-op-is? t ":=") #t)
+      (#t (not (null? (%py-op-sym t %py-aug-ops)))))))
+
+; The names `NAME :=` binds inside brackets, as text, nested brackets
+; included.  Inside brackets `NAME =` is a keyword argument and binds
+; nothing, so only `:=` counts here.
+(def %py-walrus-names
+  (fn (self toks acc)
+    (if (null? toks)
+      acc
+      (let ((t (first toks)))
+        (match
+          ((eq? (%py-tag t) (lit tok-group)) (self (rest toks) (self (%py-group-of t) acc)))
+          ((%py-kw? t "lambda") (self (%py-lambda-body-skip (%py-lambda-skip (rest toks))) acc))
+          ((%py-walrus-at? toks) (self (rest toks) (pair (%py-val t) acc)))
+          (#t (self (rest toks) acc)))))))
 
 ; Hand-rolled rather than reaching for List: `member?` is not a static there,
 ; and a wrong method name fails at RUN time in a form this file generates,

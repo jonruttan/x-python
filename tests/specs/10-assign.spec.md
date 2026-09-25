@@ -293,3 +293,97 @@ SyntaxError cannot assign to True
 ```
 ---
     [0, 1, 4]
+
+## assignment expressions
+
+### `NAME := value` stores the value and answers it: bracketed, in a call, a subscript, an if and a while
+
+```python
+(python-run "(wa := 4)\nprint(wa)\nif wa := 2:\n    print(True)\nprint(wa, [wb := 3, wb * 2], (wc := 1) + 1, wc)\nprint(4, wa := 5, wa)\nwd = [10, 20, 30]\nprint(wd[(we := 1)], we)\nit_a = iter([3, 2, 1, 0, 9])\nwhile (item_a := next(it_a)) != 0:\n    print(\"item\", item_a)\n\n\ndef count_a():\n    la = [0, 1]\n    while local_a := len(la):\n        print(local_a, la.pop())\n\n\ncount_a()")
+```
+---
+```output
+4
+True
+2 [3, 6] 2 1
+4 5 5
+20 1
+item 3
+item 2
+item 1
+2 1
+1 0
+```
+
+### `:=` in a comprehension binds in the scope around it, as global and nonlocal say
+
+```python
+(python-run "def hit_b():\n    print(any((hitb := i) % 5 == 3 and hitb % 2 == 0 for i in range(10)))\n    return hitb\n\n\nhitb = 123\nprint(hit_b(), hitb)\nprint([((mb := k + 1), k * mb) for k in range(4)], mb)\n\n\ndef glob_b():\n    global gb\n    (gb := 5)\n\n\nglob_b()\nprint(gb)\n\n\ndef outer_b():\n    vb = 0\n\n    def inner_b():\n        nonlocal vb\n        (vb := 3)\n\n    inner_b()\n    return vb\n\n\nprint(outer_b(), [yb for v in range(5) if (yb := v % 3) == 1], yb)")
+```
+---
+```output
+True
+8 123
+[(1, 0), (2, 2), (3, 6), (4, 12)] 4
+5
+3 [1, 1] 1
+```
+
+### `:=` stands in brackets and takes a name; anything else is refused in CPython's words
+
+```python
+(python-run "for src in (\"xc := 5\", \"yc = xc := 5\", \"ac, xc := 5\", \"(ac.b := 1)\", \"(f() := 1)\", \"(1 := 2)\",\n            \"('s' := 1)\", \"((ac, bc) := 1)\", \"(ac[1:2] := 1)\", \"(-xc := 1)\", \"(True := 1)\",\n            \"def fc(a=xc:=1):\\n    return a\", \"dict(k=xc:=2)\", \"{1: xc := 3}\", \"gc = lambda: xc := 4\"):\n    try:\n        exec(src)\n        print(\"ok\", src)\n    except SyntaxError as e:\n        print(\"SyntaxError\", str(e).split(\" (\")[0])\nprint({(xd := 1): (xd := 2)}, xd, dict(k=(xd := 3)), xd, (lambda: (xd := 4))(), xd)")
+```
+---
+```output
+SyntaxError invalid syntax
+SyntaxError invalid syntax
+SyntaxError invalid syntax
+SyntaxError cannot use assignment expressions with attribute
+SyntaxError cannot use assignment expressions with function call
+SyntaxError cannot use assignment expressions with literal
+SyntaxError cannot use assignment expressions with literal
+SyntaxError cannot use assignment expressions with tuple
+SyntaxError cannot use assignment expressions with subscript
+SyntaxError cannot use assignment expressions with expression
+SyntaxError cannot use assignment expressions with True
+SyntaxError invalid syntax
+SyntaxError invalid syntax
+SyntaxError invalid syntax
+SyntaxError invalid syntax
+{1: 2} 2 {'k': 3} 3 4 3
+```
+
+### `:=` may not rebind a comprehension's iteration name, and eval binds its names in the module
+
+```python
+(python-run "for src in (\"x := 1\", \"((x, y) := 1)\", \"([i := i + 1 for i in range(4)])\", \"([i := -1 for i, j in [(1, 2)]])\",\n            \"([[(i := j) for i in range(2)] for j in range(2)])\", \"([[(j := i) for i in range(2)] for j in range(2)])\",\n            \"[i for i in range(3) if (i := 1)]\", \"[lambda: (i := 1) for i in range(3)][0]()\",\n            \"[ye for x in [1] if (ye := x)]\", \"ye\", \"[[(k := 1) for i in range(2)] for j in range(2)]\"):\n    try:\n        print(eval(src))\n    except SyntaxError as e:\n        print(\"SyntaxError\", str(e).split(\" (\")[0])")
+```
+---
+```output
+SyntaxError invalid syntax
+SyntaxError cannot use assignment expressions with tuple
+SyntaxError assignment expression cannot rebind comprehension iteration variable 'i'
+SyntaxError assignment expression cannot rebind comprehension iteration variable 'i'
+SyntaxError assignment expression cannot rebind comprehension iteration variable 'i'
+SyntaxError assignment expression cannot rebind comprehension iteration variable 'j'
+SyntaxError assignment expression cannot rebind comprehension iteration variable 'i'
+1
+[1]
+1
+[[1, 1], [1, 1]]
+```
+
+### a lambda's `:=` binds the lambda's own name
+
+```python
+(python-run "xl = 3\nprint((lambda: (xl := 4))(), xl)\nprint((lambda xl: ((xl := xl + 1), xl))(10), xl)\nfl = lambda n: [(yl := i * n) for i in range(3)] + [yl]\nprint(fl(2))\ntry:\n    print(yl)\nexcept NameError as e:\n    print(\"NameError\", e)\ngl = lambda: (lambda: (zl := 1))()\nprint(gl(), sorted([3, 1, 2], key=lambda v: (kl := -v)), [(ml := 1), lambda: (nl := 2)][0], ml)")
+```
+---
+```output
+4 3
+(11, 11) 3
+[0, 2, 4, 4]
+NameError name 'yl' is not defined
+1 [3, 2, 1] 1 1
+```
