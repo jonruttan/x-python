@@ -1780,17 +1780,22 @@
 ; How many def bodies the compile is inside: `return` is a statement only
 ; inside one.  The count comes back down however the compile ends.
 (def %py-fn-depth (pair 0 ()))
-; A def or lambda body is a scope of its own, so the comprehensions around
-; it do not constrain its `:=` (%py-comp-iter-syms), and that comes back
-; too.
+; A def or lambda body is a scope of its own: the comprehensions around it do
+; not constrain its `:=` (%py-comp-iter-syms), and the class body around it
+; does not lend it its names (%py-class-level); both come back after.
 (def %py-in-fn
   (fn (_ thunk)
     (def up! (fn (_ k) (%set-first! %py-fn-depth (+ (first %py-fn-depth) k))))
     (def comps (first %py-comp-iter-syms))
-    (def back! (fn (_) (%seq (up! (- 0 1)) (%set-first! %py-comp-iter-syms comps))))
+    (def names (first %py-class-level))
+    (def back!
+      (fn (_)
+        (%seq (%seq (up! (- 0 1)) (%set-first! %py-comp-iter-syms comps))
+          (%set-first! %py-class-level names))))
     (%seq (%seq (up! 1) (%set-first! %py-comp-iter-syms ()))
-      (let ((r (guard (e (%seq (back!) (error e))) (thunk))))
-        (%seq (back!) r)))))
+      (%seq (%set-first! %py-class-level ())
+        (let ((r (guard (e (%seq (back!) (error e))) (thunk))))
+          (%seq (back!) r))))))
 
 ; Compile with syms added to the local names, and take them off again however
 ; the compile ends.
@@ -1838,7 +1843,18 @@
 ; A read of a deleted-name candidate, or of a name the program never binds and
 ; no enclosing scope binds either, goes through the check; every other name is
 ; the bare symbol it always was.
+; The names the class body being compiled binds at its own level, as text
+; (%py-class-level-names), or nil: outside a class body, and inside a def or
+; lambda written in one (%py-in-fn), whose body does not see them.  A read of
+; one in the body's own expressions tries the class being built first, then
+; the scope around the class, as CPython's class namespace does.
+(def %py-class-level (pair () ()))
 (def %py-name-read
+  (fn (_ s)
+    (if (%py-str-seen? s (first %py-class-level))
+      (list (lit %py-cread) (lit %py-crows) s (list (lit fn) (list (lit _)) (%py-name-read-outer s)))
+      (%py-name-read-outer s))))
+(def %py-name-read-outer
   (fn (_ s)
     (let ((sym (%py-name->sym s)))
       (if (if (%py-del-member? s (first %py-del-names)) #t
@@ -3065,15 +3081,13 @@
 (%py-sweep!)
 ; --- class -------------------------------------------------------------------
 ;
-; A class body is a run of `def`s.  Each one is parsed by %py-def, which emits
-; (def SYM FN); the FN is lifted out and paired with the method's NAME STRING,
-; because Python looks methods up by name at call time and the symbol is only
-; how x would have bound it.
-;
-; Only defs and `pass` are accepted.  A class attribute -- `count = 0` in the
-; body -- is real Python and is NOT supported: it belongs to the class rather
-; than the instance, and nothing here has a place to put it yet.  Saying so is
-; better than binding it somewhere surprising.
+; A class body runs in order into its namespace, %py-crows (%py-crow-put!):
+; a `def` binds its function under the method's NAME STRING, since Python
+; looks methods up by name at call time and the symbol is only how x would
+; have bound it; a decorated def binds deco(fn); `NAME = value` binds the
+; value; and a bare expression -- a docstring, a print -- is evaluated for
+; its effect.  Those are the statements a class body takes here.  The body's
+; own expressions read what it has bound so far (%py-class-level).
 
 (def %py-class-methods-of ())
 (set! %py-class-methods-of
@@ -3083,7 +3097,7 @@
         ((null? t) (pair (%py-reverse acc) t))
         ; A DECORATED METHOD is the same entry with a call around its function:
         ; the decorators are collected, the def is parsed as it always was, and
-        ; what goes in the alist is deco(fn) rather than fn.
+        ; what is bound is deco(fn) rather than fn.
         ((%py-op-is? (first t) "@")
           (let ((ds (%py-decos-of t ())))
             (let ((t2 (%py-async-strip (rest ds))))
@@ -3095,9 +3109,8 @@
                     (let ((r (%py-def (rest t2))))
                       (self (rest r)
                         (pair
-                          (list (lit pair) (%py-val nm)
-                            (%py-wrap-decos (first ds)
-                              (first (rest (rest (first r))))))
+                          (%py-crow-form (%py-val nm)
+                            (%py-wrap-decos (first ds) (first (rest (rest (first r))))))
                           acc)))))))))
         ((%py-kw? (first t) "pass") (self (rest t) acc))
         ((not (%py-kw? (first t) "def"))
@@ -3105,25 +3118,45 @@
                 (%py-op-is? (if (null? (rest t)) () (first (rest t))) "=")
                 #f)
             (let ((v (%py-exprlist (rest (rest t)))))
-              (self (rest v)
-                (pair (list (lit pair) (%py-val (first t)) (first v)) acc)))
-            ; A BARE EXPRESSION IN A CLASS BODY is evaluated and dropped,
-            ; which is how Python spells a class DOCSTRING -- the string
-            ; is the first statement of the body and nothing reads it
-            ; here.  Refusing it meant no class in this runtime could
-            ; carry documentation at all.
+              (self (rest v) (pair (%py-crow-form (%py-val (first t)) (first v)) acc)))
             (let ((v (%py-exprlist t)))
-              (self (rest v) acc))))
+              (self (rest v) (pair (first v) acc)))))
         (#t
           (let ((nm (if (null? (rest t)) () (first (rest t)))))
             (if (not (eq? (%py-tag nm) (lit tok-name)))
               (Err raise (lit syntax) "expected a method name after def" ())
               (let ((r (%py-def (rest t))))
                 (self (rest r)
-                  (pair
-                    (list (lit pair) (%py-val nm)
-                      (first (rest (rest (first r)))))
-                    acc))))))))))
+                  (pair (%py-crow-form (%py-val nm) (first (rest (rest (first r))))) acc))))))))))
+
+(def %py-crow-form
+  (fn (_ name form) (list (lit %py-crow-put!) (lit %py-crows) name form)))
+
+; The names a class body binds at its own level, as text: each `def NAME`,
+; decorated or not, and each `NAME =`.  A def's body is its own and skipped.
+(def %py-class-level-names
+  (fn (self toks acc)
+    (match
+      ((null? toks) acc)
+      ((%py-kw? (first toks) "def")
+        (let ((n (if (null? (rest toks)) () (first (rest toks)))))
+          (self (%py-skip-def (rest toks) 0)
+            (if (eq? (%py-tag n) (lit tok-name)) (pair (%py-val n) acc) acc))))
+      ((if (eq? (%py-tag (first toks)) (lit tok-name))
+           (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "=")
+           #f)
+        (self (rest toks) (pair (%py-val (first toks)) acc)))
+      (#t (self (rest toks) acc)))))
+
+; A class body's statements, compiled with its own names readable (%py-cread)
+; and set back however the compile ends.
+(def %py-class-body-of
+  (fn (_ toks)
+    (def outer (first %py-class-level))
+    (%set-first! %py-class-level (%py-class-level-names toks ()))
+    (def r (guard (e (%seq (%set-first! %py-class-level outer) (error e)))
+             (%py-class-methods-of toks ())))
+    (%seq (%set-first! %py-class-level outer) (first r))))
 
 (def %py-class-block
   (fn (_ toks)
@@ -3134,18 +3167,16 @@
             (if (eq? (%py-tag (first (rest toks))) (lit tok-newline)) #f
               (not (%py-block? (first (rest toks))))))
         (let ((sp (%py-line-of (rest toks) ())))
-          (pair (first (%py-class-methods-of (first sp) ())) (rest sp)))
+          (pair (%py-class-body-of (first sp)) (rest sp)))
       (let ((t (%py-skip-nl (rest toks))))
         (if (not (%py-block? (if (null? t) () (first t))))
           (Err raise (lit syntax) "expected an indented class body" ())
-          (pair
-            (first (%py-class-methods-of (%py-block-toks (first t)) ()))
-            (rest t))))))))
+          (pair (%py-class-body-of (%py-block-toks (first t))) (rest t))))))))
 
 ; The body of every class header, whatever spelled its base: bind the current
 ; class (so `super()` inside a method knows where it stands), parse the block,
-; and emit the one (set! NAME (%py-mkclass ...)).  It was written out three
-; times before, which is what made adding a fourth spelling a paren exercise.
+; and emit the one (set! NAME (%py-mkclass ...)) over the namespace the body
+; fills as it runs.
 (def %py-class-of
   (fn (_ n toks base)
     (let ((outer (first %py-current-class)))
@@ -3154,8 +3185,11 @@
         (%set-first! %py-current-class outer)
         (pair
           (list (lit set!) (%py-name->sym (%py-val n))
-            (list (lit %py-mkclass) (%py-val n) base
-              (pair (lit list) (first r))))
+            (list (lit let) (list (list (lit %py-crows) (list (lit pair) () ())))
+              (list (lit %seq)
+                (pair (lit do) (%py-append (first r) (list ())))
+                (list (lit %py-mkclass) (%py-val n) base
+                  (list (lit %py-reverse) (list (lit first) (lit %py-crows)))))))
           (rest r))))))
 
 (def %py-class-stmt

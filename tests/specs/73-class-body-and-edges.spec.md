@@ -34,3 +34,25 @@ None
 x
 None y
 ```
+
+### a class body reads what it has bound, in order, and the scope around it after
+
+```python
+(python-run "class N73:\n    a = 1\n    b = a + 1\n    a = 10\n    c = a * 2\n    \"a bare expression runs too\"\n    n = 0\n    n = n + 1\nprint(N73.a, N73.b, N73.c, N73.n, [k for k in N73.__dict__ if not k.startswith(\"__\")])\nx73 = \"global\"\n\n\nclass M73:\n    y = x73\n    x73 = \"class\"\n    z = x73\n\n\ndef outer73():\n    w = \"closure\"\n\n    class Inner:\n        v = w\n        w2 = v + \"!\"\n    return Inner.v, Inner.w2\n\n\nprint(M73.y, M73.z, x73, outer73())")
+```
+---
+```output
+10 2 20 1 ['a', 'b', 'c', 'n']
+global class global ('closure', 'closure!')
+```
+
+### a class body's functions and lambdas do not see its names; its decorators and a comprehension's source do
+
+```python
+(python-run "y74 = \"global\"\n\n\nclass P74:\n    y74 = \"class\"\n\n    def f(self):\n        return y74\n\n    g = lambda self: y74\n\n    def deco(f):\n        return lambda self: \"deco:\" + f(self)\n\n    @deco\n    def m(self):\n        return \"m\"\n\n    len = 5\n    k = len\n    xs = [1, 2]\n    ys = [v * 2 for v in xs]\n    print(\"in body\", deco.__name__)\nprint(P74().f(), P74().g(), P74().m(), P74.k, len(\"ab\"), P74.ys)")
+```
+---
+```output
+in body deco
+global global deco:m 5 2 [2, 4]
+```

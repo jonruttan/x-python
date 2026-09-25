@@ -618,6 +618,22 @@
         (self (rest rows)
           (if (Str8 =? (Str8 sub 0 1 k) "_") acc (pair k acc)))))))
 
+; A class body's namespace while the body runs: the rows bound so far, in a
+; cell, newest first.  A name bound again keeps its first place and takes the
+; new value, as a class dict does (%py-crow-put!); the body's own
+; expressions read a name there first and in the scope around the class
+; after (%py-cread, OUTER a thunk for that read).
+(def %py-crow-put!
+  (fn (_ rows name v)
+    (let ((e (%py-alist-find name (first rows))))
+      (if (null? e)
+        (%set-first! rows (pair (pair name v) (first rows)))
+        (%set-rest! e v)))))
+(def %py-cread
+  (fn (_ rows name outer)
+    (let ((e (%py-alist-find name (first rows))))
+      (if (null? e) (outer) (rest e)))))
+
 (def %py-mkclass
   (fn (_ name bases methods)
     ; A BASE THAT IS NOT A CLASS IS A TypeError, not a crash.  An undefined
