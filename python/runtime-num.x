@@ -951,6 +951,34 @@
 (def %py-ipow10
   (fn (self n acc) (if (= n 0) acc (self (- n 1) (* acc 10)))))
 
+; A float to a negative number of places, P: its exact digits D (the first
+; one at 10^X10) rounded half to even at the 10^-P place, zeros after --
+; round(1234.56, -2) is 1200.0, round(150.0, -2) 200.0, round(50.0, -2) 0.0.
+; A value whose first digit is at that place rounds against a leading zero;
+; one wholly below it is a zero of its sign, however far the place.
+(def %py-round-places
+  (fn (_ sgn D x10 p)
+    (def keep (+ (+ x10 1) p))
+    (if (< keep 0)
+      (Float from (Str8 append sgn "0"))
+      (do
+        (def z (if (= keep 0) 1 0))
+        (def k (+ keep z))
+        (def R0 (%py-f-round (Str8 append (%py-fmt-zeros z) D) k))
+        (def R
+          (if (< (Str8 length R0) k) (Str8 append R0 (%py-fmt-zeros (- k (Str8 length R0)))) R0))
+        (Float from (Str8 append sgn (Str8 append R (%py-fmt-zeros (- 0 p)))))))))
+
+; round() of an infinity or a NaN: to an int it is refused as CPython refuses
+; the conversion, and to places it is the value itself
+(def %py-round-special
+  (fn (_ v ex nd)
+    (match
+      ((not (null? nd)) v)
+      ((eq? (first ex) (lit inf))
+        (Err raise (lit overflow) "cannot convert float infinity to integer" ()))
+      (#t (Err raise (lit value) "cannot convert float NaN to integer" ())))))
+
 (def %py-round
   (fn (_ . a)
     (if (null? a)
@@ -972,14 +1000,14 @@
       (do
         (def ex (%py-f-exact v))
         (if (not (eq? (first ex) (lit num)))
-          (Err raise (lit value) "cannot round a special float" ())
+          (%py-round-special v ex nd)
           (do
             (def sgn (first (rest ex)))
             (def D (first (rest (rest ex))))
             (def x10 (first (rest (rest (rest ex)))))
             (def p (if (null? nd) 0 nd))
             (if (< p 0)
-              (Err raise (lit value) "negative round ndigits unsupported" ())
+              (%py-round-places sgn D x10 p)
               (let ((f (%py-fmt-fixed D x10 p)))
                 (if (null? nd)
                   (let ((n (%py-int-of-str (first f))))

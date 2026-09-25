@@ -170,6 +170,27 @@ used to read through a child base with no bigint type.
 ---
     (2, 4, 2.67, 2, 7)
 
+### round to a negative number of places, and an infinity or a NaN
+
+```python
+(python-run "for x32, n32 in ((1234.56, -2), (150.0, -2), (50.0, -2), (960.0, -2), (-3.0, -2), (25.0, -1), (1e300, -299),\n                 (1.5, -10**6), (float(\"inf\"), -1)):\n    print(round(x32, n32))\nfor v32 in (float(\"inf\"), float(\"nan\")):\n    try:\n        round(v32)\n    except (OverflowError, ValueError) as e:\n        print(type(e).__name__, e)\nprint(round(float(\"nan\"), 2))")
+```
+---
+```output
+1200.0
+200.0
+0.0
+1000.0
+-0.0
+20.0
+1e+300
+0.0
+inf
+OverflowError cannot convert float infinity to integer
+ValueError cannot convert float NaN to integer
+nan
+```
+
 ### min and max, variadic and iterable, strings ordered
 
 ```python
