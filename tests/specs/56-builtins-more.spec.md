@@ -113,3 +113,20 @@ dict TypeError cannot use 'EqChild58' as a dict key (unhashable type: 'EqChild58
 dict list TypeError cannot use 'list' as a dict key (unhashable type: 'list')
 set of str 3
 ```
+
+### any and all read only as far as the answer
+
+```python
+(python-run "def seen_d(v):\n    print(\"read\", v)\n    return v\n\n\nprint(any(seen_d(v) for v in [0, 2, 3]))\nprint(all(seen_d(v) for v in [1, 0, 5]))\nprint(any([]), all([]), any(x > 1 for x in [0, 1]), all(\"ab\"))\ntry:\n    any(5)\nexcept TypeError as e:\n    print(\"TypeError\", e)")
+```
+---
+```output
+read 0
+read 2
+True
+read 1
+read 0
+False
+False True False True
+TypeError 'int' object is not iterable
+```

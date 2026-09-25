@@ -1121,14 +1121,30 @@
       (%py-row-add self (rest srcs) acc (%py-iter-next (first srcs))))))
 (def %py-row-add
   (fn (_ go srcs acc v) (if (same? v %py-gen-done) v (go srcs (pair v acc)))))
+; all(it) and any(it) read only as far as the answer: a generator past the
+; first false item, or the first true one, is left unread, as in CPython.
 (def %py-all
   (fn (_ it)
-    (def go (fn (self es) (if (null? es) #t (if (%py-truthy (first es)) (self (rest es)) #f))))
-    (go (%py-iter-elems it))))
+    (def src (%py-iter-open it))
+    (def go
+      (fn (self)
+        (def v (%py-iter-pull! src))
+        (match
+          ((same? v %py-gen-done) #t)
+          ((%py-truthy v) (self))
+          (#t #f))))
+    (go)))
 (def %py-any
   (fn (_ it)
-    (def go (fn (self es) (if (null? es) #f (if (%py-truthy (first es)) #t (self (rest es))))))
-    (go (%py-iter-elems it))))
+    (def src (%py-iter-open it))
+    (def go
+      (fn (self)
+        (def v (%py-iter-pull! src))
+        (match
+          ((same? v %py-gen-done) #f)
+          ((%py-truthy v) #t)
+          (#t (self)))))
+    (go)))
 ; sorted(it): a stable merge sort on %py-lt
 (def %py-msort
   (fn (self l)
