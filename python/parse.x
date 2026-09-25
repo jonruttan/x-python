@@ -2999,13 +2999,20 @@
 ; then re-raises, and -- for a `return`, `break` or `continue` out of the
 ; body -- from the wind stack, which %py-escape walks before it jumps
 ; (python/runtime.x, "Unwinding on the way out").  The first two drop the
-; entry before running the thunk, so it runs exactly once whichever way the
-; body is left, and a handler that re-raises does not leave the entry
-; stranded.  A try's finally and an except clause's `as` unbinding are both
-; this shape.
+; entry before running the thunk, and a handler that re-raises does not
+; leave the entry stranded.  The thunk runs at most once (%py-fin-done): a
+; finally that raises, after the body or during a `return`, raises inside
+; the guard around the body, and the handler must pass that exception on
+; without running the finally a second time.  A try's finally and an except
+; clause's `as` unbinding are both this shape.
 (def %py-finally-form
   (fn (_ body fin)
-    (list (lit let) (list (list (lit %py-fin-th) (list (lit fn) (list (lit _)) fin)))
+    (list (lit let) (list (list (lit %py-fin-done) (list (lit pair) #f ())))
+     (list (lit let)
+      (list (list (lit %py-fin-th)
+        (list (lit fn) (list (lit _))
+          (list (lit if) (list (lit first) (lit %py-fin-done)) ()
+            (list (lit %seq) (list (lit %set-first!) (lit %py-fin-done) #t) fin)))))
       (list (lit let)
         (list (list (lit %py-fin-w) (list (lit %py-wind-push!) (lit %py-fin-th))))
         (list (lit guard)
@@ -3015,7 +3022,7 @@
                 (list (lit error) (lit %py-fin)))))
           (list (lit %seq) body
             (list (lit %seq) (list (lit %py-wind-drop!) (lit %py-fin-w))
-              (list (lit %py-fin-th)))))))))
+              (list (lit %py-fin-th))))))))))
 
 ; `assert EXPR` and `assert EXPR, MSG`: an AssertionError, with the message,
 ; when the expression is not true.

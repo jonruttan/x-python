@@ -351,3 +351,24 @@ v
 caught
 1 1 r
 ```
+
+### a finally that raises runs once, however the body is left
+
+```python
+(python-run "def after17():\n    try:\n        print(\"body\")\n    finally:\n        print(\"fin\")\n        raise ValueError(\"after the body\")\n\n\ndef returning17(x):\n    try:\n        try:\n            if x:\n                return 42\n        finally:\n            print(\"inner fin\")\n            raise KeyError(\"during a return\")\n    finally:\n        print(\"outer fin\")\n\n\ndef breaking17():\n    for i in range(3):\n        try:\n            if i == 1:\n                break\n        finally:\n            print(\"fin\", i)\n            if i == 1:\n                raise IndexError(\"during a break\")\n\n\nfor f17, a17 in ((after17, ()), (returning17, (0,)), (returning17, (1,)), (breaking17, ())):\n    try:\n        f17(*a17)\n    except Exception as e:\n        print(type(e).__name__, e)")
+```
+---
+```output
+body
+fin
+ValueError after the body
+inner fin
+outer fin
+KeyError 'during a return'
+inner fin
+outer fin
+KeyError 'during a return'
+fin 0
+fin 1
+IndexError during a break
+```
