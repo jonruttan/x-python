@@ -1013,7 +1013,7 @@
                     f
                     (if (eq? k (lit classmethod))
                       (%py-bound-new f (%py-obj-class obj))
-                      (f obj)))))
+                      (%py-prop-get m obj name)))))
               ; A USER DESCRIPTOR answers through its own __get__, which takes
               ; the instance and the class -- the same protocol property is a
               ; special case of.
@@ -1141,20 +1141,104 @@
             ; same crossing __getattr__ needs
             (%seq ((%py-bind-method h obj) (%py-str-of-x name) v) ())
             ; and a DESCRIPTOR on the class takes the store before the
-            ; instance does, which is what makes a data descriptor data
+            ; instance does, which is what makes a data descriptor data --
+            ; a property among them, through its setter
             (let ((d (%py-method-find (%py-obj-class obj) name)))
-              (if (%py-desc-set? d)
-                (%seq ((%py-dunder d "__set__") obj v) ())
-                (%py-obj-set-attrs! obj (%py-attr-put (%py-obj-attrs obj) name v))))))))))
+              (match
+                ((%py-prop? d) (%py-prop-set d obj name v))
+                ((%py-desc-set? d) (%seq ((%py-dunder d "__set__") obj v) ()))
+                (#t (%py-obj-set-attrs! obj (%py-attr-put (%py-obj-attrs obj) name v)))))))))))
 
-; staticmethod, classmethod and property are FUNCTIONS in Python -- applying
-; a decorator IS calling it -- so they are ordinary builtins here, and
-; `@staticmethod` is the call the parser emits.  A user-written decorator then
-; needs nothing special: it is called the same way, and whatever it answers is
-; what the name becomes.
+; staticmethod, classmethod and property are CLASSES in Python whose call makes
+; the descriptor -- applying a decorator IS calling it -- so each is a class
+; here whose %ctor is the maker below, and `@staticmethod` is the call the
+; parser emits.  A user-written decorator then needs nothing special: it is
+; called the same way, and whatever it answers is what the name becomes.
+; property(fget=None, fset=None, fdel=None, doc=None) takes all four, by
+; position or keyword, and checks none until it is used, as CPython does.
 (def %py-staticmethod (fn (_ f) (%py-desc-new (lit static) f)))
 (def %py-classmethod  (fn (_ f) (%py-desc-new (lit classmethod) f)))
-(def %py-property     (fn (_ f) (%py-desc-new (lit property) f)))
+(def %py-property
+  (%py-sig!
+    (fn (_ . a)
+      (if (> (%py-length a) 4)
+        (Err raise (lit type)
+          (Str8 append "property() takes at most 4 arguments ("
+            (Str8 append (%py-str (%py-length a)) " given)")) ())
+        (%py-prop-new (%py-opt a 0 ()) (%py-opt a 1 ()) (%py-opt a 2 ()) (%py-opt a 3 ()))))
+    "property" (list "fget" "fset" "fdel" "doc") 0 #f))
+; Not acceptable bases here: an instance of a subclass would be an object, not
+; the descriptor a class attribute lookup acts on.
+(def %py-cls-staticmethod
+  (%py-class-new "staticmethod" %py-cls-object
+    (list (pair "%final" #t) (pair "%ctor" %py-staticmethod)) "staticmethod"))
+(def %py-cls-classmethod
+  (%py-class-new "classmethod" %py-cls-object
+    (list (pair "%final" #t) (pair "%ctor" %py-classmethod)) "classmethod"))
+(def %py-cls-property
+  (%py-class-new "property" %py-cls-object
+    (list (pair "%final" #t) (pair "%ctor" %py-property)) "property"))
+(def %py-desc-class
+  (fn (_ d)
+    (match
+      ((eq? (%py-desc-kind d) (lit property)) %py-cls-property)
+      ((eq? (%py-desc-kind d) (lit classmethod)) %py-cls-classmethod)
+      (#t %py-cls-staticmethod))))
+
+; A descriptor's own attributes.  A property answers fget, fset, fdel and
+; __doc__, and getter, setter and deleter, each making a new property with
+; that one function replaced, as CPython's copy does -- which is what
+; `@x.setter` over `def x` calls.  A classmethod or staticmethod answers
+; __func__.
+(def %py-desc-attr
+  (fn (_ d name)
+    (match
+      ((not (eq? (%py-desc-kind d) (lit property)))
+        (if (Str8 =? name "__func__")
+          (%py-desc-fn d)
+          (%py-class-row-attr (%py-desc-class d) d name (%py-class-name (%py-desc-class d)))))
+      ((Str8 =? name "fget") (%py-desc-fn d))
+      ((Str8 =? name "fset") (%py-desc-fset d))
+      ((Str8 =? name "fdel") (%py-desc-fdel d))
+      ((Str8 =? name "__doc__") (%py-desc-doc d))
+      ((Str8 =? name "getter")
+        (fn (_ f) (%py-prop-new f (%py-desc-fset d) (%py-desc-fdel d) (%py-desc-doc d))))
+      ((Str8 =? name "setter")
+        (fn (_ f) (%py-prop-new (%py-desc-fn d) f (%py-desc-fdel d) (%py-desc-doc d))))
+      ((Str8 =? name "deleter")
+        (fn (_ f) (%py-prop-new (%py-desc-fn d) (%py-desc-fset d) f (%py-desc-doc d))))
+      (#t (%py-class-row-attr %py-cls-property d name "property")))))
+
+; obj.NAME read, stored or deleted through a property on its class: the
+; getter, setter or deleter, or CPython's refusal when the property has none
+(def %py-prop-get
+  (fn (_ d obj name)
+    (def f (%py-desc-fn d))
+    (match
+      ((null? f) (Err raise (lit attribute) (%py-prop-refusal obj name "getter") ()))
+      ((%py-fn-is f) (f obj))
+      (#t (%py-call f obj)))))
+(def %py-prop-set
+  (fn (_ d obj name v)
+    (if (null? (%py-desc-fset d))
+      (Err raise (lit attribute) (%py-prop-refusal obj name "setter") ())
+      (%seq (%py-call (%py-desc-fset d) obj v) ()))))
+(def %py-prop-del
+  (fn (_ d obj name)
+    (if (null? (%py-desc-fdel d))
+      (Err raise (lit attribute) (%py-prop-refusal obj name "deleter") ())
+      (%seq (%py-call (%py-desc-fdel d) obj) ()))))
+; property 'x' of 'A' object has no setter
+(def %py-prop-refusal
+  (fn (_ obj name what)
+    (Str8 append "property '"
+      (Str8 append name
+        (Str8 append "' of '"
+          (Str8 append (%py-class-name (%py-obj-class obj))
+            (Str8 append "' object has no " what)))))))
+; Is D a property, the descriptor a store or a delete goes through?
+(def %py-prop?
+  (fn (_ d) (if (%py-desc-is d) (eq? (%py-desc-kind d) (lit property)) #f)))
 
 ; StopIteration CARRIES A VALUE -- what a generator returned -- and Python
 ; spells it as an attribute: StopIteration("x").value is "x", and with no

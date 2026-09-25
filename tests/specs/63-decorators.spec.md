@@ -104,3 +104,32 @@ inner
 ```output
 SyntaxError
 ```
+
+### a property's setter and deleter, from @x.setter and @x.deleter or passed to property(); none refuses in CPython's words
+
+```python
+(python-run "class C63:\n    def __init__(self):\n        self._v = 0\n\n    @property\n    def v(self):\n        return self._v\n\n    @v.setter\n    def v(self, value):\n        print(\"set\", value)\n        self._v = value\n\n    @v.deleter\n    def v(self):\n        print(\"del\")\n\n\nclass B63:\n    def __init__(self):\n        self._w = 3\n\n    def getw(self):\n        return self._w\n\n    def setw(self, value):\n        self._w = value\n\n    w = property(getw, setw)\n\n\nc63 = C63()\nc63.v = 5\nprint(c63.v)\ndel c63.v\nb63 = B63()\nb63.w = 4\nprint(b63.w, property(fget=len, doc=\"doc\").__doc__)\n\n\nclass D63:\n    ro = property(lambda self: \"ro\")\n    none = property()\n\n\nd63 = D63()\nfor label, th in ((\"set\", lambda: setattr(d63, \"ro\", 1)), (\"del\", lambda: delattr(d63, \"ro\")),\n                  (\"get\", lambda: d63.none)):\n    try:\n        th()\n    except AttributeError as e:\n        print(label, \"AttributeError\", e)\nprint(d63.ro)")
+```
+---
+```output
+set 5
+5
+del
+4 doc
+set AttributeError property 'ro' of 'D63' object has no setter
+del AttributeError property 'ro' of 'D63' object has no deleter
+get AttributeError property 'none' of 'D63' object has no getter
+ro
+```
+
+### property, staticmethod and classmethod are classes; a property answers its parts, and setter makes a copy
+
+```python
+(python-run "class P64:\n    @property\n    def v(self):\n        return 1\n\n\np64 = P64.v\nq64 = p64.setter(len)\nprint(type(p64).__name__, isinstance(p64, property), p64.fget.__name__, p64.fset, q64.fset is len, q64 is p64)\nprint(type(staticmethod(len)).__name__, type(classmethod(len)).__name__, staticmethod(len).__func__ is len)\ntry:\n    property(1, 2, 3, 4, 5)\nexcept TypeError as e:\n    print(\"TypeError\", e)")
+```
+---
+```output
+property True v None True False
+staticmethod classmethod True
+TypeError property() takes at most 4 arguments (5 given)
+```
