@@ -127,18 +127,30 @@
 (%py-sweep!)
 (include-once "./runtime-type.x")
 (%py-sweep!)
-; the class objects it builds on are in runtime-type.x, so it comes after
-(include-once "./collections.x")
+; The standard modules, after runtime-type.x, whose classes they build on.
+; Each is a module of its own; the names the runtime's files read of one are
+; bound here in the root by a selective import, where those files read them.
+(import python/collections %py-collections-module)
 (%py-sweep!)
-(include-once "./deque.x")
+(import python/deque
+  %py-cls-deque %py-dq-at %py-dq-attr %py-dq-cat %py-dq-del! %py-dq-eq
+  %py-dq-extend! %py-dq-put! %py-dq-repeat %py-dq-repr)
 (%py-sweep!)
-(include-once "./array.x")
+(import python/array
+  %py-arr-at %py-arr-attr %py-arr-buffer %py-arr-cat %py-arr-el %py-arr-is
+  %py-arr-put! %py-array-module %py-cls-array %py-ieee-2p63 %py-ieee-raw
+  %py-take-n)
 (%py-sweep!)
-(include-once "./memoryview.x")
+(import python/memoryview
+  %py-buffer-bytes %py-buffer-text %py-buffer? %py-cls-memoryview %py-mv-at
+  %py-mv-attr %py-mv-elems %py-mv-in %py-mv-is %py-mv-len %py-mv-put!
+  %py-mv-setslice! %py-mv-slice)
 (%py-sweep!)
-(include-once "./struct.x")
+(import python/struct %py-struct-module)
 (%py-sweep!)
-(include-once "./io.x")
+(import python/io
+  %py-cls-BytesIO %py-cls-StringIO %py-io-attr %py-io-drain! %py-io-is
+  %py-io-module %py-io-text?)
 (%py-sweep!)
-(include-once "./sys.x")
+(import python/sys %py-implementation-version %py-sys-module)
 (%py-sweep!)

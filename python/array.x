@@ -18,6 +18,8 @@
 ; The integer typecodes b B h H i I l L q Q, at the widths CPython uses on a
 ; 64-bit machine (l and L are eight bytes), and the float typecodes f and d.
 
+(module python/array)
+
 ; Doubling rather than Num expt: a power costs tens of thousands of objects
 ; and this table is built at load.
 (def %py-arr-pow
@@ -428,3 +430,10 @@
 
 (def %py-array-module
   (fn (_) (%py-module-new "array" (list (pair "array" %py-cls-array)))))
+
+(provide python/array
+  %py-arr-at %py-arr-attr %py-arr-buffer %py-arr-cat %py-arr-el %py-arr-info
+  %py-arr-is %py-arr-item %py-arr-put! %py-arr-set! %py-arr-size %py-arr-tc
+  %py-array-module %py-cls-array %py-take-n
+  %py-ieee-2p63 %py-ieee-bits %py-ieee-double %py-ieee-half %py-ieee-one
+  %py-ieee-raw %py-ieee-sign %py-ieee-single %py-ieee-top %py-ieee-value)

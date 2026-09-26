@@ -23,6 +23,10 @@
 ; The float codes e, f and d write a float's IEEE bits, through the encoder in
 ; python/array.x, at the same width in both sizings.
 
+(module python/struct)
+(import python/array %py-ieee-bits %py-ieee-double %py-ieee-half %py-ieee-one
+  %py-ieee-sign %py-ieee-single %py-ieee-top %py-ieee-value %py-take-n)
+
 ; (typecode standard-size native-size signed?), where a float code's last field
 ; is its IEEE format rather than a sign
 (def %py-st-codes
@@ -314,3 +318,5 @@
         (pair "unpack" %py-st-unpack)
         (pair "pack_into" %py-st-pack-into)
         (pair "unpack_from" %py-st-unpack-from)))))
+
+(provide python/struct %py-struct-module)

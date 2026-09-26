@@ -19,6 +19,8 @@
 ; A stream constructed from a buffer COPIES it: writing into the stream must
 ; not reach the bytes it was built from, which is what io_bytesio_cow asks.
 
+(module python/io)
+
 (def %py-io ())
 (def %py-io-new
   (fn (_ text? buf) (%make-instance %py-io (list text? (list buf) (list 0) (list #f)))))
@@ -341,3 +343,7 @@
         (pair "BytesIO" %py-cls-BytesIO)
         (pair "IOBase" %py-cls-IOBase)
         (pair "UnsupportedOperation" %py-exc-UnsupportedOperation)))))
+
+(provide python/io
+  %py-cls-BytesIO %py-cls-StringIO %py-io-attr %py-io-drain! %py-io-is
+  %py-io-module %py-io-std %py-io-text?)
