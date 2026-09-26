@@ -4,11 +4,9 @@
 With a terminal, the platform's line editor reads the line and asks the
 session's lang what it means, how it is coloured and what Tab offers.
 `python/line.x` answers the last three for Python and `python/repl.x` the
-first; `%py-repl-install!` registers the four as the lang `"python"` when the
-platform has `x/repl/lang`, and leaves the byte loop as the only loop when it
-does not. The cases below hold on both: what they check is the bundle's own
-answers, and the one case that touches the registry states the same result
-either way.
+first; `%py-repl-install!` registers the four as the lang `"python"` with
+`x/repl/lang`. The cases below check the bundle's own answers, and the last
+checks what the registry holds.
 
 ## painting
 
@@ -191,20 +189,18 @@ still here
 
 ## the registry
 
-### install registers "python" where the platform has a registry
+### install registers "python" and makes it the session's lang
 
 ```python
 (%seq
   (do
     (import python/repl)
     (%py-repl-install!)
-    (write (if (%py-lang?)
-             (let ((r (list (Lang current) (Assoc get '%repl-prompt (Lang get "python"))
-                            (same? (Assoc get '%repl-eval-line (Lang get "python")) %py-eval-line))))
-               (Lang use! "x")
-               (set! %repl-print %python-repl-print)
-               r)
-             (list "python" ">>> " #t))))
+    (write (let ((r (list (Lang current) (Assoc get '%repl-prompt (Lang get "python"))
+                          (same? (Assoc get '%repl-eval-line (Lang get "python")) %py-eval-line))))
+             (Lang use! "x")
+             (set! %repl-print %python-repl-print)
+             r)))
   (newline))
 ```
 ---

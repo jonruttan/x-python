@@ -337,13 +337,14 @@
 ; the address resolves once into a cell a state image re-resolves.  Nothing here
 ; computes a function libm already has.
 ;
-; The door is a root name, %libm-fn, up to x-lang v0.14.0.  From x-lang#783 on it
-; lives in the x/num/float module, which exports it as libm-fn (x-lang#786),
-; reached by a selective import.  The root name is asked first: before #783 the
-; float file is no module, and importing one by that name would load it again.
-(def %py-libm-fn
-  (guard (e ((fn (_) (import x/num/float libm-fn) libm-fn)))
-    %libm-fn))
+; The door is libm-fn, which the x/num/float module exports (x-lang#786) and
+; keeps out of the root, so it is reached by a selective import.  The import is
+; made inside a call so the name lands in that call's frame: at the top of this
+; file it would land in the root, which is where this module's names live.
+; This straddled the root name %libm-fn while the pin sat at v0.14.0, before
+; x-lang#783 made the float file a module -- the probe is gone now that the pin
+; declares v0.15.0, which carries #783 and #786 both.
+(def %py-libm-fn ((fn (_) (import x/num/float libm-fn) libm-fn)))
 
 (def %py-ferf      (%py-libm-fn (lit %py-ferf)      "d->d"  "erf"))
 (def %py-ferfc     (%py-libm-fn (lit %py-ferfc)     "d->d"  "erfc"))

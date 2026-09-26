@@ -25,10 +25,9 @@
 ; answer, and with the painter, the marks and the completer of python/line
 ; it is registered as the lang "python" (x/repl/lang), so the editor's
 ; history, keys and colour are Python's for free and a session can switch
-; between this prompt and x-lang's.  Otherwise %python-repl replaces the
-; loop and reads for itself, through the editor when there is one to drive
-; and the byte reader when there is not.  On a platform older than
-; x/repl/lang only the second way exists.
+; between this prompt and x-lang's.  Without a terminal -- a pipe --
+; %python-repl replaces the loop and reads for itself, through the byte
+; reader.
 ;
 ; WHAT ECHOES.  CPython echoes the repr of an EXPRESSION statement's value and
 ; nothing else -- an assignment is silent even though our emitted set! has a
@@ -257,11 +256,6 @@
                     (newline))))
               (%py-repl-eval entry))))))))
 
-; Whether the platform has x/repl/lang -- the registry and the seams behind
-; it arrived together, after v0.14.0.  Older platforms get the byte loop.
-(def %py-lang?
-  (fn (_) (guard (_ #f) (do Lang #t))))
-
 ; Python's own spelling of the switch: lang("x").  The name arrives as a
 ; Python str, code points, and Lang wants bytes.
 (def py-lang
@@ -274,22 +268,20 @@
 ; it; the seams themselves are set by use!, and nothing reads them in a batch.
 (def %py-repl-register!
   (fn (_)
-    (when (%py-lang?)
-      (Lang register! "python"
-        (list (pair (lit %repl-prompt) ">>> ")
-              (pair (lit %repl-prompt-more) "... ")
-              (pair (lit %repl-print) %python-repl-print)
-              (pair (lit %repl-paint) %py-paint)
-              (pair (lit %repl-marks) %py-marks)
-              (pair (lit %repl-complete) %py-complete)
-              (pair (lit %repl-eval-line) %py-eval-line))))))
+    (Lang register! "python"
+      (list (pair (lit %repl-prompt) ">>> ")
+            (pair (lit %repl-prompt-more) "... ")
+            (pair (lit %repl-print) %python-repl-print)
+            (pair (lit %repl-paint) %py-paint)
+            (pair (lit %repl-marks) %py-marks)
+            (pair (lit %repl-complete) %py-complete)
+            (pair (lit %repl-eval-line) %py-eval-line)))))
 
 ; Register, and make it the session's lang.
 (def %py-repl-install!
   (fn (_)
-    (when (%py-lang?)
-      (%py-repl-register!)
-      (Lang use! "python"))))
+    (%py-repl-register!)
+    (Lang use! "python")))
 
 ; Whether this bundle owns the prompt.  `-l` is repeatable, and a bundle
 ; named by a second or later -l is loaded beside the first lang: the wrapper
@@ -312,9 +304,9 @@
   (fn (_)
     (when (%py-leads?)
       (unless (guard (_ #f) %image-writing)
-        (unless (if (%py-lang?) (if (Sys isatty 0) #t (Sys isatty 3)) #f)
+        (unless (if (Sys isatty 0) #t (Sys isatty 3))
           (set! repl %python-repl))))))
 (set! %image-recache-hooks (pair (fn (_) (%py-repl-choose!)) %image-recache-hooks))
 
 (provide python/repl %python-repl %python-banner %py-eval-line
-  %py-repl-register! %py-repl-install! %py-repl-choose! %py-lang? %py-leads?)
+  %py-repl-register! %py-repl-install! %py-repl-choose! %py-leads?)

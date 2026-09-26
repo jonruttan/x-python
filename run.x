@@ -37,10 +37,9 @@
 ; has editing and history, and can switch to x-lang's prompt and back.
 ; Without a terminal the platform loop would read sexps through the ambient
 ; reader -- no prompt string changes what a reader is -- so python/repl.x's
-; own loop replaces it.  On a platform older than x/repl/lang that loop is
-; the only loop, and reads through the editor itself when there is one.
-; Which of the two is a fact of the process, so the choice is remade after
-; a state image loads; see %py-repl-choose! in python/repl.x.
+; own loop replaces it.  Which of the two is a fact of the process, so the
+; choice is remade after a state image loads; see %py-repl-choose! in
+; python/repl.x.
 ;
 ; All of that only when this bundle leads.  `-l` is repeatable, and named
 ; second (`x -l xe -l python`) this bundle is a library to the lang that
