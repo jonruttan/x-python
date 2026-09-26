@@ -21,6 +21,9 @@
 ; what the ordinary dict does not promise -- an equality that counts order,
 ; and its own repr.
 
+(module python/collections)
+(import python/deque %py-cls-deque)
+
 ; --- namedtuple --------------------------------------------------------------
 
 ; The declared field names, as the platform strings a method table is keyed
@@ -202,3 +205,5 @@
         (pair "namedtuple" (%py-sig! %py-namedtuple "namedtuple" (list "typename" "field_names") 2 #f))
         (pair "OrderedDict" %py-cls-OrderedDict)
         (pair "deque" %py-cls-deque)))))
+
+(provide python/collections %py-collections-module %py-namedtuple-class)

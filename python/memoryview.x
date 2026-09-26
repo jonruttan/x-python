@@ -22,6 +22,10 @@
 ; the code B.  Only bytes is read-only: a bytearray and an array are written
 ; through.
 
+(module python/memoryview)
+(import python/array %py-arr-buffer %py-arr-el %py-arr-info %py-arr-is
+  %py-arr-item %py-arr-set! %py-arr-size %py-arr-tc %py-take-n)
+
 (def %py-mv ())
 (def %py-mv-new
   (fn (_ t start stop code) (%make-instance %py-mv (list t start stop code))))
@@ -226,3 +230,8 @@
 
 (def %py-cls-memoryview
   (%py-class-new "memoryview" %py-cls-object %py-mv-methods "memoryview"))
+
+(provide python/memoryview
+  %py-buffer-bytes %py-buffer-text %py-buffer? %py-cls-memoryview
+  %py-mv-at %py-mv-attr %py-mv-elems %py-mv-in %py-mv-is %py-mv-len
+  %py-mv-put! %py-mv-setslice! %py-mv-slice)

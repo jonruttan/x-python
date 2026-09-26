@@ -20,6 +20,9 @@
 ; reached through the element list, which makes the right-hand end a walk; that
 ; is a cost, not a difference in what a program sees.
 
+(module python/deque)
+(import python/array %py-take-n)
+
 ; deque([1, 2]), and deque([1, 2], maxlen=3) when there is a bound; a subclass
 ; prints under its own name in place of deque.
 (def %py-dq-named-repr
@@ -257,3 +260,7 @@
 
 (def %py-cls-deque
   (%py-class-new "deque" %py-cls-object %py-dq-methods "collections.deque"))
+
+(provide python/deque
+  %py-cls-deque %py-dq-at %py-dq-attr %py-dq-cat %py-dq-del! %py-dq-eq
+  %py-dq-extend! %py-dq-put! %py-dq-repeat %py-dq-repr)

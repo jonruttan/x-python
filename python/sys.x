@@ -20,6 +20,10 @@
 ; prints.  The implementation is named x-python and not CPython, so a program
 ; that branches on it sees what is actually running.
 
+(module python/sys)
+(import python/io %py-io-std)
+(import python/collections %py-namedtuple-class)
+
 ; --- versions -------------------------------------------------------------------
 
 (def %py-sys-version "3.14.7")
@@ -139,3 +143,5 @@
               (%py-raise
                 (%py-instantiate %py-exc-SystemExit
                   (if (null? a) () (list (first a))))))))))))
+
+(provide python/sys %py-implementation-version %py-sys-module)
