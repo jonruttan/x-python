@@ -212,7 +212,8 @@
                   (if (null? sig)
                     (Err raise (lit type)
                       (Str8 append (%py-class-name f) "() takes no keyword arguments") ())
-                    ; the class's own call door, not apply: apply wants a closure
+                    ; the class's own call door, direct: apply would reach it
+                    ; through PY-CLASS's handler, dearer (see %py-apply-any)
                     (%py-instantiate f (%py-kw-args (%py-sig-shift sig) pos kws)))))))))
       ; a bound method: its function's signature, with self already supplied
       ((%py-bound-is f)
@@ -660,8 +661,17 @@
 ; instance through its type's call handler -- but anything else it answers as
 ; data: `1()` was the list (1), and a list called with no argument reached the
 ; handler that subscripts it and died on the missing index.  So a call asks
-; first, and refuses in CPython's words.  Each callable kind is applied by its
-; own arm: `apply` takes a closure only, and crashes on an instance.
+; first, and refuses in CPython's words.
+;
+; EACH CALLABLE KIND KEEPS ITS OWN ARM, though apply no longer needs them.
+; Since x-lang#782 (v0.15.0) apply takes any value through its type's call
+; handler, which for a class, an instance and a bound method is the code the
+; arm calls -- reached through the door's value path, which looks the type
+; up first.  (Heap count) around one call, arm against apply: a class 26,515
+; objects against 27,551, an instance with __call__ 9,254 against 10,259, a
+; bound method 5,089 against 5,953.  The refusal cannot move to the door at
+; all: apply subscripts a list and answers an int as data, (apply 5 (list 1))
+; being (5 1), so it is asking first that makes `1()` a TypeError.
 (def %py-apply-any
   (fn (_ f args)
     (match
