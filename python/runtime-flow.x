@@ -30,8 +30,9 @@
 ; a try and print SKIP when it fails.
 ; --- del NAME ----------------------------------------------------------------
 ; The engine defines a global and never removes one, so a deleted name is
-; rebound to this value instead, and a name the program never binds starts out
-; bound to it.  Only reads of those names go through the check.
+; rebound to this value instead; a name the program never binds, and each name
+; a def's body binds, start out bound to it.  Only the reads that may find it
+; go through a check.
 (def %py-deleted (pair (lit %py-deleted) ()))
 
 (def %py-name-missing!
@@ -43,10 +44,24 @@
 (def %py-name-live
   (fn (_ name v) (if (same? v %py-deleted) (%py-name-missing! name) v)))
 
-; What `del NAME` rebinds the name to: deleting a name that is already gone
-; is the same NameError as reading one.
-(def %py-name-gone
-  (fn (_ name v) (if (same? v %py-deleted) (%py-name-missing! name) %py-deleted)))
+; The value of a def's own name, and of a name a def around it binds, read
+; where it may not be bound yet or may have been deleted.
+(def %py-local-live
+  (fn (_ name v)
+    (if (same? v %py-deleted)
+      (Err raise (lit unbound-local)
+        (Str8 append (Str8 append "cannot access local variable '" name)
+          "' where it is not associated with a value")
+        ())
+      v)))
+(def %py-free-live
+  (fn (_ name v)
+    (if (same? v %py-deleted)
+      (Err raise (lit name)
+        (Str8 append (Str8 append "cannot access free variable '" name)
+          "' where it is not associated with a value in enclosing scope")
+        ())
+      v)))
 
 ; A module's __dict__ is its attributes as a dict: a copy, as a class's is, so
 ; reading it answers and writing to it does not reach the module.

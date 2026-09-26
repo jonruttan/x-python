@@ -731,7 +731,9 @@
 (def %py-exc-KeyError        (%py-exc-new "KeyError"        %py-exc-LookupError))
 (def %py-exc-AttributeError  (%py-exc-new "AttributeError"  %py-exc-Exception))
 (def %py-exc-NameError       (%py-exc-new "NameError"       %py-exc-Exception))
-(def %py-exc-TypeError       (%py-exc-new "TypeError"       %py-exc-Exception))
+(def %py-exc-UnboundLocalError
+  (%py-exc-new "UnboundLocalError" %py-exc-NameError))
+(def %py-exc-TypeError      (%py-exc-new "TypeError"       %py-exc-Exception))
 (def %py-exc-ValueError      (%py-exc-new "ValueError"      %py-exc-Exception))
 (def %py-exc-AssertionError  (%py-exc-new "AssertionError"  %py-exc-Exception))
 (def %py-exc-StopIteration   (%py-exc-new "StopIteration"   %py-exc-Exception))
@@ -763,6 +765,7 @@
     (pair (lit index)         %py-exc-IndexError)
     (pair (lit key)           %py-exc-KeyError)
     (pair (lit name)          %py-exc-NameError)
+    (pair (lit unbound-local) %py-exc-UnboundLocalError)
     (pair (lit attribute)     %py-exc-AttributeError)
     (pair (lit zero-division) %py-exc-ZeroDivisionError)
     (pair (lit overflow)      %py-exc-OverflowError)
