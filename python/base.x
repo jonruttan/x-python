@@ -47,7 +47,7 @@
 
 (import python/util)
 ; A sweep after each load; see python/util.x.
-(import python/tokens)
+(import python/tokens python-tokenize)
 (%py-sweep!)
 (import python/indent)
 (%py-sweep!)

@@ -25,7 +25,7 @@
 ; comment-only line is refused by an analyser that can see the character after
 ; the indentation.  What is left is a name.
 
-(import python/tokens)
+(import python/tokens python-tokenize)
 
 (provide python/indent python-lex)
 
