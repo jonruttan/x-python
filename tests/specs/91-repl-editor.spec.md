@@ -16,7 +16,7 @@ registry.
 ```python
 (%seq
   (do
-    (import python/line)
+    (import python/line %py-paint-class)
     (write (List map (fn (_ n) (%py-paint-class n)) (list "def" "True" "print" "Foo" "x"))))
   (newline))
 ```
@@ -28,7 +28,7 @@ registry.
 ```python
 (%seq
   (do
-    (import python/line)
+    (import python/line %py-paint-tokens)
     (write (%py-paint-tokens "if x: print(\"hi\") # c")))
   (newline))
 ```
@@ -40,7 +40,7 @@ registry.
 ```python
 (%seq
   (do
-    (import python/line)
+    (import python/line %py-paint-tokens)
     (write (%py-paint-tokens "f\"a{b}\" + rb\"\"\"x\"\"\" + 1_000 + 0x1f + 1.5e-3 + .5")))
   (newline))
 ```
@@ -52,7 +52,7 @@ registry.
 ```python
 (%seq
   (do
-    (import python/line)
+    (import python/line %py-paint-tokens)
     (write (list (%py-paint-tokens "@property") (%py-paint-tokens "s = 'abc"))))
   (newline))
 ```
@@ -64,7 +64,7 @@ registry.
 ```python
 (%seq
   (do
-    (import python/line)
+    (import python/line %py-paint)
     (write (if (Ansi enabled?) #t (Str8 =? (%py-paint "def f(): pass") "def f(): pass"))))
   (newline))
 ```
@@ -78,7 +78,7 @@ registry.
 ```python
 (%seq
   (do
-    (import python/line)
+    (import python/line %py-marks)
     (write (%py-marks "f([1, {2}])" 1)))
   (newline))
 ```
@@ -90,7 +90,7 @@ registry.
 ```python
 (%seq
   (do
-    (import python/line)
+    (import python/line %py-marks)
     (write (%py-marks "f(x))" 5)))
   (newline))
 ```
@@ -102,7 +102,7 @@ registry.
 ```python
 (%seq
   (do
-    (import python/line)
+    (import python/line %py-marks)
     (write (%py-marks "f(\")\") # )" 0)))
   (newline))
 ```
@@ -120,7 +120,7 @@ left of the cursor, so a stand-in with that method serves here as it does in
 ```python
 (%seq
   (do
-    (import python/line)
+    (import python/line %py-complete)
     (def-class %spec-edit () text (method before (self) (member (lit text))))
     (write (list (%py-complete (new %spec-edit text "x = pri"))
                  (%py-complete (new %spec-edit text "x = ")))))

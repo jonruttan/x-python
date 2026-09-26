@@ -37,6 +37,10 @@
 ;
 ; The scan runs on every keystroke, so it is %-private functions over cached
 ; prims -- the rule x/repl/paint states -- and the palette is built once.
+;
+; A module of its own: its names are its own, and only what the provide list
+; at the end names leaves it, for an importer to take by name.
+(module python/line)
 
 (import python/util)
 (import python/tokens)
@@ -392,9 +396,13 @@
 ; sorted and each once.  An empty word answers nothing rather than the whole
 ; table.
 
-; Names defined at the prompt, recorded by the loop as each definition is
-; lifted, so that a function defined on one line completes on the next.
+; Names defined at the prompt, so that a function defined on one line
+; completes on the next.  The loop records each as it lifts the definition,
+; through %py-session-name!: the list is this module's, and an importer that
+; set! the name would bind its own copy.
 (def %py-session-names ())
+(def %py-session-name!
+  (fn (_ s) (set! %py-session-names (pair s %py-session-names))))
 ; The keywords and the builtins, built once by the install below.
 (def %pp-names ())
 
@@ -469,4 +477,4 @@
 
 (provide python/line
   %py-read %py-paint %py-marks %py-paint-tokens %py-paint-class
-  %py-complete %py-word-at %py-session-names)
+  %py-complete %py-word-at %py-session-name!)

@@ -42,7 +42,7 @@
 
 (import python/util)
 (import python/base)
-(import python/line)
+(import python/line %py-read %py-paint %py-marks %py-complete %py-session-name!)
 (import x/sys/posix)
 ; Catalog fetches, once at load.
 (def %py-repl-cvt (prim-ref (lit convert) (lit to)))
@@ -152,8 +152,7 @@
               ; Remembered for Tab: a name defined on one line completes on
               ; the next.
               (guard (_ ())
-                (set! %py-session-names
-                  (pair (symbol->str (first (rest f))) %py-session-names)))
+                (%py-session-name! (symbol->str (first (rest f)))))
               (list (lit %py-defg)
                 (list (lit lit) (first (rest f)))
                 (first (rest (rest f)))))
