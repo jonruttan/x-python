@@ -103,7 +103,8 @@
 ; implementation of anything numeric.
 ;
 ; The entries float.x does not bind -- erf, the hyperbolics, gamma among them --
-; are bound below through its own %libm-fn, so every function here is libm's.
+; are bound below through its own door, libm-fn, so every function here is
+; libm's.
 
 ; --- with ------------------------------------------------------------------
 ;
@@ -333,32 +334,26 @@
         (#t r)))))
 
 ; --- the libm entries lib/x/num/float.x does not bind ---------------------------
-; Each is one row through that file's own %libm-fn, the way it binds sin and exp:
+; Each is one row through that file's own door, the way it binds sin and exp:
 ; the address resolves once into a cell a state image re-resolves.  Nothing here
-; computes a function libm already has.
-;
-; The door is a root name, %libm-fn, up to x-lang v0.14.0.  From x-lang#783 on it
-; lives in the x/num/float module, which exports it as libm-fn (x-lang#786),
-; reached by a selective import.  The root name is asked first: before #783 the
-; float file is no module, and importing one by that name would load it again.
-(def %py-libm-fn
-  (guard (e ((fn (_) (import x/num/float libm-fn) libm-fn)))
-    %libm-fn))
+; computes a function libm already has.  The float file is a module, and the
+; door is its export libm-fn, reached by a selective import.
+(import x/num/float libm-fn)
 
-(def %py-ferf      (%py-libm-fn (lit %py-ferf)      "d->d"  "erf"))
-(def %py-ferfc     (%py-libm-fn (lit %py-ferfc)     "d->d"  "erfc"))
-(def %py-ftgamma   (%py-libm-fn (lit %py-ftgamma)   "d->d"  "tgamma"))
-(def %py-flgamma   (%py-libm-fn (lit %py-flgamma)   "d->d"  "lgamma"))
-(def %py-fsinh     (%py-libm-fn (lit %py-fsinh)     "d->d"  "sinh"))
-(def %py-fcosh     (%py-libm-fn (lit %py-fcosh)     "d->d"  "cosh"))
-(def %py-ftanh     (%py-libm-fn (lit %py-ftanh)     "d->d"  "tanh"))
-(def %py-fasinh    (%py-libm-fn (lit %py-fasinh)    "d->d"  "asinh"))
-(def %py-facosh    (%py-libm-fn (lit %py-facosh)    "d->d"  "acosh"))
-(def %py-fatanh    (%py-libm-fn (lit %py-fatanh)    "d->d"  "atanh"))
-(def %py-fexpm1    (%py-libm-fn (lit %py-fexpm1)    "d->d"  "expm1"))
-(def %py-flog1p    (%py-libm-fn (lit %py-flog1p)    "d->d"  "log1p"))
-(def %py-flogb     (%py-libm-fn (lit %py-flogb)     "d->d"  "logb"))
-(def %py-fcopysign (%py-libm-fn (lit %py-fcopysign) "dd->d" "copysign"))
+(def %py-ferf      (libm-fn (lit %py-ferf)      "d->d"  "erf"))
+(def %py-ferfc     (libm-fn (lit %py-ferfc)     "d->d"  "erfc"))
+(def %py-ftgamma   (libm-fn (lit %py-ftgamma)   "d->d"  "tgamma"))
+(def %py-flgamma   (libm-fn (lit %py-flgamma)   "d->d"  "lgamma"))
+(def %py-fsinh     (libm-fn (lit %py-fsinh)     "d->d"  "sinh"))
+(def %py-fcosh     (libm-fn (lit %py-fcosh)     "d->d"  "cosh"))
+(def %py-ftanh     (libm-fn (lit %py-ftanh)     "d->d"  "tanh"))
+(def %py-fasinh    (libm-fn (lit %py-fasinh)    "d->d"  "asinh"))
+(def %py-facosh    (libm-fn (lit %py-facosh)    "d->d"  "acosh"))
+(def %py-fatanh    (libm-fn (lit %py-fatanh)    "d->d"  "atanh"))
+(def %py-fexpm1    (libm-fn (lit %py-fexpm1)    "d->d"  "expm1"))
+(def %py-flog1p    (libm-fn (lit %py-flog1p)    "d->d"  "log1p"))
+(def %py-flogb     (libm-fn (lit %py-flogb)     "d->d"  "logb"))
+(def %py-fcopysign (libm-fn (lit %py-fcopysign) "dd->d" "copysign"))
 
 ; A result that overflowed a finite argument is Python's OverflowError.
 (def %py-mrange-error

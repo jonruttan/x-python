@@ -45,16 +45,15 @@
 (import x/type/str)
 (import x/type/list)
 (import x/repl/ansi)
-; The editor, when the platform has one.  Imported here rather than left to
-; the launcher so that its Line class exists when the completer is installed
-; below; a platform without it leaves the guard to answer.
-(guard (_ ()) (import x/repl/line))
+; The editor.  Imported here rather than left to the launcher so that its
+; Line class exists when the completer is installed below.
+(import x/repl/line)
 
 ; --- reading one line ---------------------------------------------------------
 ;
 ; Answers the line as a string, 'eof at end of input, and 'cancel for ctrl-c,
-; which abandons the entry being typed.  Without a terminal, or on a platform
-; without the editor, the prompt is displayed and the byte reader is used.
+; which abandons the entry being typed.  Without a terminal the prompt is
+; displayed and the byte reader is used.
 (def %py-editor?
   (fn (_) (guard (_ #f) (Line available?))))
 
@@ -427,9 +426,8 @@
 ; The colours are strings of this process -- a state image loaded elsewhere
 ; may have a terminal the writer did not -- so the palette is built by a
 ; function the image recache hook calls again, and the memo with it.  The
-; three seams are set here as well as registered by python/repl.x: on a
-; platform without x/repl/lang this is the whole of the install, and on one
-; with it the values are the same ones the lang "python" carries.
+; three seams are set here as well as registered by python/repl.x, to the
+; values the lang "python" carries.
 (def %py-line-install!
   (fn (_)
     (set! %pp-kw (Dict make))
@@ -456,9 +454,8 @@
             ""))                                    ; plain
     (set! %pp-depth (list (Ansi yellow) (Ansi magenta) (Ansi cyan)))
     (set! %pp-lone (Ansi bold-red))
-    ; Inverse video, from the Ansi class where it carries it.  The pinned
-    ; release's Ansi has no inverse, and there the platform's %sgr answers.
-    (set! %pp-focus (guard (_ (%sgr "7")) (Ansi inverse)))
+    ; inverse video
+    (set! %pp-focus (Ansi inverse))
     (set! %pp-last-in ())
     (set! %pp-last-out ())
     (set! %pp-last-marks ())

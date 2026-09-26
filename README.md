@@ -189,8 +189,7 @@ spelling of the switch and `(lang python)` is x-lang's; both are calls to the
 same registry.
 
 Without a terminal — a pipe — there is no editor, and the bundle's own loop
-reads Python from stdin, block by block, as before. On a platform older than
-`x/repl/lang` that loop is the only one.
+reads Python from stdin, block by block, as before.
 
 ## Development
 
