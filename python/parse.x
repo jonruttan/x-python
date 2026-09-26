@@ -46,7 +46,7 @@
 ; rather than a different reader.
 
 (import python/util)
-(import python/tokens)
+(import python/tokens python-tokenize %py-code-at mk-tok-number mk-tok-op)
 (import python/indent)
 (import python/bytes)
 (import python/str)

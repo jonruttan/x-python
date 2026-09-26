@@ -43,7 +43,7 @@
 (module python/line)
 
 (import python/util)
-(import python/tokens)
+(import python/tokens %py-keywords)
 (import python/parse)
 (import x/type/dict)
 (import x/type/str)

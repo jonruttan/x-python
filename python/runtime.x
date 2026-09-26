@@ -53,6 +53,9 @@
 ; and keeps the modules loadable one at a time, which is what the
 ; platform's linter does.
 (import python/util)
+; the tokenizer's character conversions, which runtime-num.x and
+; runtime-call.x read
+(import python/tokens %py-hexval %py-int->char %py-list->string)
 ; A sweep after each load; see python/util.x.  The tower's parts one at a
 ; time, each swept: imported as one, x/num/tower is the largest load
 ; between two sweeps by a distance (7.3 GB on x86-64 under x-lang 0.14.0,

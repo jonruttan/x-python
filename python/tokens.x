@@ -43,14 +43,13 @@
 ; character inside a reader callback, which is the one place allocation is a
 ; hazard.  Here `analyse` only finds the closing quote; `read` slices
 ; `%buffer-token` and unescapes.  No shared state, no per-character allocation.
+;
+; A module of its own: only what the provide list at the end names leaves it,
+; for an importer to take by name.
+
+(module python/tokens)
 
 (import python/util)
-
-(provide python/tokens
-  python-tokenize %py-base %py-keywords
-  mk-tok-name mk-tok-kw mk-tok-number mk-tok-string mk-tok-op mk-tok-newline
-  mk-tok-bytes mk-tok-fstring mk-tok-group mk-tok-block
-  %py-unescape-bytes %py-unescape-cps)
 
 ; (Base make-tok) is the isolated, type-free base -- 2024's make-token-base.
 (import x/reader/indent)
@@ -1931,3 +1930,11 @@
           (%set-first! %py-kw-leaf ()))
         %image-transients))
 (set! %image-recache-hooks (pair (fn (_) (%py-tok-reset!)) %image-recache-hooks))
+
+(provide python/tokens
+  python-tokenize %py-base %py-keywords
+  mk-tok-name mk-tok-kw mk-tok-number mk-tok-string mk-tok-op mk-tok-newline
+  mk-tok-bytes mk-tok-fstring mk-tok-group mk-tok-block
+  %py-unescape-bytes %py-unescape-cps %py-code-at
+  %py-hexval %py-int->char %py-list->string
+  %py-jit %py-jit-compile! %py-jit-threshold)

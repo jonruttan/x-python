@@ -21,6 +21,7 @@ this pins that the accounting is why.
 ```python
 (%seq
   (do
+    (import python/tokens %py-jit)
     (write (python-tokenize "a"))
     (newline)
     (write (first %py-jit)))
@@ -44,6 +45,7 @@ true, and the attempt has pinned itself out of the way.
 ```python
 (%seq
   (do
+    (import python/tokens %py-jit %py-jit-threshold)
     (def %src "abc de_2 12 3.5 0.25 1e10 2.5E-3 .5 1_000.1_8 3j 2.5J # comment\n\nif x_1:\n    y = 'str' + \"str\"\n")
     (def %before (python-tokenize %src))
     (%set-first! %py-jit-threshold 0)
@@ -70,6 +72,7 @@ prints the attempt's refusal.
 ```python
 (%seq
   (do
+    (import python/tokens %py-jit %py-jit-threshold %py-jit-compile!)
     (def %lane
       (guard (_ #f)
         (%seq
