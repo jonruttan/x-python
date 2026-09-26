@@ -44,6 +44,13 @@
 ; It is also where the spellings diverge: `1_000` and `0x10` are Python numbers
 ; that x's reader does not spell the same way, and they will need handling here
 ; rather than a different reader.
+;
+; No module of its own, by measurement.  With a (module python/parse) header, a
+; parse of a 200-line program took 19 s against 17 s without it, the parse
+; itself some 15-20% slower: every name this file reads from the root -- first,
+; rest, match, the token and runtime doors -- is found only after a walk of the
+; module's own 315 names.  x-lang keeps its hot modules unscoped for the same
+; measured reason (docs/namespaces.md).
 
 (import python/util)
 (import python/tokens python-tokenize %py-code-at mk-tok-number mk-tok-op)
@@ -4119,9 +4126,6 @@
 ; loaded wins.  It cost `len([])` returning 1 and `len('hello')` returning 119 --
 ; wrong numbers, no error.
 (def %py-count (fn (self l) (if (null? l) 0 (+ 1 (self (rest l))))))
-(def %py-take
-  (fn (self n l)
-    (if (= n 0) () (if (null? l) () (pair (first l) (self (- n 1) (rest l)))))))
 
 (def %py-seen?
   (fn (self x lst)
@@ -4279,7 +4283,3 @@
             (list (lit %py-e) (list (lit %py-defg) (list (lit lit) (first syms)) ()))
           (first syms))
           acc)))))
-
-(def %py-append
-  (fn (self a b)
-    (if (null? a) b (pair (first a) (self (rest a) b)))))
