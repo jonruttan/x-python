@@ -8,7 +8,7 @@ keywords, the builtins and the names defined at the prompt.
 ### with no terminal, painting returns the line unchanged
 
 ```python
-(do (import python/line) (let ((s "def f(x): return x + 1  # c")) (Str8 =? (%py-paint s) s)))
+(do (import python/line %py-paint) (let ((s "def f(x): return x + 1  # c")) (Str8 =? (%py-paint s) s)))
 ```
 ---
     #t
@@ -20,7 +20,7 @@ lets these cases run on a platform that has no editor to build a buffer with.
 ### the identifier being completed ends at the cursor
 
 ```python
-(do (import python/line)
+(do (import python/line %py-word-at)
     (def-class %spec-buf () text (method before (self) (member (lit text))))
     (%py-word-at (new %spec-buf text "x = pri")))
 ```
@@ -30,7 +30,7 @@ lets these cases run on a platform that has no editor to build a buffer with.
 ### a keyword and a builtin complete from their own tables
 
 ```python
-(do (import python/line)
+(do (import python/line %py-complete)
     (let ((r (%py-complete (new %spec-buf text "pr"))))
       (list (first r) (List includes? "print" (rest r)))))
 ```
@@ -40,8 +40,8 @@ lets these cases run on a platform that has no editor to build a buffer with.
 ### a name defined at the prompt completes afterwards
 
 ```python
-(do (import python/line)
-    (set! %py-session-names (pair "frobnicate" %py-session-names))
+(do (import python/line %py-complete %py-session-name!)
+    (%py-session-name! "frobnicate")
     (rest (%py-complete (new %spec-buf text "frob"))))
 ```
 ---
