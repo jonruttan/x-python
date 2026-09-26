@@ -583,8 +583,9 @@
 ; --- PY-BOUND ----------------------------------------------------------------
 ; A bound method as a program sees it: the function and the receiver, called
 ; as one.  The payload is (fn . self).  A direct call reaches the handler
-; below; `apply` does not dispatch through a type, so a place that applies a
-; program's callable goes through %py-apply-any, which reads the pair.
+; below, and since x-lang#782 so does `apply`; the runtime's own calls still
+; go through %py-apply-any, which reads the pair without the door's type
+; lookup and refuses a non-callable in CPython's words.
 ;
 ; The runtime's own binding of a dunder stays a closure (%py-bind-method):
 ; that path is taken on every operator and its result is never a value the
