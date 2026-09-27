@@ -80,10 +80,24 @@
       ((eq? (%py-num-kind (%py-boolnorm obj)) (lit int)) (%py-int-attr obj name))
       (#t
         (let ((sig (%py-sig-of obj)))
-          (if (if (null? sig) #f (Str8 =? name "__name__"))
-            (%py-str-of-x (first sig))
-            (Err raise (lit attribute)
-              (Str8 append (Str8 append "object has no attribute '" name) "'")())))))))
+          (match
+            ((if (null? sig) #f (Str8 =? name "__name__")) (%py-str-of-x (first sig)))
+            ((if (null? sig) #f (Str8 =? name "__globals__")) (%py-sig-globals sig))
+            (#t
+              (Err raise (lit attribute)
+                (Str8 append (Str8 append "object has no attribute '" name) "'")()))))))))
+
+; A function's __globals__: the namespace dict of the module whose code
+; defined it, found from the environment its def or lambda ran in (%py-sig!).
+; A builtin has none to answer with, nor does a def made at the prompt, whose
+; names are x's root.
+(def %py-sig-globals
+  (fn (_ sig)
+    (let ((env (%py-nth-or sig 7 ())))
+      (let ((ns (if (null? env) () (%py-ns-around env))))
+        (if (null? ns)
+          (Err raise (lit attribute) "object has no attribute '__globals__'" ())
+          ns)))))
 
 ; str.upper is the method as a function of its receiver -- str.upper("abc")
 ; -- and a user class's attribute is its function, unbound, callable with an

@@ -781,7 +781,7 @@
         (def sig-form
           (list (lit %py-sig!) (list (lit fn) (pair (lit %py-fn) (lit %py-more)) body)
             "<lambda>" (pair (lit list) names) nreq (not (null? rest-sym)) ()
-            (pair (lit list) (%py-kwo-names kwonly ())) #t))
+            (pair (lit list) (%py-kwo-names kwonly ())) #t (list (lit %py-here))))
         (def all-dflts (%py-append dflts (%py-kwo-dflts kwonly ())))
         (pair (if (null? all-dflts) sig-form (list (lit let) (%py-dflt-lets all-dflts 0) sig-form))
           (rest b))))))
@@ -938,12 +938,16 @@
 
 ; A BARE dir(), locals() OR vars() IS THE NAMES WHERE IT IS CALLED, which only
 ; the call's own environment can answer, so the call hands that over
-; (python/runtime-flow.x, %py-bare-call).
+; (python/runtime-flow.x, %py-bare-call) -- and in a class body, whose names
+; are the class's rows rather than an environment, those rows.
 (def %py-call-form
   (fn (_ f elems)
-    (if (if (null? elems) (%py-bare-callee? f) #f)
-      (list (lit %py-bare-call) (list (lit lit) f) (list (lit %py-here)))
-      (%py-call-form-args f elems))))
+    (match
+      ((if (null? elems) (not (%py-bare-callee? f)) #t) (%py-call-form-args f elems))
+      ((null? (first %py-class-level))
+        (list (lit %py-bare-call) (list (lit lit) f) (list (lit %py-here))))
+      (#t
+        (list (lit %py-bare-class) (list (lit lit) f) (lit %py-crows) (list (lit %py-here)))))))
 (def %py-bare-callee?
   (fn (_ f)
     (match
@@ -1666,6 +1670,7 @@
         (list "divmod"         (lit %py-divmod))
         (list "callable"       (lit %py-callable))
         (list "__import__"     (lit %py-import-call))
+        (list "__build_class__" (lit %py-build-class))
         (list "id"             (lit %py-id))
         (list "getattr"        (lit %py-getattr3))
         (list "setattr"        (lit %py-setattr3))
@@ -2222,12 +2227,8 @@
       (%py-dotted-name (rest toks) (%py-val (first toks))))))
 
 ; The module a `from` names: `a.b`, or a relative name -- dots, then a dotted
-; name or none (`.`, `..a`) -- which is resolved where the statement runs,
-; against the package of the module it is in (python/runtime-flow.x,
-; %py-relative), so it compiles to that call.
-(def %py-from-form
-  (fn (_ name)
-    (if (Str8 =? (Str8 sub 0 1 name) ".") (list (lit %py-relative) name) name)))
+; name or none (`.`, `..a`) -- which __import__ resolves against the package of
+; the module the statement is in, given the dots as its level (%py-rel-split).
 (def %py-from-name
   (fn (_ toks)
     (if (%py-op-is? (if (null? toks) () (first toks)) ".")
@@ -2259,8 +2260,8 @@
 ; lives in this file because turning a Python name into a symbol is the
 ; parser's own reader.
 (def %py-import-star
-  (op (name) e
-    (%py-star-bind! e (%py-import (eval name e)))))
+  (op (module) e
+    (%py-star-bind! e (eval module e))))
 
 (def %py-star-bind!
   (fn (_ env m)
@@ -2326,24 +2327,27 @@
                   (let ((n (if (null? (rest after)) () (first (rest after)))))
                     (if (not (eq? (%py-tag n) (lit tok-name)))
                       (Err raise (lit syntax) "expected a name after as" ())
-                      (list (%py-name->sym (%py-val n)) (rest (rest after)) (lit %py-import))))
-                  ; `import a.b` binds the head name to the head module, as
-                  ; Python does; with `as` the name is the named module's
-                  (list (%py-name->sym (%py-import-head name)) after (lit %py-import-top)))))
-          (let ((acc2 (pair (list (lit def) (first bound)
-                              (list (first (rest (rest bound))) name)) acc))
+                      (list (%py-name->sym (%py-val n)) (rest (rest after))
+                        (list (lit %py-imp-leaf) (%py-imp-form name () 0) name))))
+                  ; `import a.b` binds the head name to the head package the
+                  ; call answers, as Python does; with `as` the name is the
+                  ; named module's
+                  (list (%py-name->sym (%py-import-head name)) after (%py-imp-form name () 0)))))
+          (let ((acc2 (pair (list (lit def) (first bound) (first (rest (rest bound)))) acc))
                 (rest-toks (first (rest bound))))
             (if (%py-op-is? (if (null? rest-toks) () (first rest-toks)) ",")
               (self (rest rest-toks) acc2)
               (pair (pair (lit do) (%py-reverse acc2)) rest-toks))))))))
 
+; `from X import a, b as c`: one call of __import__ asking for the names, then
+; each (ATTR SYM) read off what it answered and bound (python/runtime-flow.x,
+; %py-from-bind).  REL is (NAME . LEVEL), the module's name split from its dots.
 (def %py-from-imports
-  (fn (self name toks acc)
+  (fn (self rel toks specs)
     (match
-      ((null? toks) (pair (pair (lit do) (%py-reverse acc)) toks))
-      ((%py-op-is? (first toks) ",") (self name (rest toks) acc))
-      ((eq? (%py-tag (first toks)) (lit tok-newline))
-        (pair (pair (lit do) (%py-reverse acc)) toks))
+      ((if (null? toks) #t (eq? (%py-tag (first toks)) (lit tok-newline)))
+        (pair (%py-from-bind-form rel (%py-reverse specs)) toks))
+      ((%py-op-is? (first toks) ",") (self rel (rest toks) specs))
       ((not (eq? (%py-tag (first toks)) (lit tok-name)))
         (Err raise (lit syntax) "expected a name after import" ()))
       (#t
@@ -2352,12 +2356,31 @@
             (let ((n (if (null? (rest (rest toks))) () (first (rest (rest toks))))))
               (if (not (eq? (%py-tag n) (lit tok-name)))
                 (Err raise (lit syntax) "expected a name after as" ())
-                (self name (rest (rest (rest toks)))
-                  (pair (list (lit def) (%py-name->sym (%py-val n))
-                          (list (lit %py-import-from) name attr)) acc))))
-            (self name (rest toks)
-              (pair (list (lit def) (%py-name->sym attr)
-                      (list (lit %py-import-from) name attr)) acc))))))))
+                (self rel (rest (rest (rest toks)))
+                  (pair (list attr (%py-name->sym (%py-val n))) specs))))
+            (self rel (rest toks) (pair (list attr (%py-name->sym attr)) specs))))))))
+(def %py-from-bind-form
+  (fn (_ rel specs)
+    (pair (lit %py-from-bind)
+      (pair (%py-imp-form (first rel) (%py-spec-attrs specs) (rest rel)) specs))))
+(def %py-spec-attrs
+  (fn (self specs) (if (null? specs) () (pair (first (first specs)) (self (rest specs))))))
+
+; The call an import statement makes: whichever __import__ the program's
+; builtins hold, with the name, the names asked for (() for None), the level,
+; and the namespace of the module the statement is in.
+(def %py-imp-form
+  (fn (_ name names level)
+    (list (lit %py-imp) (lit %py-import-call) name (list (lit lit) names) level
+      (list (lit %py-ns-here)))))
+
+; A `from` module name split into (NAME . LEVEL): `..a` is ("a" . 2), `.` is
+; ("" . 1), and an absolute name is itself at level 0.
+(def %py-rel-split
+  (fn (self name level)
+    (if (if (> (Str8 length name) 0) (Str8 =? (Str8 sub 0 1 name) ".") #f)
+      (self (Str8 sub 1 (- (Str8 length name) 1) name) (+ level 1))
+      (pair name level))))
 
 (%py-sweep!)
 ; --- with --------------------------------------------------------------------
@@ -2489,19 +2512,21 @@
         ((%py-kw? t "import") (%py-import-list (rest toks) ()))
         ((%py-kw? t "from")
           (let ((r (%py-from-name (rest toks))))
-            (let ((name (%py-from-form (first r))) (after (rest r)))
+            (let ((rel (%py-rel-split (first r) 0)) (after (rest r)))
               (if (not (%py-kw? (if (null? after) () (first after)) "import"))
                 (Err raise (lit syntax) "expected import after a from" ())
                 (let ((what (rest after)))
                   (match
                     ((not (%py-op-is? (if (null? what) () (first what)) "*"))
-                      (%py-from-imports name what ()))
+                      (%py-from-imports rel what ()))
                     ; `from a import *` binds every public name the module
                     ; has, which only a module's own names can take
                     ((if (eq? (first %py-fn-depth) 0)
                         (null? (first %py-current-class))
                         #f)
-                      (pair (list (lit %py-import-star) name) (rest what)))
+                      (pair (list (lit %py-import-star)
+                              (%py-imp-form (first rel) (list "*") (rest rel)))
+                        (rest what)))
                     (#t (Err raise (lit syntax)
                           "import * only allowed at module level" ()))))))))
         ; `del` takes a target list: names, subscripts, slices, attributes,
@@ -3442,8 +3467,10 @@
 
 ; The body of every class header, whatever spelled its base: bind the current
 ; class (so `super()` inside a method knows where it stands), parse the block,
-; and emit the one (set! NAME (%py-mkclass ...)) over the namespace the body
-; fills as it runs.
+; and emit the one (set! NAME ...) of what __build_class__ answers for it
+; (python/runtime-flow.x, %py-class-build): the bases, evaluated first, and
+; the body as a function of them, which fills the namespace as it runs and
+; answers (%py-mkclass ...) over it.
 (def %py-class-of
   (fn (_ n toks base)
     (let ((outer (first %py-current-class)))
@@ -3454,11 +3481,13 @@
         (%py-bound! (list (%py-name->sym (%py-val n))))
         (pair
           (list (lit set!) (%py-name->sym (%py-val n))
-            (list (lit let) (list (list (lit %py-crows) (list (lit pair) () ())))
-              (list (lit %seq)
-                (pair (lit do) (%py-append (first r) (list ())))
-                (list (lit %py-mkclass) (%py-val n) base
-                  (list (lit %py-reverse) (list (lit first) (lit %py-crows)))))))
+            (list (lit %py-class-build) (lit %py-build-class) (%py-val n) base
+              (list (lit fn) (list (lit _) (lit %py-bases))
+                (list (lit let) (list (list (lit %py-crows) (list (lit pair) () ())))
+                  (list (lit %seq)
+                    (pair (lit do) (%py-append (first r) (list ())))
+                    (list (lit %py-mkclass) (%py-val n) (lit %py-bases)
+                      (list (lit %py-reverse) (list (lit first) (lit %py-crows)))))))))
           (rest r))))))
 
 (def %py-class-stmt
@@ -3477,10 +3506,13 @@
             (let ((es (%py-group-exprs (%py-group-of (first after)))))
               (if (null? es)
                 ; `class C():` IS `class C:` -- empty parens are legal Python
-                ; and the corpus writes them; the base is object either way.
-                (%py-class-of n (rest after) (list (lit list) (lit %py-cls-object)))
+                ; and the corpus writes them; the base is object either way,
+                ; filled in when the class is made (python/runtime-flow.x,
+                ; %py-class-build), since __build_class__ is given the bases
+                ; as written.
+                (%py-class-of n (rest after) (list (lit list)))
                 (%py-class-of n (rest after) (pair (lit list) es))))
-            (%py-class-of n after (list (lit list) (lit %py-cls-object)))))))))
+            (%py-class-of n after (list (lit list)))))))))
 
 (%py-sweep!)
 ; --- assignment targets ------------------------------------------------------
@@ -3902,7 +3934,9 @@
                       (pair (lit list) names) nreq (not (null? rest-sym))
                       (if (null? kw-name) () kw-name)
                       (pair (lit list) (%py-kwo-names kwonly ()))
-                      #t))
+                      #t
+                      ; where the def runs, for its __globals__
+                      (list (lit %py-here))))
                   (%set-first! %py-current-self outer-self)
                   (%set-first! %py-in-async %py-async-outer)
                   (pair

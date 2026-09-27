@@ -445,13 +445,16 @@
 (def %py-sigs (pair () ()))
 ; The record is (name names nreq has-rest kwname kwonly); the last two are
 ; optional so the builtins that register by hand pass only what they have.
+; The eighth field, a def's or a lambda's, is the environment the definition
+; ran in, which is where its __globals__ comes from (runtime-str.x).
 (def %py-sig!
   (fn (_ f name names nreq has-rest . kw)
     (%set-first! %py-sigs
       (pair (pair f (list name names nreq has-rest
                       (%py-nth-or kw 0 ())
                       (%py-nth-or kw 1 ())
-                      (%py-nth-or kw 2 ())))
+                      (%py-nth-or kw 2 ())
+                      (%py-nth-or kw 3 ())))
         (first %py-sigs)))
     f))
 ; A def or a lambda binds as a method when read from an instance; a builtin

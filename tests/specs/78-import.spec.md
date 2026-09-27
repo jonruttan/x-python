@@ -168,6 +168,80 @@ True True
 ['f', 'g', 'k', 'outer']
 ```
 
+### globals() is the module's namespace, and a store through it binds
+
+```python
+(python-run "g = globals()\nprint(g is globals(), type(g).__name__)\ng[\"made\"] = \"through the dict\"\nprint(made)\ncounter = 1\nprint(g[\"counter\"])\ncounter = 2\nprint(g[\"counter\"], \"counter\" in g)\ndel g[\"counter\"]\nprint(\"counter\" in g)\ndef f():\n    return 1\nprint(f.__globals__ is g)\nimport sys\nprint(sys.modules[\"__main__\"].__dict__ is g)")
+```
+---
+```output
+True dict
+through the dict
+1
+2 True
+False
+True
+True
+```
+
+### locals() in a class body is the class's names so far
+
+```python
+(python-run "x = 1\nclass A:\n    y = 2\n    def m(self):\n        pass\n    names = [n for n in locals() if not n.startswith(\"__\")]\n    print(sorted(names), \"x\" in locals())\nprint(locals() is globals())")
+```
+---
+```output
+['m', 'y'] False
+True
+```
+
+## a program's builtins
+
+A program's builtins are an environment of its own, between its modules and the
+root: a name a program stores on `builtins` is found by every module of the
+program before the runtime's own, and by no other program.  Every import
+statement calls the `__import__` found there, and every class statement the
+`__build_class__`, as CPython's do.
+
+### a builtin a program stores is its own, and gone for the next program
+
+```python
+(do
+  (python-run "import builtins\nbuiltins.abs = lambda x: \"mine\"\nprint(abs(-1))\ndef f():\n    return abs(-2)\nprint(f())")
+  (python-run "print(abs(-1))"))
+```
+---
+```output
+mine
+mine
+1
+```
+
+### every import statement calls the program's __import__
+
+```python
+(python-run "import builtins\nreal = builtins.__import__\ndef spy(name, globals=None, locals=None, fromlist=(), level=0):\n    print(\"import\", name, fromlist, level)\n    return real(name, globals, locals, fromlist, level)\nbuiltins.__import__ = spy\nimport math\nfrom math import floor, pi as p\nimport collections as c\nprint(floor(p), c.__name__)\nbuiltins.__import__ = real\nimport sys\nprint(\"done\")")
+```
+---
+```output
+import math None 0
+import math ('floor', 'pi') 0
+import collections None 0
+3 collections
+done
+```
+
+### every class statement calls the program's __build_class__
+
+```python
+(python-run "import builtins\nreal = builtins.__build_class__\nbuiltins.__build_class__ = lambda body, name, *bases: (name, len(bases))\nclass A:\n    pass\nclass B(A, object):\n    pass\nprint(A, B)\nbuiltins.__build_class__ = real\nclass C:\n    x = 1\nprint(C.x)")
+```
+---
+```output
+('A', 0) ('B', 2)
+1
+```
+
 ## importing a file
 
 `import` finds a module on the program's path, `sys.path`, whose first entry is
