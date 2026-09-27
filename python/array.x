@@ -53,23 +53,17 @@
 (def %py-ieee-2p63 (%py-floordiv %py-f-2p64 2))
 
 ; The double's pattern as an unsigned integer, and the float a pattern stands
-; for -- the sign bit makes the stored pattern negative as a machine int.
-;
-; -0.0 IS THE ONE PATTERN THE TOWER CANNOT ADD TO: it is INT64_MIN, and
-; (- 0 INT64_MIN) and (+ INT64_MIN 2**64) both answer a corrupt bigint (one
-; that prints as -9-223372036-854775808).  Both zeros are answered from their
-; sign instead, which needs no arithmetic at all.
-(def %py-ieee-neg-zero (%py-fcopysign 0.0 (- 0.0 1.0)))
+; for -- the sign bit makes the stored pattern negative as a machine int, and
+; 2**64 moves a pattern between the two readings.  -0.0's pattern is INT64_MIN,
+; which has no positive counterpart in the word; the tower's + and - promote
+; it like any other.
 (def %py-ieee-raw
   (fn (_ x)
-    (if (= x 0.0)
-      (if (< (%py-fcopysign 1.0 x) 0.0) %py-ieee-2p63 0)
-      (let ((b (first x))) (if (< b 0) (%py-add b %py-f-2p64) b)))))
+    (let ((b (first x))) (if (< b 0) (%py-add b %py-f-2p64) b))))
 (def %py-ieee-float
   (fn (_ u)
     (match
       ((= u 0) 0.0)
-      ((= u %py-ieee-2p63) %py-ieee-neg-zero)
       ((< u %py-ieee-2p63) (%make-instance %py-th-float u))
       (#t (%make-instance %py-th-float (%py-sub u %py-f-2p64))))))
 
