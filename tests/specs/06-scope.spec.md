@@ -208,3 +208,44 @@ no y here
 2
 no floor here
 ```
+
+## scope of a block
+
+A def or an import binds its name for the scope it is in, as an assignment
+does, wherever in that scope's blocks it stands: the name is bound before the
+scope's first statement, and the statement assigns it.
+
+### a def or an import in a loop, a with or a try binds for the scope
+
+```python
+(python-run "class CM:\n    def __enter__(self):\n        return self\n    def __exit__(self, *a):\n        return False\n\nfor i in range(1):\n    import math\n    from math import floor\n    def g():\n        return \"g\"\nwhile True:\n    def w():\n        return \"w\"\n    break\nwith CM():\n    import collections as c1\n    def v():\n        return \"v\"\ntry:\n    from math import ceil\n    def t():\n        return \"t\"\nfinally:\n    pass\nif True:\n    def i1():\n        return \"i\"\nprint(math.pi > 3, floor(2.5), g(), w(), c1.__name__, v(), ceil(2.5), t(), i1())\n\ndef f():\n    for i in range(1):\n        import math as m2\n        def h():\n            return \"h\"\n    with CM():\n        from math import floor as fl\n        def u():\n            return \"u\"\n    return m2.floor(3.5), h(), fl(4.5), u()\nprint(f())")
+```
+---
+```output
+True 2 g w collections v 3 t i
+(3, 'h', 4, 'u')
+```
+
+### a def's name read before the def runs is an unbound local
+
+```python
+(python-run "def f():\n    try:\n        g()\n    except NameError as e:\n        print(type(e).__name__)\n    def g():\n        return \"g\"\n    return g()\nprint(f())")
+```
+---
+```output
+UnboundLocalError
+g
+```
+
+### a builtin's name a def in a block binds is the program's alone
+
+```python
+(do
+  (python-run "print(\"before\")\nfor i in range(1):\n    def print(*a):\n        pass\nprint(\"hidden\")")
+  (python-run "print(\"after\")"))
+```
+---
+```output
+before
+after
+```

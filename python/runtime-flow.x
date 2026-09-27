@@ -1105,8 +1105,9 @@
                 (error e)))
       (%py-getattr m attr))))
 
-; `from X import a, b as c`: each (ATTR SYM) read off the module and bound in
-; the environment the statement runs in, which is why it is an operative.
+; `from X import a, b as c`: each (ATTR SYM) read off the module and bound for
+; the scope the statement is in, reached from the environment it runs in,
+; which is why it is an operative.
 (def %py-from-bind
   (op (module . specs) e
     (%py-from-bind-each e (eval module e) specs)))
@@ -1115,10 +1116,31 @@
     (if (null? specs)
       ()
       (%seq
-        (%py-env-def! env (first (rest (first specs)))
+        (%py-bind! env (first (rest (first specs)))
           (%py-from-attr m (first (first specs))
             (Str8 append (%py-module-name m) (Str8 append "." (first (first specs))))))
         (self env m (rest specs))))))
+
+; A name a statement binds, bound where its scope binds it -- a function's
+; local, the module's hoist (python/parse.x, %py-stmt-binds) -- found from ENV
+; out to the module's environment, as an assignment finds it; where none of
+; those has it, in ENV itself.  At the prompt, whose names are the root's, an
+; assignment's own lookup finds it.
+(def %py-bind!
+  (fn (_ env sym v)
+    (let ((ns (%py-ns-around env)))
+      (if (null? ns)
+        (guard (_ (%py-env-def! env sym v))
+          (%seq (eval (list (lit set!) sym (list (lit lit) v)) env) ()))
+        (let ((c (%py-cell-out env (first (first ns)) sym)))
+          (if (null? c) (%py-env-def! env sym v) (%seq (%set-rest! c v) ())))))))
+(def %py-cell-out
+  (fn (self env top sym)
+    (let ((c (%py-env-cell (first env) sym)))
+      (match
+        ((not (null? c)) c)
+        ((same? env top) ())
+        (#t (self (rest env) top sym))))))
 ; The name a module goes by, for reading a submodule out of the table.
 (def %py-module-name
   (fn (_ m)

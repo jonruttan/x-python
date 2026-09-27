@@ -142,7 +142,8 @@
     (let ((v (go forms ())))
       (unless (null? v) (%seq (%py-write v) (newline))))))
 
-; Remembered for Tab: a name a line defines at its top level, a (def SYM V),
+; Remembered for Tab: a name a line binds at its top level, a (set! SYM V) --
+; which a def is too (python/parse.x, %py-stmt-binds) -- or a (def SYM V),
 ; completes on the next.
 (def %py-repl-names!
   (fn (self forms)
@@ -150,7 +151,7 @@
       ()
       (%seq
         (let ((f (first forms)))
-          (if (if (pair? f) (eq? (first f) (lit def)) #f)
+          (if (if (pair? f) (match ((eq? (first f) (lit set!)) #t) (#t (eq? (first f) (lit def)))) #f)
             (guard (_ ()) (%py-session-name! (symbol->str (first (rest f)))))
             ()))
         (self (rest forms))))))
