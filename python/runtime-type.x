@@ -1160,7 +1160,7 @@
       ((%py-set-is v) (if (%py-set-frozen? v) %py-cls-frozenset %py-cls-set))
       ((%py-dict-is v) %py-cls-dict)
       ((%py-tuple-is v) %py-cls-tuple)
-      ((%py-io-is v) (if (%py-io-text? v) %py-cls-StringIO %py-cls-BytesIO))
+      ((%py-io-is v) (%py-io-class v))
       ((%py-arr-is v) %py-cls-array)
       ((%py-mv-is v) %py-cls-memoryview)
       ((%py-sl-is v) %py-cls-slice)

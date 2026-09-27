@@ -56,7 +56,7 @@
 
 (provide python/str
   %ps-of-x %ps->x %ps-write %ps-write-bytes-to %ps-nul? %ps-encode %ps-enc1 %ps-decode
-  %ps-decode-as %ps-encode-as
+  %ps-decode-as %ps-encode-as %ps-codec
   %ps-repr %ps-upper %ps-lower %ps-swapcase %ps-capitalize %ps-title
   %ps-isspace %ps-isalpha %ps-isdigit %ps-isalnum %ps-isupper %ps-islower)
 

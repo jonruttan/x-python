@@ -746,6 +746,12 @@
 (def %py-exc-NotImplementedError
   (%py-exc-new "NotImplementedError" %py-exc-RuntimeError))
 (def %py-exc-OSError         (%py-exc-new "OSError"         %py-exc-Exception))
+(def %py-exc-FileNotFoundError
+  (%py-exc-new "FileNotFoundError" %py-exc-OSError))
+(def %py-exc-PermissionError
+  (%py-exc-new "PermissionError" %py-exc-OSError))
+(def %py-exc-IsADirectoryError
+  (%py-exc-new "IsADirectoryError" %py-exc-OSError))
 (def %py-exc-EOFError        (%py-exc-new "EOFError"        %py-exc-Exception))
 (def %py-exc-KeyboardInterrupt
   (%py-exc-new "KeyboardInterrupt" %py-exc-BaseException))
@@ -881,11 +887,26 @@
       (let ((els (if (null? args) () (%py-tuple-elems (rest args)))))
         (if (null? els)
           ""
-          (if (null? (rest els))
-            (if (%py-subclass? (%py-obj-class e) %py-exc-KeyError)
-              (%py-repr-of (first els))
-              (%py-str (first els)))
-            (%py-repr-of (%py-tuple-of-list els))))))))
+          (match
+            ((null? (rest els))
+              (if (%py-subclass? (%py-obj-class e) %py-exc-KeyError)
+                (%py-repr-of (first els))
+                (%py-str (first els))))
+            ; an OSError given its errno and strerror reads
+            ; [Errno 2] No such file or directory: 'a.txt' -> 'b.txt', with the
+            ; filenames it was given (%py-os-arg)
+            ((if (%py-subclass? (%py-obj-class e) %py-exc-OSError)
+                (not (null? (%py-os-arg e 0)))
+                #f)
+              (Str8 append "[Errno "
+                (Str8 append (%py-str (%py-os-arg e 0))
+                  (Str8 append "] "
+                    (Str8 append (%py-str (%py-os-arg e 1))
+                      (Str8 append (%py-os-name-part ": " (%py-os-arg e 2))
+                        (%py-os-name-part " -> " (%py-os-arg e 4))))))))
+            (#t (%py-repr-of (%py-tuple-of-list els)))))))))
+(def %py-os-name-part
+  (fn (_ sep v) (if (null? v) "" (Str8 append sep (%py-repr-of v)))))
 
 ; --- Classes -----------------------------------------------------------------
 ;
@@ -1252,18 +1273,23 @@
 ; spells it as an attribute: StopIteration("x").value is "x", and with no
 ; argument it is None.  A property is the honest shape for something read off
 ; the arguments rather than stored.
-; OSError's FIRST ARGUMENT IS ITS errno, read off the arguments the same way
-; StopIteration reads its value; with no arguments it is None.
+; OSError's ARGUMENTS ARE ITS errno, strerror and filename, read off them the
+; same way StopIteration reads its value, as CPython reads them: given two to
+; five, the first two are errno and strerror, a third the filename and a
+; fifth the second filename (the fourth is Windows' own); given any other
+; number, all four are None.
 (%py-class-methods-set! %py-exc-OSError
   (list
-    (pair "errno"
-      (%py-property
-        (fn (_ self)
-          (let ((a (%py-alist-find "args" (%py-obj-attrs self))))
-            (if (null? a)
-              ()
-              (let ((els (%py-tuple-elems (rest a))))
-                (if (null? els) () (first els))))))))))
+    (pair "errno" (%py-property (fn (_ self) (%py-os-arg self 0))))
+    (pair "strerror" (%py-property (fn (_ self) (%py-os-arg self 1))))
+    (pair "filename" (%py-property (fn (_ self) (%py-os-arg self 2))))
+    (pair "filename2" (%py-property (fn (_ self) (%py-os-arg self 4))))))
+(def %py-os-arg
+  (fn (_ self i)
+    (let ((a (%py-alist-find "args" (%py-obj-attrs self))))
+      (let ((els (if (null? a) () (%py-tuple-elems (rest a)))))
+        (let ((n (%py-length els)))
+          (if (if (>= n 2) (if (<= n 5) (< i n) #f) #f) (List ref i els) ()))))))
 
 (%py-class-methods-set! %py-exc-StopIteration
   (list

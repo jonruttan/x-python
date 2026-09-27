@@ -227,12 +227,15 @@ def main():
         with open(out, "w", encoding="utf-8") as fh:
             fh.write(HEADER % (suite, group, len(cases)))
             fh.write("## %s/%s\n\n" % (suite, group))
-            # AS THE FILE IT CAME FROM, as CPython ran it: __file__ is the
-            # file, and its directory is where an import looks first, so the
-            # import suite finds the modules and packages beside each program.
+            # AS THE FILE IT CAME FROM, WHERE IT CAME FROM, as CPython ran it
+            # (run_cpython): __file__ is the file and its directory is where an
+            # import looks first, so the import suite finds the modules and
+            # packages beside each program; and that directory is the working
+            # one, so a relative path it opens means what it meant there.
             for fn, src, want, where in chunk:
                 fh.write("### %s\n\n" % fn)
-                fh.write("```python\n(python-run %s %s)\n```\n" % (xstr(src), xstr(where)))
+                fh.write("```python\n(do (Sys chdir %s) (python-run %s %s))\n```\n"
+                         % (xstr(os.path.dirname(where)), xstr(src), xstr(where)))
                 fh.write("---\n```output\n%s\n```\n\n" % "\n".join(want))
         total += len(chunk)
 
@@ -266,8 +269,9 @@ CPython run on this machine.  Regenerate with: make gen
 Suite %s, group %s, %d cases.  Each case is one whole program compared on its
 whole stdout -- the output-fenced expected block, not the default last-line
 compare, because a conformance case that only checks its last line is not
-checking the program.  Each runs as the corpus file it came from, as CPython
-ran it, so its imports find the modules beside it.
+checking the program.  Each runs as the corpus file it came from, in that
+file's directory, as CPython ran it, so its imports find the modules beside it
+and a relative path it opens means what it meant there.
 -->
 
 """

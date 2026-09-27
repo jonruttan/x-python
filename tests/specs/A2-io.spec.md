@@ -82,3 +82,109 @@ StringIO BytesIO
 StringIO BytesIO IOBase
 True True
 ```
+
+## files
+
+`open` opens a file to read and reads nothing: what is asked of the file is
+read from its descriptor a chunk of 8192 bytes at a time -- the text the bytes
+decode to, with `\r\n` and a lone `\r` read as `\n`, or with a `b` in the
+mode the bytes themselves.  A relative path is the working directory's, which
+is the bundle's root here.
+
+### a text file reads as the text its bytes decode to, each line ending \n
+
+```python
+(python-run "f = open(\"tests/modules/data/text.txt\", encoding=\"utf-8\")\nprint(repr(f.readline()))\nprint(repr(f.read(3)))\nprint(repr(f.read()))\nf.close()\nprint(f.closed)")
+```
+---
+```output
+'first line\n'
+'sec'
+'ond été π\nthird\n'
+True
+```
+
+### with, iteration, readlines and the binary mode
+
+```python
+(python-run "with open(\"tests/modules/data/text.txt\", \"rb\") as f:\n    data = f.read()\nprint(data[:7], len(data))\nwith open(\"tests/modules/data/text.txt\") as f:\n    print([len(line) for line in f])\nwith open(\"tests/modules/data/text.txt\", mode=\"rt\") as f:\n    print(f.readlines()[-1])")
+```
+---
+```output
+b'first l' 34
+[11, 13, 6]
+third
+
+```
+
+### a file names what it was opened as, and refuses what it cannot do
+
+```python
+(python-run "f = open(\"tests/modules/data/text.txt\", encoding=\"utf-8\")\nprint(f.name, f.mode, f.encoding, type(f).__name__, f.readable(), f.writable())\ntry:\n    f.write(\"x\")\nexcept OSError as e:\n    print(type(e).__name__, e)\ntry:\n    open(\"tests/modules/data/none.txt\")\nexcept FileNotFoundError as e:\n    print(type(e).__name__, e.errno, e)\ntry:\n    open(\"tests/modules/data/bad.txt\").read()\nexcept UnicodeError as e:\n    print(type(e).__name__)\nfor mode in (\"rbt\", \"q\"):\n    try:\n        open(\"tests/modules/data/text.txt\", mode)\n    except ValueError as e:\n        print(\"ValueError\", e)")
+```
+---
+```output
+tests/modules/data/text.txt r utf-8 TextIOWrapper True False
+UnsupportedOperation not writable
+FileNotFoundError 2 [Errno 2] No such file or directory: 'tests/modules/data/none.txt'
+UnicodeDecodeError
+ValueError can't have text and binary mode at once
+ValueError invalid mode: 'q'
+```
+
+### a read that spans chunks, a sequence and a line ending split between them
+
+```python
+(python-run "f = open(\"tests/modules/data/long.txt\", encoding=\"utf-8\")\ns = f.read()\nprint(len(s), s[8190:8193], repr(s[-6:]), f.tell() > 0)\nf.close()\nwith open(\"tests/modules/data/long.txt\") as f:\n    print([len(line) for line in f])\nwith open(\"tests/modules/data/long.txt\", \"rb\") as f:\n    print(f.read(3), f.seek(8190), f.read(4), f.seek(-5, 2), f.read(), f.tell())")
+```
+---
+```output
+16387 aéb 'b\nend\n' True
+[16383, 4]
+b'aaa' 8190 b'a\xc3\xa9b' 16384 b'\nend\n' 16389
+```
+
+### a file is read as far as it is asked, a line at a time in a loop
+
+```python
+(python-run "f = open(\"/dev/zero\", \"rb\")\nprint(f.read(4), f.closed)\nf.close()\nprint(f.closed)\nf = open(\"tests/modules/data/text.txt\", encoding=\"utf-8\")\nfor line in f:\n    print(repr(line))\n    break\nprint(repr(next(f)), iter(f) is f, isinstance(f.fileno(), int))\nprint(repr(f.readline()), repr(f.readline()), repr(next(f, \"done\")))\nf.close()\nfor op in (f.read, f.readline, f.fileno, lambda: next(f)):\n    try:\n        op()\n    except ValueError as e:\n        print(\"ValueError\", e)")
+```
+---
+```output
+b'\x00\x00\x00\x00' False
+True
+'first line\n'
+'second été π\n' True True
+'third\n' '' 'done'
+ValueError I/O operation on closed file.
+ValueError I/O operation on closed file.
+ValueError I/O operation on closed file
+ValueError I/O operation on closed file.
+```
+
+### seeking, a directory, an unknown encoding
+
+```python
+(python-run "f = open(\"tests/modules/data/text.txt\", encoding=\"utf-8\")\nprint(repr(f.read(5)), f.seekable())\nprint(f.seek(0), repr(f.read(5)))\nf.close()\ntry:\n    open(\"tests/modules\")\nexcept IsADirectoryError as e:\n    print(type(e).__name__, e.errno, e)\ntry:\n    open(\"tests/modules/data/text.txt\", encoding=\"klingon\")\nexcept LookupError as e:\n    print(type(e).__name__, e)\nprint(issubclass(PermissionError, OSError), hasattr(f, \"getvalue\"))")
+```
+---
+```output
+'first' True
+0 'first'
+IsADirectoryError 21 [Errno 21] Is a directory: 'tests/modules'
+LookupError unknown encoding: klingon
+True False
+```
+
+### a mode that would write is refused
+
+DIVERGENCE: CPython opens the file for writing; writing a file is not offered
+here, and the refusal is an `io.UnsupportedOperation`, an `OSError`.
+
+```python
+(python-run "try:\n    open(\"tests/modules/data/out.txt\", \"w\")\nexcept OSError as e:\n    print(type(e).__name__)")
+```
+---
+```output
+UnsupportedOperation
+```
