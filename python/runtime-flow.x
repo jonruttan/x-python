@@ -63,6 +63,57 @@
         ())
       v)))
 
+; --- a module's environment --------------------------------------------------
+;
+; A PROGRAM'S GLOBALS ARE AN ENVIRONMENT OF ITS OWN, below the root.
+; python-run makes one (python/base.x, %py-module-env), the program's
+; top-level forms are evaluated in it, and its functions close over it.  The
+; runtime's names are in the root, found past the program's own: a program's
+; `x` is a binding of the program's, and a program that assigns `print`
+; shadows the builtin in its own environment and nowhere else.  The prompt's
+; lines are evaluated in the root itself, where x's prompt shares them.
+
+; The environment a form is evaluated in, as an operative sees its caller's.
+(def %py-here (op () e e))
+
+; The root, reached from any environment through its parents.
+(def %py-root-of
+  (fn (self e) (if (null? (rest e)) e (self (rest e)))))
+
+; SYM bound to V in ENV itself, as x-lang's loader defines in a module: the
+; value is quoted, so a symbol is bound as itself and not looked up.
+(def %py-env-def!
+  (fn (_ env sym v) (eval (list (lit def) sym (list (lit lit) v)) env)))
+
+; ENV's own (SYM . VALUE) cell, or (), from the list of cells that is a
+; module's bindings; a parent's cell is never an answer.
+(def %py-env-cell
+  (fn (self cells sym)
+    (match
+      ((null? cells) ())
+      ((eq? (first (first cells)) sym) (first cells))
+      (#t (self (rest cells) sym)))))
+
+; Whether ENV itself binds SYM.  The root's bindings are a tree rather than a
+; list, and the root has no parent, so there a lookup is the answer.
+(def %py-env-has?
+  (fn (_ env sym)
+    (if (null? (rest env))
+      (guard (_ #f) (%seq (eval sym env) #t))
+      (not (null? (%py-env-cell (first env) sym))))))
+
+; A program's names are bound before its first statement runs, each to
+; DEFAULT (python/parse.x, %py-decls and %py-shims) -- unless the
+; environment has the name already, since a REPL line must not reset what an
+; earlier line bound.  In a program's environment, a name bound further out,
+; a builtin the program assigns, starts as the value found there, so the
+; builtin still answers until the program's own assignment runs.
+(def %py-hoist
+  (op (sym default) e
+    (if (%py-env-has? e sym)
+      ()
+      (%py-env-def! e sym (guard (_ (eval default e)) (eval sym e))))))
+
 ; A module's __dict__ is its attributes as a dict: a copy, as a class's is, so
 ; reading it answers and writing to it does not reach the module.
 (def %py-cls-module

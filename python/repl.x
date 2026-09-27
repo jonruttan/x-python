@@ -116,7 +116,7 @@
         (match
           ((eq? h (lit set!)) #t)
           ((eq? h (lit def)) #t)
-          ((eq? h (lit %py-defg)) #t)
+          ((eq? h (lit %py-hoist)) #t)
           ((eq? h (lit let)) (%py-stmt-let? form))
           ((eq? h (lit guard)) #t)
           ((eq? h (lit if)) #t)
@@ -125,6 +125,9 @@
           ((pair? h) (eq? (first h) (lit fn)))
           (#t #f))))))
 
+; A line's forms are evaluated in the root, as a program's are in its own
+; environment (python/base.x): a name one line binds is there for the next,
+; and at x's prompt too, which is what lets one session hold both.
 (def %py-repl-eval
   (fn (_ src)
     (def go
@@ -134,29 +137,22 @@
           (let ((v (eval! (first forms))))
             (self (rest forms)
               (if (%py-stmt-form? (first forms)) () v))))))
-    (let ((v (go (%py-repl-lift (python-parse src)) ())))
+    (def forms (python-parse src))
+    (%py-repl-names! forms)
+    (let ((v (go forms ())))
       (unless (null? v) (%seq (%py-write v) (newline))))))
 
-; A top-level (def SYM V) in a parsed line binds at THIS LOOP'S depth and
-; vanishes -- `def f(): ...` then `f(41)` answered NameError.  Rewritten
-; through the same base/def-global door the hoists use, a definition made at
-; the prompt is a definition.
-(def %py-repl-lift
+; Remembered for Tab: a name a line defines at its top level, a (def SYM V),
+; completes on the next.
+(def %py-repl-names!
   (fn (self forms)
     (if (null? forms)
       ()
-      (pair
+      (%seq
         (let ((f (first forms)))
           (if (if (pair? f) (eq? (first f) (lit def)) #f)
-            (do
-              ; Remembered for Tab: a name defined on one line completes on
-              ; the next.
-              (guard (_ ())
-                (%py-session-name! (symbol->str (first (rest f)))))
-              (list (lit %py-defg)
-                (list (lit lit) (first (rest f)))
-                (first (rest (rest f)))))
-            f))
+            (guard (_ ()) (%py-session-name! (symbol->str (first (rest f)))))
+            ()))
         (self (rest forms))))))
 
 ; --- block accumulation ------------------------------------------------------

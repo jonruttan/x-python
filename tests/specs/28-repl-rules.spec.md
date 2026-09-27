@@ -3,8 +3,8 @@ The REPL's own rules — the pure halves, since the loop itself reads a terminal
 The platform REPL reads sexps and no prompt string changes what a reader is; a
 Python banner over an x reader answered `Unbound SYMBOL 'print` and evaluated
 `1 + 2` as three forms across three prompts. `python/repl.x` replaces the loop.
-What can be pinned here: which parsed forms echo, how definitions survive the
-loop's depth, and when a line opens a block.
+What can be pinned here: which parsed forms echo, how definitions survive from
+line to line, and when a line opens a block.
 
 ## what echoes
 
@@ -23,7 +23,7 @@ must echo.
     (write (list
       (%py-stmt-form? (lit (set! py-x 5)))
       (%py-stmt-form? (lit (def py-f ())))
-      (%py-stmt-form? (lit (%py-defg (lit py-f) ())))
+      (%py-stmt-form? (lit (%py-hoist py-f ())))
       (%py-stmt-form? (lit (let ((%py-unpacked (%py-unpack v 2))) (do))))
       (%py-stmt-form? (lit (if (%py-truthy c) a b))))))
   (newline))
@@ -50,23 +50,32 @@ must echo.
 
 ## definitions survive the loop
 
-A top-level `(def SYM V)` in a parsed line binds at the loop's frame depth and
-vanishes — `def f(): ...` then `f(41)` answered NameError. The lift rewrites it
-through base/def-global, the engine door that defines for the caller at any
-depth.
+A line's forms are evaluated in the root, so a top-level `(def SYM V)` binds
+there: `def f(): ...` on one line is `f` on the next, and at x's prompt too.
 
-### the lift rewrites def and only def
+### a def on one line is called on the next
+
+```python
+(do
+  (import python/repl)
+  (%py-repl-eval "def f(n):\n    return n + 1")
+  (%py-repl-eval "f(41)"))
+```
+---
+    42
+
+### and x's prompt calls it by its prefixed name
 
 ```python
 (%seq
   (do
     (import python/repl)
-    (write (%py-repl-lift
-      (lit ((def py-f (fn (_) 1)) (set! py-x 5) (%py-add 1 2))))))
+    (%py-repl-eval "def sq(n):\n    return n * n")
+    (write (py-sq 12)))
   (newline))
 ```
 ---
-    (('%py-defg ('lit 'py-f) ('fn ('_) 1)) ('set! 'py-x 5) ('%py-add 1 2))
+    144
 
 ## blocks
 
@@ -89,19 +98,18 @@ depth.
 ## the session-hoist contract
 
 Each interactive line is its own parse, so hoists and shims must not clobber
-earlier lines' bindings. The emissions are conditional — the guard evaluates
-the name, a bound name answers itself, an unbound one raises into a handler
-that defines through def-global. Pinned in batch, where two parses of one
-process model two REPL lines:
+earlier lines' bindings. The emissions are conditional: `%py-hoist` binds a
+name only where the environment does not have it already.
 
 ### a second parse does not reset a bound name
 
 ```python
 (%seq
   (do
-    (python-run "x = 5")
-    (python-run "x = x + 1")
-    (python-run "print(x)"))
+    (import python/repl)
+    (%py-repl-eval "x = 5")
+    (%py-repl-eval "x = x + 1")
+    (%py-repl-eval "print(x)"))
   ())
 ```
 ---

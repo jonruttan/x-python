@@ -2213,22 +2213,22 @@
 ; `from a import x, y as z` -- each name bound, `as` renaming it
 ; `from a import *` binds every PUBLIC name the module has, at run time --
 ; the parser cannot know them, so this reads the module's own attributes and
-; defines each.  It lives in this file because turning a Python name into a
+; defines each in the environment the statement runs in, which is why it is an
+; operative.  It lives in this file because turning a Python name into a
 ; symbol is the parser's own reader.
 (def %py-import-star
-  (fn (_ name)
-    (let ((m (%py-import name)))
-      (%py-import-star-bind (%py-obj-attrs m)))))
+  (op (name) e
+    (%py-import-star-bind e (%py-obj-attrs (%py-import (eval name e))))))
 
 (def %py-import-star-bind
-  (fn (self rows)
+  (fn (self env rows)
     (if (null? rows)
       ()
       (do
         (if (Str8 =? (Str8 sub 0 1 (first (first rows))) "_")
           ()
-          (%py-defg (%py-name->sym (first (first rows))) (rest (first rows))))
-        (self (rest rows))))))
+          (%py-env-def! env (%py-name->sym (first (first rows))) (rest (first rows))))
+        (self env (rest rows))))))
 
 ; `import a, b as c` -- a comma-separated list, each binding its own name
 (def %py-import-list
@@ -4163,23 +4163,15 @@
 ; CONDITIONAL, and the REPL is why.  Each interactive line is its own parse,
 ; so an unconditional shim for a name this LINE does not bind would clobber a
 ; binding an EARLIER line made -- `x = 5` then `x` re-shimmed py-x and the
-; session forgot everything.  The guard evaluates the name: bound answers
-; itself and the def never runs; unbound raises into the guard, which binds
-; the name to %py-deleted.
-; The handler defines through the base/def-global door, because a plain def
-; inside a guard HANDLER binds in the handler's frame -- measured in the REPL:
-; the hoist "succeeded" and the very next form found the name unbound.
+; session forgot everything.  %py-hoist binds the name to %py-deleted in the
+; program's environment only when the environment does not have it.
 (def %py-shims
   (fn (self names acc)
     (if (null? names)
       (%py-reverse acc)
       (self (rest names)
         (pair
-          (list (lit guard)
-            (list (lit %py-e)
-              (list (lit %py-defg) (list (lit lit) (%py-name->sym (first names)))
-                (lit %py-deleted)))
-            (%py-name->sym (first names)))
+          (list (lit %py-hoist) (%py-name->sym (first names)) (lit %py-deleted))
           acc)))))
 
 ; A program's first line may not be indented; blank and comment-only lines
@@ -4278,8 +4270,4 @@
     (if (null? syms)
       (%py-reverse acc)
       (self (rest syms)
-        (pair
-          (list (lit guard)
-            (list (lit %py-e) (list (lit %py-defg) (list (lit lit) (first syms)) ()))
-          (first syms))
-          acc)))))
+        (pair (list (lit %py-hoist) (first syms) ()) acc)))))

@@ -61,42 +61,42 @@
 (%py-sweep!)
 
 (provide python/base python-version python-run python-tokenize python-lex python-parse python-parse-expr %python-repl-print
-  %py-eval %py-exec %py-compile)
+  %py-eval %py-exec %py-compile %py-module-env %py-code-run)
 
 ; the one number sys.implementation.version is read from too
 (def python-version %py-implementation-version)
 
 ; (python-run SRC) -- run a Python program held in a string.
 ;
-; Lex, parse, evaluate.  Returns nil: a Python statement has no value to show
-; and `print` writes to stdout itself, so the REPL printer has nothing to say
-; about a program that ran.  An expression typed at the prompt is a different
-; question, and %python-repl-print below is where it gets answered.
+; Lex, parse, evaluate, in an environment of the program's own
+; (%py-module-env below), so two runs share no names.  Returns nil: a Python
+; statement has no value to show and `print` writes to stdout itself, so the
+; REPL printer has nothing to say about a program that ran.  An expression
+; typed at the prompt is a different question, and %python-repl-print below is
+; where it gets answered.
 (def python-run
   (fn (_ src)
-    (def %go
-      (fn (self forms)
-        (if (null? forms)
-          ()
-          (%seq (eval! (first forms)) (self (rest forms))))))
     ; raise SystemExit ends the program QUIETLY; anything else uncaught
     ; travels on to whoever ran the program
     (guard (e (if (%py-exc-match e %py-exc-SystemExit) () (error e)))
-      (%go (python-parse src)))))
+      (%seq (%py-code-run (%py-module-env) (python-parse src) ()) ()))))
 
 ; --- eval, exec, compile -----------------------------------------------------
 ;
 ; The language re-entering itself.  All three are the two steps python-run
-; already takes -- parse, then eval! -- so they live HERE, where both halves
+; already takes -- parse, then evaluate -- so they live HERE, where both halves
 ; are in scope; python/runtime.x cannot see the parser, and nothing else can
 ; see both.
 ;
-; ONE NAMESPACE, AND IT SAYS SO.  Python's eval and exec take globals and
-; locals mappings and run the source in them.  A Python name here is an x
-; global: there is no dictionary standing for a scope and nothing to swap one
-; for, so a mapping argument is REFUSED rather than ignored -- ignoring it
+; EVAL AND EXEC ARE EACH PROGRAM'S OWN.  Python runs the source in the
+; namespace of the code that calls them, and a program's names are bindings
+; in its own environment, so %py-module-env binds both there, each a closure
+; over that environment: the eval a program's code finds evaluates in the
+; program's names.
+;
+; A globals or locals mapping is REFUSED rather than ignored -- ignoring it
 ; would run the code in the wrong scope and answer with confidence.  `None`
-; means "the one you are in", which is the only one there is, so it passes.
+; means "the one you are in", so it passes.
 (def %py-ns-refuse
   (fn (self ns who)
     (if (null? ns)
@@ -150,27 +150,48 @@
             (list (%py-eval-expr (python-lex x)))
             (python-parse x)))))))
 
+; The forms evaluated in ENV, one at a time, answering the last one's value.
 (def %py-code-run
-  (fn (self forms last)
+  (fn (self env forms last)
     (if (null? forms)
       last
-      (self (rest forms) (eval! (first forms))))))
+      (self env (rest forms) (eval (first forms) env)))))
 
-(def %py-eval
-  (%py-sig!
-    (fn (_ src . ns)
-      (%seq (%py-ns-refuse ns "eval")
-        (%py-code-run (%py-code-of src "eval") ())))
-    "eval" (list "source" "globals" "locals") 1 #f))
+(def %py-eval-for
+  (fn (_ env)
+    (%py-sig!
+      (fn (_ src . ns)
+        (%seq (%py-ns-refuse ns "eval")
+          (%py-code-run env (%py-code-of src "eval") ())))
+      "eval" (list "source" "globals" "locals") 1 #f)))
 
 ; exec ANSWERS None however much the source evaluated to, which is why the
 ; value is dropped here rather than never taken.
-(def %py-exec
-  (%py-sig!
-    (fn (_ src . ns)
-      (%seq (%py-ns-refuse ns "exec")
-        (%seq (%py-code-run (%py-code-of src "exec") ()) ())))
-    "exec" (list "source" "globals" "locals") 1 #f))
+(def %py-exec-for
+  (fn (_ env)
+    (%py-sig!
+      (fn (_ src . ns)
+        (%seq (%py-ns-refuse ns "exec")
+          (%seq (%py-code-run env (%py-code-of src "exec") ()) ())))
+      "exec" (list "source" "globals" "locals") 1 #f)))
+
+; A program's environment, descended from the root.  Between the two is a
+; scope of the program's own holding the builtins that act on the program's
+; names, eval and exec, each a closure over the program's environment: the
+; eval a program's code finds evaluates in the program's names, and what the
+; program itself binds is its globals and nothing else.
+(def %py-module-env
+  (fn (_)
+    (def scope (pair () (%py-root-of (%py-here))))
+    (def env (pair () scope))
+    (%py-env-def! scope (lit %py-eval) (%py-eval-for env))
+    (%py-env-def! scope (lit %py-exec) (%py-exec-for env))
+    env))
+
+; The root's own, for the prompt, whose lines are evaluated there
+; (python/repl.x).
+(def %py-eval (%py-eval-for (%py-root-of (%py-here))))
+(def %py-exec (%py-exec-for (%py-root-of (%py-here))))
 
 ; `single` is `exec` here: the mode is about echoing a value at a prompt, and
 ; this compiles rather than prompts.  A mode that is none of the three is a
