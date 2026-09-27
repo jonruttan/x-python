@@ -1168,6 +1168,7 @@
       ((%py-range-is v) %py-cls-range)
       ((%py-desc-is v) (%py-desc-class v))
       ((%py-obj-is v) (%py-obj-class v))
+      ((%py-mod-is v) %py-cls-module)
       ((%py-class-is v) %py-cls-type)
       ((%py-gen-is v) %py-cls-generator)
       ((%py-it-is v) (%py-it-class v))

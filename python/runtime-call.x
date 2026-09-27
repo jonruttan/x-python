@@ -740,7 +740,7 @@
 (def %py-setattr3
   (fn (_ o n0 v)
     (def n (%py-attr-name! n0))
-    (if (if (%py-obj-is o) #t (%py-class-is o))
+    (if (match ((%py-obj-is o) #t) ((%py-class-is o) #t) (#t (%py-mod-is o)))
       (%py-setattr o n v)
       (Err raise (lit attribute) "object has no settable attributes" ()))))
 (def %py-delattr
@@ -757,7 +757,9 @@
               (Str8 append "' has no attribute '" (Str8 append n "'"))) ()))
         (#t (%seq (%py-class-methods-set! o (%py-attr-drop (%py-class-methods o) n)) ())))
     (if (not (%py-obj-is o))
-      (Err raise (lit attribute) "object has no deletable attributes" ())
+      (if (%py-mod-is o)
+        (%py-mod-del! o n)
+        (Err raise (lit attribute) "object has no deletable attributes" ()))
       ; __delattr__ is the same hook on `del obj.x`, and it is PYTHON code: it
       ; takes the name as a str, not as the platform string the tables below are
       ; keyed by.  Built from the CROSSED name rather than from the argument,
@@ -1100,10 +1102,11 @@
 ; The names a thing answers to: its own, then its class's, then the bases' --
 ; sorted, and each name once however many ancestors offer it.
 ;
-; NO BARE dir().  Python's answers with the current local namespace; here a
-; Python name is an x global and no dictionary stands for the module, so there
-; is nothing truthful to answer.  Refused rather than answered wrongly, which
-; is the same call `globals()` and `locals()` are still waiting on.
+; A BARE dir() IS THE NAMES WHERE IT IS CALLED.  Python's answers with the
+; current local namespace, which only the call's own environment can list, so
+; the parser hands that over (python/runtime-flow.x, %py-bare-call).  Called
+; here without an argument -- by another name, or at the prompt, whose names
+; are x's root -- it refuses rather than answer wrongly.
 ;
 ; A BUILTIN TYPE ANSWERS ITS OWN NAMES ONLY.  `dir(list)` does not list
 ; `append`: this runtime reaches a list's methods by type at the seam rather
@@ -1132,6 +1135,7 @@
     (match
       ((%py-class-is v) (%py-dir-class v ()))
       ((%py-obj-is v) (%py-dir-class (%py-obj-class v) (%py-dir-keys (%py-obj-attrs v) ())))
+      ((%py-mod-is v) (%py-dir-keys (%py-mod-rows v) ()))
       (#t ()))))
 
 (def %py-dir-seen?
@@ -1156,6 +1160,11 @@
     (if (null? l) acc
       (self (rest l) (pair (%py-str-of-x (first l)) acc)))))
 
+; Names, as the platform's strings, to the sorted list of strs dir() answers.
+(def %py-dir-sorted
+  (fn (_ names)
+    (%py-list-new (%py-msort-by (%py-dir-strs (%py-dir-uniq names ()) ()) %py-ident))))
+
 (def %py-dir
   (%py-sig!
     (fn (_ . a)
@@ -1165,12 +1174,9 @@
         ; an object's class may say what dir() lists (__dir__); a class is
         ; listed by type's rule, the walk below, whatever its own __dir__ says
         (let ((m (if (%py-obj-is (first a)) (%py-dunder (first a) "__dir__") ())))
-          (%py-list-new
-            (%py-msort-by
-              (if (null? m)
-                (%py-dir-strs (%py-dir-uniq (%py-dir-of (first a)) ()) ())
-                (%py-iter-elems (m)))
-              %py-ident)))))
+          (if (null? m)
+            (%py-dir-sorted (%py-dir-of (first a)))
+            (%py-list-new (%py-msort-by (%py-iter-elems (m)) %py-ident))))))
     "dir" (list "object") 0 #f))
 
 ; `hasattr` is defined in terms of getattr in Python too: it is "does this

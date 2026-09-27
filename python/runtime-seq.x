@@ -82,6 +82,8 @@
         (if (%py-bytes-is b) (%pb-eq? (%py-bytes-list a) (%py-bytes-list b)) #f))
       ((%py-bytes-is b) #f)
       ((if (%py-fn-is a) #t (%py-fn-is b)) (same? a b))
+      ; a module equals itself and nothing else
+      ((if (%py-mod-is a) #t (%py-mod-is b)) (same? a b))
       ; two bound methods are equal when they bind the same function to equal
       ; receivers, which is Python's rule
       ((%py-bound-is a)

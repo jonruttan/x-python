@@ -720,6 +720,8 @@
 ; undefined, every one of those raised "catching classes that do not inherit
 ; from BaseException" from the except clause itself.
 (def %py-exc-ImportError     (%py-exc-new "ImportError"     %py-exc-Exception))
+(def %py-exc-ModuleNotFoundError
+  (%py-exc-new "ModuleNotFoundError" %py-exc-ImportError))
 (def %py-exc-MemoryError     (%py-exc-new "MemoryError"     %py-exc-Exception))
 (def %py-exc-OverflowError   (%py-exc-new "OverflowError"   %py-exc-ArithmeticError))
 (def %py-exc-StopAsyncIteration
@@ -773,6 +775,7 @@
     (pair (lit indent)        %py-exc-IndentationError)
     (pair (lit state)         %py-exc-RuntimeError)
     (pair (lit import)        %py-exc-ImportError)
+    (pair (lit module-not-found) %py-exc-ModuleNotFoundError)
     (pair (lit unicode-decode) %py-exc-UnicodeDecodeError)
     (pair (lit unicode-encode) %py-exc-UnicodeEncodeError)
     (pair (lit lookup)        %py-exc-LookupError)))
@@ -1129,7 +1132,9 @@
         (%py-immutable-type! "set" obj name)
         (%py-class-methods-set! obj (%py-attr-put (%py-class-methods obj) name v)))
       (if (not (%py-obj-is obj))
-        (Err raise (lit attribute) "object does not support attribute assignment" ())
+        (if (%py-mod-is obj)
+          (%py-mod-set! obj name v)
+          (Err raise (lit attribute) "object does not support attribute assignment" ()))
         ; __setattr__ INTERCEPTS EVERY STORE, which is the point of it: a class
         ; that defines one decides what `self.x = v` means, and gets no default
         ; store unless it makes one itself.  __getattr__ was already a hook on

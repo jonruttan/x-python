@@ -177,12 +177,11 @@ True
 ### a globals or locals mapping is refused
 
 DIVERGENCE, and a deliberate one.  Python's `eval` and `exec` take mappings and
-run the source *in* them; a Python name here is an x global, so there is no
-dictionary standing for a scope and nothing to swap one for.  Ignoring the
-argument would run the code in the wrong scope and answer with confidence, so
-it is refused instead.  `None` means "the one you are in" -- the only one there
-is -- and passes.  CPython prints `3` for the first line and `11` for the
-second; this prints neither.
+run the source *in* them; a program's names here are its module's environment,
+and a dict does not stand for one.  Ignoring the argument would run the code in
+the wrong scope and answer with confidence, so it is refused instead.  `None`
+means "the one you are in" and passes.  CPython prints `3` for the first line
+and `11` for the second; this prints neither.
 
 ```python
 (python-run "foo = 11\nexec('print(foo)', None)\nexec('print(foo)', None, None)\ntry:\n    exec('print(foo)', {'foo': 3})\nexcept TypeError as e:\n    print('TypeError')")
@@ -194,17 +193,19 @@ second; this prints neither.
 TypeError
 ```
 
-### dir() with no argument is refused
+### dir() with no argument is the names where it is called, and only so
 
-DIVERGENCE, for the same reason: Python's bare `dir()` answers with the current
-namespace, and there is no namespace object here to ask.  `dir(x)` is the whole
-of what this can answer truthfully.
+Python's bare `dir()` answers with the names of the scope it is called in, and
+the parser hands a bare call the environment it is evaluated in.  DIVERGENCE:
+called by another name, `d = dir; d()`, it cannot see where it was called from,
+and refuses rather than answer wrongly.
 
 ```python
-(python-run "try:\n    dir()\nexcept TypeError:\n    print('TypeError')\nprint(len(dir(1)) >= 0)")
+(python-run "foo = 1\nprint(\"foo\" in dir())\nd = dir\ntry:\n    d()\nexcept TypeError:\n    print('TypeError')\nprint(len(dir(1)) >= 0)")
 ```
 ---
 ```output
+True
 TypeError
 True
 ```

@@ -779,7 +779,7 @@
           ((%py-fn-prelude "<lambda>" names dflts rest-sym () kwonly nreq)
             (if (null? own) (first b) (list (lit let) (%py-lets own () ()) (first b)))))
         (def sig-form
-          (list (lit %py-sig!) (list (lit fn) (pair (lit _) (lit %py-more)) body)
+          (list (lit %py-sig!) (list (lit fn) (pair (lit %py-fn) (lit %py-more)) body)
             "<lambda>" (pair (lit list) names) nreq (not (null? rest-sym)) ()
             (pair (lit list) (%py-kwo-names kwonly ())) #t))
         (def all-dflts (%py-append dflts (%py-kwo-dflts kwonly ())))
@@ -936,7 +936,22 @@
 (def %py-kwspread-part?
   (fn (_ part) (if (null? part) #f (%py-op-is? (first part) "**"))))
 
+; A BARE dir(), locals() OR vars() IS THE NAMES WHERE IT IS CALLED, which only
+; the call's own environment can answer, so the call hands that over
+; (python/runtime-flow.x, %py-bare-call).
 (def %py-call-form
+  (fn (_ f elems)
+    (if (if (null? elems) (%py-bare-callee? f) #f)
+      (list (lit %py-bare-call) (list (lit lit) f) (list (lit %py-here)))
+      (%py-call-form-args f elems))))
+(def %py-bare-callee?
+  (fn (_ f)
+    (match
+      ((eq? f (lit %py-dir)) #t)
+      ((eq? f (lit %py-locals)) #t)
+      (#t (eq? f (lit %py-vars))))))
+
+(def %py-call-form-args
   (fn (_ f elems)
     (def parts (%py-comma-split elems () ()))
     (def kws
@@ -1627,6 +1642,9 @@
         (list "exec"           (lit %py-exec))
         (list "compile"        (lit %py-compile))
         (list "dir"            (lit %py-dir))
+        (list "globals"        (lit %py-globals))
+        (list "locals"         (lit %py-locals))
+        (list "vars"           (lit %py-vars))
         (list "chr"       (lit %py-chr))
         (list "ord"       (lit %py-ord))
         (list "StopIteration"  (lit %py-exc-StopIteration))
@@ -1662,6 +1680,7 @@
         (list "BaseException"     (lit %py-exc-BaseException))
         (list "Exception"         (lit %py-exc-Exception))
         (list "ImportError"       (lit %py-exc-ImportError))
+        (list "ModuleNotFoundError" (lit %py-exc-ModuleNotFoundError))
         (list "OSError"           (lit %py-exc-OSError))
         (list "IOError"           (lit %py-exc-OSError))
         (list "EOFError"          (lit %py-exc-EOFError))
@@ -1981,6 +2000,22 @@
             (self (rest rows))))))
     (%look %py-builtins)))
 
+; The way back, for a module's names (python/runtime-flow.x): a py- symbol is
+; the name after the prefix, and a builtin's own symbol the builtin's name.  A
+; symbol that is neither is not a Python name, and answers ().
+(def %py-sym->name
+  (fn (_ sym)
+    (def s (symbol->str sym))
+    (def %look
+      (fn (self rows)
+        (match
+          ((null? rows) ())
+          ((eq? (first (rest (first rows))) sym) (first (first rows)))
+          (#t (self (rest rows))))))
+    (if (Str8 starts? "py-" s)
+      (Str8 sub 3 (- (Str8 length s) 3) s)
+      (%look %py-builtins))))
+
 ; BOTH parser doors check the brackets, because `eval` comes in through this
 ; one and never touches python-parse below.
 (def python-parse-expr
@@ -2165,9 +2200,10 @@
 ;
 ; `import a`, `import a as b`, `from a import x, y`, `from a import x as z`
 ; and `from a import *`.  A DOTTED name is read whole and handed to the
-; importer, which has no file system to search and answers ImportError for
-; everything it does not itself provide -- which is what lets a program whose
-; import fails take its own fallback path, the way the corpus writes a probe.
+; importer (python/runtime-flow.x, %py-import), which answers
+; ModuleNotFoundError for a name it cannot find -- which is what lets a program
+; whose import fails take its own fallback path, the way the corpus writes a
+; probe.
 (def %py-dotted-name
   (fn (self toks acc)
     (if (null? toks)
@@ -2186,8 +2222,12 @@
       (%py-dotted-name (rest toks) (%py-val (first toks))))))
 
 ; The module a `from` names: `a.b`, or a relative name -- dots, then a dotted
-; name or none (`.`, `..a`) -- which %py-import refuses when it runs, since a
-; program run here is in no package for it to be relative to.
+; name or none (`.`, `..a`) -- which is resolved where the statement runs,
+; against the package of the module it is in (python/runtime-flow.x,
+; %py-relative), so it compiles to that call.
+(def %py-from-form
+  (fn (_ name)
+    (if (Str8 =? (Str8 sub 0 1 name) ".") (list (lit %py-relative) name) name)))
 (def %py-from-name
   (fn (_ toks)
     (if (%py-op-is? (if (null? toks) () (first toks)) ".")
@@ -2211,16 +2251,62 @@
       (if (null? i) name (Str8 sub 0 i name)))))
 
 ; `from a import x, y as z` -- each name bound, `as` renaming it
-; `from a import *` binds every PUBLIC name the module has, at run time --
-; the parser cannot know them, so this reads the module's own attributes and
-; defines each in the environment the statement runs in, which is why it is an
-; operative.  It lives in this file because turning a Python name into a
-; symbol is the parser's own reader.
+; `from a import *` binds the names the module's __all__ lists, or without one
+; every name it has that does not begin with an underscore -- a module's own
+; names, and the attributes of anything else the program's table holds.  The
+; parser cannot know them, so this reads them at run time and defines each in
+; the environment the statement runs in, which is why it is an operative.  It
+; lives in this file because turning a Python name into a symbol is the
+; parser's own reader.
 (def %py-import-star
   (op (name) e
-    (%py-import-star-bind e (%py-obj-attrs (%py-import (eval name e))))))
+    (%py-star-bind! e (%py-import (eval name e)))))
 
-(def %py-import-star-bind
+(def %py-star-bind!
+  (fn (_ env m)
+    (let ((all (%py-star-all m)))
+      (if (same? all %py-mod-missing)
+        (%py-star-rows! env (%py-star-rows m))
+        (%py-star-names! env m (%py-iter-elems all))))))
+
+; The module's __all__, or %py-mod-missing when reading it raises
+; AttributeError, as a module's own __getattr__ may for it.
+(def %py-star-all
+  (fn (_ m)
+    (guard (e (if (%py-exc-match e %py-exc-AttributeError) %py-mod-missing (error e)))
+      (%py-getattr m "__all__"))))
+
+; Each name __all__ lists, which must be a str, bound to the module's value.
+(def %py-star-names!
+  (fn (self env m names)
+    (if (null? names)
+      ()
+      (if (not (%py-str-is (first names)))
+        (Err raise (lit type)
+          (Str8 append "Item in __all__ must be str, not "
+            (%py-class-name (%py-type-of (first names)))) ())
+        (let ((k (%py-text->x (first names))))
+          (%py-env-def! env (%py-name->sym k) (%py-getattr m k))
+          (self env m (rest names)))))))
+
+; Without __all__, the names as ("name" . value) rows: a module's own, an
+; instance's attributes, a class's own rows.  Anything else has none to give.
+(def %py-star-rows
+  (fn (_ m)
+    (match
+      ((%py-mod-is m) (%py-mod-rows m))
+      ((%py-obj-is m) (%py-star-x-rows (%py-attr-entries (%py-obj-attrs m))))
+      ((%py-class-is m) (%py-star-x-rows (%py-class-rows m)))
+      (#t
+        (Err raise (lit import) "from-import-* object has no __dict__ and no __all__" ())))))
+(def %py-star-x-rows
+  (fn (self entries)
+    (if (null? entries)
+      ()
+      (pair (pair (%py-text->x (first (first entries))) (rest (first entries)))
+        (self (rest entries))))))
+
+(def %py-star-rows!
   (fn (self env rows)
     (if (null? rows)
       ()
@@ -2240,11 +2326,12 @@
                   (let ((n (if (null? (rest after)) () (first (rest after)))))
                     (if (not (eq? (%py-tag n) (lit tok-name)))
                       (Err raise (lit syntax) "expected a name after as" ())
-                      (list (%py-name->sym (%py-val n)) (rest (rest after)))))
-                  ; `import a.b` binds the head name, as Python does
-                  (list (%py-name->sym (%py-import-head name)) after))))
+                      (list (%py-name->sym (%py-val n)) (rest (rest after)) (lit %py-import))))
+                  ; `import a.b` binds the head name to the head module, as
+                  ; Python does; with `as` the name is the named module's
+                  (list (%py-name->sym (%py-import-head name)) after (lit %py-import-top)))))
           (let ((acc2 (pair (list (lit def) (first bound)
-                              (list (lit %py-import) name)) acc))
+                              (list (first (rest (rest bound))) name)) acc))
                 (rest-toks (first (rest bound))))
             (if (%py-op-is? (if (null? rest-toks) () (first rest-toks)) ",")
               (self (rest rest-toks) acc2)
@@ -2402,7 +2489,7 @@
         ((%py-kw? t "import") (%py-import-list (rest toks) ()))
         ((%py-kw? t "from")
           (let ((r (%py-from-name (rest toks))))
-            (let ((name (first r)) (after (rest r)))
+            (let ((name (%py-from-form (first r))) (after (rest r)))
               (if (not (%py-kw? (if (null? after) () (first after)) "import"))
                 (Err raise (lit syntax) "expected import after a from" ())
                 (let ((what (rest after)))
@@ -3789,9 +3876,12 @@
                   ; A generator binds its parameters when it is called, not
                   ; when it is first advanced, so the prelude wraps the
                   ; %py-gen-new form rather than sitting inside it.
+                  ; The fn's own name is %py-fn, which nothing else binds: the
+                  ; call's frame is the one a bare dir() or locals() stops at
+                  ; (python/runtime-flow.x, %py-frame-rows).
                   (def fn-form
                     (if (if (first %py-async-me) #t (%py-has-yield? (%py-block-contents after) #f))
-                      (list (lit fn) (pair (lit _) params)
+                      (list (lit fn) (pair (lit %py-fn) params)
                         (prelude
                           (list (lit %py-gen-new)
                             (list (lit fn) (list (lit _) (lit %py-gen))
@@ -3799,7 +3889,7 @@
                                 (list (lit fn) (list (lit _) (lit %py-return))
                                   (list (lit %seq) (%py-check-escapes body0) ()))))
                             (%py-val name))))
-                      (list (lit fn) (pair (lit _) params)
+                      (list (lit fn) (pair (lit %py-fn) params)
                         (prelude
                           (list (lit %py-escape)
                             (list (lit fn) (list (lit _) (lit %py-return))

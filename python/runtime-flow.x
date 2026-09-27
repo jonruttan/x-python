@@ -20,14 +20,6 @@
 ; 6,062-line file, which the platform's linter could not analyse -- it
 ; ran 91 seconds and the engine died with no diagnostic at all.
 
-; --- Modules -----------------------------------------------------------------
-;
-; A MODULE IS AN OBJECT of one class, and importing is looking a name up in a
-; table.  There is no file system search here: this runtime runs one program,
-; and the modules it can offer are the ones written below.  Everything else
-; raises ImportError, which is not a limitation so much as the truth -- and it
-; is what the corpus's own feature probes expect, since they wrap an import in
-; a try and print SKIP when it fails.
 ; --- del NAME ----------------------------------------------------------------
 ; The engine defines a global and never removes one, so a deleted name is
 ; rebound to this value instead; a name the program never binds, and each name
@@ -77,7 +69,7 @@
 (def %py-here (op () e e))
 
 ; The root, reached from any environment through its parents.
-(def %py-root-of
+(def %py-root
   (fn (self e) (if (null? (rest e)) e (self (rest e)))))
 
 ; SYM bound to V in ENV itself, as x-lang's loader defines in a module: the
@@ -114,36 +106,189 @@
       ()
       (%py-env-def! e sym (guard (_ (eval default e)) (eval sym e))))))
 
-; A module's __dict__ is its attributes as a dict: a copy, as a class's is, so
-; reading it answers and writing to it does not reach the module.
-(def %py-cls-module
-  (%py-class-new "module" %py-cls-object
-    (list
-      (pair "__dict__"
-        (%py-desc-new (lit property)
-          (fn (_ m) (%py-dict-new (%py-attr-entries (%py-obj-attrs m)))))))
-    "module"))
+; --- Modules -----------------------------------------------------------------
+;
+; A MODULE IS ITS ENVIRONMENT.  A module's globals are an environment of its
+; own (above), and the module a program holds is that environment in a value
+; of a type of its own: `m.x` reads the module's binding of x and `m.x = 1`
+; binds it, so what the module's code sees and what its importer sees are one
+; binding.  The modules this runtime writes, sys and math among them, are
+; environments too, made from their rows.
+;
+; Importing is looking a name up in the program's table, sys.modules, a dict
+; any program may write to, and making the module on a miss: one of the
+; modules written below, or a file found on the program's path, sys.path
+; (%py-find).  Anything else raises ModuleNotFoundError, an ImportError, which
+; is what the corpus's own feature probes expect, since they wrap an import in
+; a try and print SKIP when it fails.
+; The type is %py-module: %py-mod is Python's `%`.
+(def %py-module ())
+(def %py-mod-new (fn (_ env) (%make-instance %py-module (list env))))
+(def %py-mod-is (fn (_ v) (%type? v %py-module)))
+(def %py-mod-env (fn (_ m) (first (first m))))
 
+; type() and isinstance see one class for every module.
+(def %py-cls-module (%py-class-new "module" %py-cls-object () "module"))
+
+; The module's own binding of NAME, or this marker when it has none -- a
+; deleted name is one it has none of.  NAME is looked up as the symbol the
+; module's code binds it under, so a module's `len` is what a `def len` bound.
+(def %py-mod-missing (list (lit %py-mod-missing)))
+(def %py-mod-own
+  (fn (_ m name)
+    (let ((sym (%py-name->sym name)))
+      (let ((c (if (symbol? sym) (%py-env-cell (first (%py-mod-env m)) sym) ())))
+        (if (if (null? c) #t (same? (rest c) %py-deleted)) %py-mod-missing (rest c))))))
+
+(def %py-mod-no-attr
+  (fn (_ m name)
+    (Err raise (lit attribute)
+      (Str8 append (Str8 append "module '" (%py-text->x (%py-mod-own m "__name__")))
+        (Str8 append "' has no attribute '" (Str8 append name "'")))
+      ())))
+
+; `m.name`: the module's own binding, its __dict__ -- a copy of its names, as
+; a class's is -- and past those the module's own __getattr__, as PEP 562 has
+; it.
+(def %py-mod-attr
+  (fn (_ m name)
+    (let ((v (%py-mod-own m name)))
+      (match
+        ((not (same? v %py-mod-missing)) v)
+        ((Str8 =? name "__dict__") (%py-dict-new (%py-attr-entries (%py-mod-rows m))))
+        ((Str8 =? name "__class__") %py-cls-module)
+        (#t
+          (let ((ga (%py-mod-own m "__getattr__")))
+            (if (same? ga %py-mod-missing)
+              (%py-mod-no-attr m name)
+              (%py-call ga (%py-str-of-x name)))))))))
+
+; `m.name = v` binds in the module's environment, where its code finds it;
+; `del m.name` is the module's own `del name`.
+(def %py-mod-set!
+  (fn (_ m name v)
+    (%seq (%py-env-def! (%py-mod-env m) (%py-name->sym name) v) ())))
+(def %py-mod-del!
+  (fn (_ m name)
+    (if (same? (%py-mod-own m name) %py-mod-missing)
+      (%py-mod-no-attr m name)
+      (%seq (%py-env-def! (%py-mod-env m) (%py-name->sym name) %py-deleted) ()))))
+
+; The module's names with their values, ("name" . value) rows in the order
+; the module bound them, the deleted ones left out.
+(def %py-mod-rows
+  (fn (_ m) (%py-env-rows (first (%py-mod-env m)) ())))
+(def %py-env-rows
+  (fn (self cells acc)
+    (if (null? cells)
+      acc
+      (self (rest cells)
+        (let ((n (%py-sym->name (first (first cells)))))
+          (if (if (null? n) #t (same? (rest (first cells)) %py-deleted))
+            acc
+            (pair (pair n (rest (first cells))) acc)))))))
+
+; A module this runtime writes: an environment made from its rows, its
+; __name__ bound first, as a module's is before its first statement runs.
 (def %py-module-new
   (fn (_ name rows)
-    (let ((m (%py-obj-new %py-cls-module)))
-      (%seq (%py-obj-set-attrs! m (pair (pair "__name__" (%py-str-of-x name)) rows)) m))))
-
-; The modules this runtime has, built once and remembered, so that `sys.modules`
-; and repeated imports answer the same object.
-(def %py-modules (list ()))
-
-(def %py-module-find
-  (fn (self name rows)
+    (%py-mod-new
+      (pair (%py-rows->cells (pair (pair "__name__" (%py-str-of-x name)) rows) ())
+        (%py-root (%py-here))))))
+(def %py-rows->cells
+  (fn (self rows acc)
     (if (null? rows)
-      ()
-      (if (Str8 =? name (first (first rows)))
-        (rest (first rows))
-        (self name (rest rows))))))
+      acc
+      (self (rest rows)
+        (pair (pair (%py-name->sym (first (first rows))) (rest (first rows))) acc)))))
 
-(def %py-module-put!
-  (fn (_ name m)
-    (%seq (%set-first! %py-modules (pair (pair name m) (first %py-modules))) m)))
+; A module prints as its name and where it came from.
+(set! %py-module
+  (%make-type
+    "PY-MODULE"
+    (list
+      (pair (lit write)
+        (fn (_ self)
+          (display "<module '" (%py-text->x (%py-mod-own self "__name__")) "'")
+          (let ((f (%py-mod-own self "__file__")))
+            (if (same? f %py-mod-missing)
+              (display " (built-in)>")
+              (display " from '" (%py-text->x f) "'>"))))))))
+
+; A program's modules and its search path: the dict sys.modules is and the list
+; sys.path is.  python-run makes one for each program it runs, so no two
+; programs share a module; the prompt's is made here.
+(def %py-program-new
+  (fn (_ dir)
+    (list (%py-dict-new ()) (%py-list-new (list (%py-str-of-x dir))))))
+(def %py-program (list (%py-program-new "")))
+(def %py-modules-now (fn (_) (first (first %py-program))))
+(def %py-path-now (fn (_) (first (rest (first %py-program)))))
+
+; --- the names where a call is made ----------------------------------------
+;
+; A bare dir(), locals() or vars() lists the names bound where it is called
+; (python/parse.x, %py-call-form): inside a function the function's, from the
+; call's environment out to the function's own call frame, the one binding
+; %py-fn, the name a def or lambda gives its fn; anywhere else in a module, the
+; module's.
+; A module's environment is two steps from the root, the program's scope
+; between (python/base.x); the prompt's is the root, whose names are x's and
+; are not listed here.  A program that bound the name to something else calls
+; what it bound.
+(def %py-bare-call
+  (fn (_ sym env)
+    (def f (eval sym env))
+    (match
+      ((same? f %py-dir) (%py-dir-sorted (%py-dir-keys (%py-here-rows env) ())))
+      ((same? f %py-locals) (%py-dict-new (%py-attr-entries (%py-here-rows env))))
+      ((same? f %py-vars) (%py-dict-new (%py-attr-entries (%py-here-rows env))))
+      (#t (%py-call f)))))
+
+; How many parents ENV has before the root: none for the root, two for a
+; module's.
+(def %py-env-depth
+  (fn (self env n) (if (null? (rest env)) n (self (rest env) (+ n 1)))))
+
+(def %py-here-rows
+  (fn (_ env)
+    (let ((d (%py-env-depth env 0)))
+      (if (< d 2)
+        (Err raise (lit type) "the prompt's names are not a namespace this runtime lists" ())
+        (%py-frame-rows env (- d 2) ())))))
+
+; Outward from ENV through the K environments inside the module's, as
+; ("name" . value) rows, outer names first and an inner binding hiding an
+; outer one of the same name: up to a function's own frame, or, reaching the
+; module's environment without one, the module's names.
+(def %py-frame-rows
+  (fn (self env k acc)
+    (if (= k 0)
+      (%py-env-rows (first env) ())
+      (let ((rows (%py-append (%py-rows-not-in (%py-env-rows (first env) ()) acc) acc)))
+        (if (null? (%py-env-cell (first env) (lit %py-fn)))
+          (self (rest env) (- k 1) rows)
+          rows)))))
+(def %py-rows-not-in
+  (fn (self rows named)
+    (match
+      ((null? rows) ())
+      ((null? (%py-alist-find (first (first rows)) named))
+        (pair (first rows) (self (rest rows) named)))
+      (#t (self (rest rows) named)))))
+
+; locals() and vars() by any other road than a bare call cannot see where they
+; were called from, and say so; vars(obj) is the object's __dict__.
+(def %py-bare-refuse
+  (fn (_ who)
+    (Err raise (lit type)
+      (Str8 append who "() called by another name has no namespace to answer with") ())))
+(def %py-locals
+  (%py-sig! (fn (_) (%py-bare-refuse "locals")) "locals" () 0 #f))
+(def %py-vars
+  (%py-sig!
+    (fn (_ . a) (if (null? a) (%py-bare-refuse "vars") (%py-getattr (first a) "__dict__")))
+    "vars" (list "object") 0 #f))
 
 ; --- the math module ------------------------------------------------------
 ;
@@ -629,9 +774,14 @@
 ; door: the parser calls it with a name it read out of the source, and the
 ; module table is keyed the same way.  `__import__()` is the Python-facing
 ; door, and it is the one that crosses a str over -- putting the check here
-; instead would reject every `import x` the parser ever emitted.
-; A relative name (`.`, `..a`, from `from . import x`) has no package to be
-; relative to: a program here runs as a script, as __main__ does in CPython.
+; instead would reject every `import x` the parser ever emitted.  A relative
+; name arrives resolved (%py-relative below); one that does not has no
+; package to be relative to.
+;
+; Whatever the program's table holds under the name is the answer, a module
+; or not: sys.modules is the program's to write.  A name it does not hold is
+; imported: its package first, then the name itself, one of this runtime's
+; own modules or a file found on the path.
 (def %py-import
   (fn (_ name)
     (match
@@ -640,46 +790,248 @@
         (Err raise (lit import)
           "attempted relative import with no known parent package" ()))
       (#t
-        (let ((have (%py-module-find name (first %py-modules))))
-          (if (not (null? have))
-            have
-            (let ((built (%py-module-build name)))
-              (if (null? built)
-                (Err raise (lit import)
-                  (Str8 append (Str8 append "No module named '" name) "'") ())
-                (%py-module-put! name built)))))))))
+        (let ((e (%py-dfind (%py-str-of-x name) (%py-dict-entries (%py-modules-now)))))
+          (if (null? e) (%py-import-new name) (rest e)))))))
 
-; `from X import a, b` and `from X import *` both read attributes off the
-; module the same way an ordinary program would.
+(def %py-import-new
+  (fn (_ name)
+    (let ((dot (%py-last-dot name (- (Str8 length name) 1))))
+      (if (null? dot)
+        (let ((built (%py-module-build name)))
+          (if (null? built)
+            (%py-load name (%py-find name (%py-path-dirs (%py-path-now)) ()))
+            (%seq (%py-dset (%py-modules-now) (%py-str-of-x name) built) built)))
+        (%py-import-sub name (Str8 sub 0 dot name)
+          (Str8 sub (+ dot 1) (- (Str8 length name) (+ dot 1)) name))))))
+
+; A submodule: its package imported first -- whose own code may import this
+; very name, so the table is asked again -- then found on the package's
+; __path__, and set on the package once it has loaded, which is only ever the
+; first time.
+(def %py-import-sub
+  (fn (_ name parent tail)
+    (let ((p (%py-import parent)))
+      (let ((e (%py-dfind (%py-str-of-x name) (%py-dict-entries (%py-modules-now)))))
+        (if (not (null? e))
+          (rest e)
+          (let ((dirs (%py-package-dirs p)))
+            (if (null? dirs)
+              (%py-no-module! name
+                (Str8 append (Str8 append "; '" parent) "' is not a package"))
+              (let ((m (%py-load name (%py-find tail dirs ()))))
+                (%seq (if (%py-mod-is p) (%py-mod-set! p tail m) ()) m)))))))))
+
+(def %py-no-module!
+  (fn (_ name why)
+    (Err raise (lit module-not-found)
+      (Str8 append (Str8 append "No module named '" name) (Str8 append "'" why)) ())))
+
+; A package's directories, its __path__; anything else has none.
+(def %py-package-dirs
+  (fn (_ p)
+    (if (%py-mod-is p)
+      (let ((path (%py-mod-own p "__path__")))
+        (if (same? path %py-mod-missing) () (%py-path-dirs path)))
+      ())))
+
+; The directories a list of strs names, as the platform's strings.
+(def %py-path-dirs
+  (fn (_ l) (%py-text-list (%py-iter-elems l))))
+(def %py-text-list
+  (fn (self l)
+    (match
+      ((null? l) ())
+      ((%py-str-is (first l)) (pair (%py-text->x (first l)) (self (rest l))))
+      (#t (self (rest l))))))
+
+; The index of the last dot in S at or before I, or () when there is none.
+(def %py-last-dot
+  (fn (self s i)
+    (match
+      ((< i 0) ())
+      ((= (%py-code-at s i) 46) i)
+      (#t (self s (- i 1))))))
+(def %py-parent-name
+  (fn (_ name)
+    (let ((dot (%py-last-dot name (- (Str8 length name) 1))))
+      (if (null? dot) "" (Str8 sub 0 dot name)))))
+
+; --- finding a module on the path -----------------------------------------
+;
+; A NAME IS LOOKED FOR IN EACH DIRECTORY IN TURN: NAME/__init__.py is a
+; package and NAME.py a module, and a directory NAME with neither is a
+; namespace package -- one with no code, taken only when no directory has the
+; other two, as PEP 420 has it.  The answer is (LABEL DIRECTORY FILE), FILE ()
+; for a namespace package, or () when nothing is found.
+(def %py-find
+  (fn (self name dirs ns)
+    (if (null? dirs)
+      ns
+      (let ((base (%py-path-join (first dirs) name)))
+        (let ((init (%py-path-join base "__init__.py")) (py (Str8 append base ".py")))
+          (match
+            ((eq? (%py-file-type init) (lit file)) (list (lit package) base init))
+            ((eq? (%py-file-type py) (lit file)) (list (lit module) (first dirs) py))
+            ((if (null? ns) (eq? (%py-file-type base) (lit dir)) #f)
+              (self name (rest dirs) (list (lit namespace) base ())))
+            (#t (self name (rest dirs) ns))))))))
+
+; An empty directory on the path is the working directory, as '' is in
+; CPython's sys.path.
+(def %py-path-join
+  (fn (_ dir name)
+    (if (= (Str8 length dir) 0) name (Str8 append dir (Str8 append "/" name)))))
+
+; The type of what PATH names -- 'file, 'dir or another -- or () when nothing
+; is there.  It is the row File stat keys `kind` (x/sys/file).
+(def %py-file-type
+  (fn (_ path) (guard (_ ()) (%py-stat-type (File stat path)))))
+(def %py-stat-type
+  (fn (self rows)
+    (match
+      ((null? rows) ())
+      ((eq? (first (first rows)) (lit kind)) (rest (first rows)))
+      (#t (self (rest rows))))))
+
+; A MODULE MADE FROM A FILE is an environment of its own, entered in the
+; program's table before its first statement runs, so a module that imports
+; it back part-way through finds what it has bound so far, and taken out
+; again if its code raises, so the next import runs it afresh.  A package's
+; __path__ is its directory; a namespace package has no file, and no code.
+(def %py-load
+  (fn (_ name found)
+    (if (null? found) (%py-no-module! name "") (%py-load-found name found))))
+(def %py-load-found
+  (fn (_ name found)
+    (def label (first found))
+    (def file (first (rest (rest found))))
+    (def env (%py-module-env))
+    (def key (%py-str-of-x name))
+    (%py-env-def! env (lit py-__name__) key)
+    (%py-env-def! env (lit py-__package__)
+      (%py-str-of-x (if (eq? label (lit module)) (%py-parent-name name) name)))
+    (if (eq? label (lit module))
+      ()
+      (%py-env-def! env (lit py-__path__)
+        (%py-list-new (list (%py-str-of-x (first (rest found)))))))
+    (if (null? file) () (%py-env-def! env (lit py-__file__) (%py-str-of-x file)))
+    (%py-dset (%py-modules-now) key (%py-mod-new env))
+    (if (null? file)
+      ()
+      (guard (e (%seq (%py-table-drop! key) (error e)))
+        (%py-code-run env (python-parse (File read-all file)) ())))
+    ; what the table holds when the code is done: a module may put something
+    ; else there in its own place
+    (let ((e (%py-dfind key (%py-dict-entries (%py-modules-now)))))
+      (if (null? e) (%py-no-module! name "") (rest e)))))
+(def %py-table-drop!
+  (fn (_ key)
+    (if (null? (%py-dfind key (%py-dict-entries (%py-modules-now))))
+      ()
+      (%py-ddel (%py-modules-now) key))))
+
+; `import a.b.c` binds a: the whole name imported, its head answered.
+(def %py-import-top
+  (fn (_ name)
+    (%seq (%py-import name) (%py-import (%py-import-head name)))))
+
+; `from .a import b` names a module relative to the package of the module the
+; statement is in, each leading dot past the first climbing one package.  A
+; module with no package, the program itself, has nothing to be relative to.
+(def %py-relative
+  (op (name) e
+    (%py-resolve (eval name e) (guard (_ ()) (eval (lit py-__package__) e)))))
+(def %py-resolve
+  (fn (_ name pkg)
+    (def level (%py-dots name 0))
+    (def tail (Str8 sub level (- (Str8 length name) level) name))
+    (def base (if (%py-str-is pkg) (%py-text->x pkg) ""))
+    (if (= (Str8 length base) 0)
+      (Err raise (lit import) "attempted relative import with no known parent package" ())
+      (let ((up (%py-climb base (- level 1))))
+        (match
+          ((null? up)
+            (Err raise (lit import) "attempted relative import beyond top-level package" ()))
+          ((= (Str8 length tail) 0) up)
+          (#t (Str8 append up (Str8 append "." tail))))))))
+(def %py-dots
+  (fn (self s i)
+    (if (if (< i (Str8 length s)) (= (%py-code-at s i) 46) #f) (self s (+ i 1)) i)))
+; BASE with its last K names taken off, or () when it has fewer.
+(def %py-climb
+  (fn (self base k)
+    (if (= k 0)
+      base
+      (let ((dot (%py-last-dot base (- (Str8 length base) 1))))
+        (if (null? dot) () (self (Str8 sub 0 dot base) (- k 1)))))))
+
+; __import__(name, globals, locals, fromlist, level): the Python-facing door,
+; where the name crosses over from a str.  A negative level, and a relative
+; one without a globals dict to be relative to, are refused as CPython
+; refuses them; a relative one is resolved against the dict's package.  It
+; answers the named module when a fromlist asks for names from it, and the
+; head of the name when none does, as the statement `import a.b` binds a.
 (def %py-import-call
-  (fn (_ . a)
-    (if (null? a)
-      (Err raise (lit type)
-        "__import__() missing required argument 'name'" ())
-      (let ((n (first a)))
-        (if (not (%py-str-is n))
-          (Err raise (lit type) "module name must be a string" ())
-          (%py-import (%ps->x (%py-str-cps n))))))))
+  (%py-sig!
+    (fn (_ . a)
+      (def level (%py-opt a 4 0))
+      (match
+        ((null? a)
+          (Err raise (lit type) "__import__() missing required argument 'name'" ()))
+        ((not (%py-str-is (first a)))
+          (Err raise (lit type) "module name must be a string" ()))
+        ((< level 0) (Err raise (lit value) "level must be >= 0" ()))
+        ((if (> level 0) (not (%py-dict? (%py-opt a 1 ()))) #f)
+          (Err raise (lit type) "globals must be a dict" ()))
+        (#t
+          (let ((name (%ps->x (%py-str-cps (first a)))))
+            (let ((full (if (> level 0)
+                          (%py-resolve (Str8 append (%py-dot-run level "") name)
+                            (%py-globals-package (%py-opt a 1 ())))
+                          name)))
+              (if (%py-truthy (%py-opt a 3 ()))
+                (%py-import full)
+                (%seq (%py-import full) (%py-import (%py-import-head full)))))))))
+    "__import__" (list "name" "globals" "locals" "fromlist" "level") 1 #f))
+(def %py-dot-run
+  (fn (self k acc) (if (= k 0) acc (self (- k 1) (Str8 append acc ".")))))
+; The package a globals dict is in: its __package__, or failing that its
+; __name__ when it is a package's, and the name's parent when it is not.
+(def %py-globals-package
+  (fn (_ g)
+    (let ((pkg (%py-dfind (%py-str-of-x "__package__") (%py-dict-entries g)))
+          (nm (%py-dfind (%py-str-of-x "__name__") (%py-dict-entries g))))
+      (match
+        ((if (null? pkg) #f (%py-str-is (rest pkg))) (rest pkg))
+        ((null? nm) ())
+        ((not (null? (%py-dfind (%py-str-of-x "__path__") (%py-dict-entries g)))) (rest nm))
+        (#t (%py-str-of-x (%py-parent-name (%py-text->x (rest nm)))))))))
 
+; `from X import name` reads the attribute off whatever the table holds for
+; X, the way an ordinary program would -- a module's own binding, or any other
+; object's attribute -- and, from a package that has no such name bound, the
+; submodule of that name.
 (def %py-import-from
   (fn (_ name attr)
     (let ((m (%py-import name)))
-      (let ((e (%py-alist-find attr (%py-obj-attrs m))))
-        (if (null? e)
-          (Err raise (lit import)
-            (Str8 append
-              (Str8 append (Str8 append "cannot import name '" attr) "' from '")
-              (Str8 append name "'")) ())
-          (rest e))))))
-
-; every public name a module has, for `from X import *`
-(def %py-import-star-names
-  (fn (self rows acc)
-    (if (null? rows)
-      (%py-reverse acc)
-      (let ((k (first (first rows))))
-        (self (rest rows)
-          (if (Str8 =? (Str8 sub 0 1 k) "_") acc (pair k acc)))))))
+      (guard (e (if (%py-exc-match e %py-exc-AttributeError)
+                  (%py-import-from-sub m name attr)
+                  (error e)))
+        (%py-getattr m attr)))))
+(def %py-import-from-sub
+  (fn (_ m name attr)
+    (if (null? (%py-package-dirs m))
+      (%py-cannot-import! name attr)
+      (guard (e (if (%py-exc-match e %py-exc-ModuleNotFoundError)
+                  (%py-cannot-import! name attr)
+                  (error e)))
+        (%py-import (Str8 append name (Str8 append "." attr)))))))
+(def %py-cannot-import!
+  (fn (_ name attr)
+    (Err raise (lit import)
+      (Str8 append
+        (Str8 append (Str8 append "cannot import name '" attr) "' from '")
+        (Str8 append name "'")) ())))
 
 ; A class body's namespace while the body runs: the rows bound so far, in a
 ; cell, newest first.  A name bound again keeps its first place and takes the
