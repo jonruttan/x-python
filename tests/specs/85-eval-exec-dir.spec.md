@@ -93,8 +93,9 @@ None
 ### exec defines a class, and the class outlives the call
 
 A class reaches the evaluator differently from a def: `%py-class-of` emits a
-`set!` of a `%py-mkclass` call, where a def emits a `def`.  Through `exec` that
-`set!` is reached from inside a builtin rather than from the top of a program,
+`set!` of what `__build_class__` makes, where a def emits a `def`.  Through
+`exec` that `set!` is reached from inside a builtin rather than from the top of
+a program,
 and the case is here because that path had no spec — the def, the assignment
 and the loop above did, and a class is the one shape none of them covers.
 Two execs, so that the SECOND one can name the class the FIRST one bound: a
@@ -172,26 +173,29 @@ SyntaxError (1,,)
 True True
 True
 ```
-## what these three will not do
+### exec and eval run in the names a mapping stands for
 
-### a globals or locals mapping is refused
-
-DIVERGENCE, and a deliberate one.  Python's `eval` and `exec` take mappings and
-run the source *in* them; a program's names here are its module's environment,
-and a dict does not stand for one.  Ignoring the argument would run the code in
-the wrong scope and answer with confidence, so it is refused instead.  `None`
-means "the one you are in" and passes.  CPython prints `3` for the first line
-and `11` for the second; this prints neither.
+A module's namespace dict stands for the module itself.  Any other dict stands
+for an environment made from its entries, whose names are written back to it
+once the source has run: a dict here is not a namespace, as it is in CPython,
+so its names are copied in and out.  A locals mapping is an environment inside
+the globals'.
 
 ```python
-(python-run "foo = 11\nexec('print(foo)', None)\nexec('print(foo)', None, None)\ntry:\n    exec('print(foo)', {'foo': 3})\nexcept TypeError as e:\n    print('TypeError')")
+(python-run "foo = 11\nexec('print(foo)', None)\nexec('print(foo)', {'foo': 3})\nexec('print(foo)', None, {'foo': 5})\nd = {}\nexec(\"def bar():\\n    return 84\\nx = 5\", d)\nprint(d[\"bar\"](), d[\"x\"])\nprint(eval(\"x * 2\", {\"x\": 21}), eval(\"foo + y\", None, {\"y\": 1}))\nexec(\"baz = 'module'\", globals())\nprint(baz)\ntry:\n    exec('print(1)', 'nope')\nexcept TypeError:\n    print(\"TypeError\")")
 ```
 ---
 ```output
 11
-11
+3
+5
+84 5
+42 12
+module
 TypeError
 ```
+
+## what these three will not do
 
 ### dir() with no argument is the names where it is called, and only so
 

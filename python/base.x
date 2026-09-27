@@ -82,7 +82,8 @@
   (fn (_ src . file)
     (def before (first %py-program))
     (%set-first! %py-program
-      (%py-program-new (if (null? file) "" (%py-parent-dir (first file)))))
+      (%py-program-new (if (null? file) "" (%py-parent-dir (first file)))
+        (pair () (%py-root (%py-here)))))
     (def env (%py-module-env))
     (%py-env-def! env (lit py-__name__) (%py-str-of-x "__main__"))
     (if (null? file) () (%py-env-def! env (lit py-__file__) (%py-str-of-x (first file))))
@@ -119,20 +120,8 @@
 ; namespace of the code that calls them, and a program's names are bindings
 ; in its own environment, so %py-module-env binds both there, each a closure
 ; over that environment: the eval a program's code finds evaluates in the
-; program's names.
-;
-; A globals or locals mapping is REFUSED rather than ignored -- ignoring it
-; would run the code in the wrong scope and answer with confidence.  `None`
-; means "the one you are in", so it passes.
-(def %py-ns-refuse
-  (fn (self ns who)
-    (if (null? ns)
-      ()
-      (if (null? (first ns))
-        (self (rest ns) who)
-        (Err raise (lit type)
-          (Str8 append who "() with a globals or locals mapping is not supported here")
-          ())))))
+; program's names.  A globals or locals mapping says where it runs instead
+; (%py-code-in below).
 
 ; A CODE OBJECT is what compile() answers and what eval and exec take beside a
 ; string: the forms, already parsed, and the mode they were parsed in.
@@ -184,12 +173,63 @@
       last
       (self env (rest forms) (eval (first forms) env)))))
 
+; The source evaluated where exec(source, globals, locals) or eval says: in
+; ENV when neither mapping is given, or each is None; in a module's own
+; environment when the globals is its namespace dict; and otherwise in an
+; environment of the source's own made from the dict's entries, whose names go
+; back into the dict once the source has run.  A dict a program makes is not
+; a namespace here, as it is in CPython, so its names are copied in and out.
+; A locals mapping is an environment inside the globals', copied the same way.
+(def %py-code-in
+  (fn (_ who env src mode ns)
+    (def g (%py-opt ns 0 ()))
+    (def l (%py-opt ns 1 ()))
+    (if (if (null? g) #f (not (%py-dict? g)))
+      (Err raise (lit type) (Str8 append who "() globals must be a dict") ())
+      ())
+    (if (if (null? l) #f (not (%py-dict? l)))
+      (Err raise (lit type) (Str8 append who "() locals must be a mapping") ())
+      ())
+    (def genv (if (null? g) env (%py-dict-env g (fn (_) (%py-module-env)))))
+    (def lenv (if (null? l) genv (%py-dict-env l (fn (_) (pair () genv)))))
+    (def v (%py-code-run lenv (%py-code-of src mode) ()))
+    (%py-dict-back! g genv)
+    (%py-dict-back! l lenv)
+    v))
+
+; The environment dict D stands for: a namespace dict's module's own, or a
+; fresh one from MAKE with D's str-keyed entries bound in it.
+(def %py-dict-env
+  (fn (_ d make)
+    (let ((ns (first (first d))))
+      (if (null? ns)
+        (let ((env (make)))
+          (%seq (%py-ns-put-all! env (%py-str-keyed (%py-dict-entries d))) env))
+        ns))))
+(def %py-str-keyed
+  (fn (self entries)
+    (match
+      ((null? entries) ())
+      ((%py-str-is (first (first entries))) (pair (first entries) (self (rest entries))))
+      (#t (self (rest entries))))))
+
+; A dict a program made takes back the names its environment ended with.
+(def %py-dict-back!
+  (fn (self d env)
+    (if (if (%py-dict? d) (null? (first (first d))) #f)
+      (%py-dict-back-rows! d (%py-ns-entries env))
+      ())))
+(def %py-dict-back-rows!
+  (fn (self d rows)
+    (if (null? rows)
+      ()
+      (%seq (%py-dset d (first (first rows)) (rest (first rows)))
+        (self d (rest rows))))))
+
 (def %py-eval-for
   (fn (_ env)
     (%py-sig!
-      (fn (_ src . ns)
-        (%seq (%py-ns-refuse ns "eval")
-          (%py-code-run env (%py-code-of src "eval") ())))
+      (fn (_ src . ns) (%py-code-in "eval" env src "eval" ns))
       "eval" (list "source" "globals" "locals") 1 #f)))
 
 ; exec ANSWERS None however much the source evaluated to, which is why the
@@ -197,31 +237,29 @@
 (def %py-exec-for
   (fn (_ env)
     (%py-sig!
-      (fn (_ src . ns)
-        (%seq (%py-ns-refuse ns "exec")
-          (%seq (%py-code-run env (%py-code-of src "exec") ()) ())))
+      (fn (_ src . ns) (%seq (%py-code-in "exec" env src "exec" ns) ()))
       "exec" (list "source" "globals" "locals") 1 #f)))
 
-; globals() is the program's names as a dict, a copy made at the call.
+; globals() is the program's namespace dict, the same one every time.
 (def %py-globals-for
   (fn (_ env)
-    (%py-sig!
-      (fn (_) (%py-dict-new (%py-attr-entries (%py-env-rows (first env) ()))))
-      "globals" () 0 #f)))
+    (%py-sig! (fn (_) (%py-env-ns env)) "globals" () 0 #f)))
 
-; A program's environment, descended from the root, and the module the
-; program is.  Between the two is a scope of the program's own holding the
-; builtins that act on the program's names -- eval, exec and globals -- each a
-; closure over the program's environment: the eval a program's code finds
-; evaluates in the program's names, and what the program itself binds is its
-; globals and nothing else.
+; A module's environment -- the program's own, or a file's it imports --
+; descended from the program's builtins (%py-program) and through them the
+; root.  Between the module and the builtins is a scope of the module's own
+; holding the builtins that act on its names -- eval, exec and globals -- each
+; a closure over its environment, and its namespace dict: the eval a module's
+; code finds evaluates in the module's names, and what the module itself binds
+; is its globals and nothing else.
 (def %py-module-env
   (fn (_)
-    (def scope (pair () (%py-root (%py-here))))
+    (def scope (pair () (%py-builtins-now)))
     (def env (pair () scope))
     (%py-env-def! scope (lit %py-eval) (%py-eval-for env))
     (%py-env-def! scope (lit %py-exec) (%py-exec-for env))
     (%py-env-def! scope (lit %py-globals) (%py-globals-for env))
+    (%py-env-def! scope (lit %py-ns) (%py-ns-new env))
     env))
 
 ; The root's own, for the prompt, whose lines are evaluated there

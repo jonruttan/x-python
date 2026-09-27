@@ -943,13 +943,17 @@
   (fn (self entries e)
     (if (null? entries) (list e) (pair (first entries) (self (rest entries) e)))))
 
+; A module's namespace takes the store in its environment (python/types.x);
+; its entries are made on each read, so one of them is not a place to write.
 (def %py-dset
   (fn (_ d k v)
-    (let ((e (%py-dfind k (%py-dict-entries d))))
-      (if (null? e)
-        ; A new key goes on the END: insertion order is the printed order.
-        (%py-dict-set! d (%py-dappend (%py-dict-entries d) (pair k v)))
-        (%seq (%set-rest! e v) ())))))
+    (if (null? (first (first d)))
+      (let ((e (%py-dfind k (%py-dict-entries d))))
+        (if (null? e)
+          ; A new key goes on the END: insertion order is the printed order.
+          (%py-dict-set! d (%py-dappend (%py-dict-entries d) (pair k v)))
+          (%seq (%set-rest! e v) ())))
+      (%py-ns-put! (first (first d)) k v))))
 
 (def %py-dkeys (fn (self entries) (if (null? entries) () (pair (first (first entries)) (self (rest entries))))))
 (def %py-dvals (fn (self entries) (if (null? entries) () (pair (rest (first entries)) (self (rest entries))))))

@@ -260,8 +260,18 @@
 ; the write handlers reach repr.
 (def %py-dict-get ())
 
-(def %py-dict-entries (fn (_ v) (rest (first v))))
-(def %py-dict-set! (fn (_ v new) (%seq (%set-rest! (first v) new) ())))
+; A MODULE'S NAMESPACE IS A DICT TOO, and the head of a dict's record says
+; which: () for every dict a program makes, the module's environment for the
+; one globals() and __dict__ answer, whose entries are the environment's names,
+; read there and written there (python/runtime-flow.x, %py-ns-entries).
+(def %py-dict-entries
+  (fn (_ v)
+    (let ((ns (first (first v))))
+      (if (null? ns) (rest (first v)) (%py-ns-entries ns)))))
+(def %py-dict-set!
+  (fn (_ v new)
+    (let ((ns (first (first v))))
+      (if (null? ns) (%seq (%set-rest! (first v) new) ()) (%py-ns-assign! ns new)))))
 (def %py-dict-new (fn (_ entries) (%make-instance %py-dict (pair () entries))))
 (def %py-dict-is (fn (_ v) (%type? v %py-dict)))
 
@@ -282,15 +292,15 @@
                   (display ": ")
                   (%py-repr (rest (first es)))
                   (recur (rest es) #t)))))
-          (go (rest (first self)) #f)
+          (go (%py-dict-entries self) #f)
           (display "}")))
-      (pair (lit length) (fn (_ self) (%py-length (rest (first self)))))
+      (pair (lit length) (fn (_ self) (%py-length (%py-dict-entries self))))
       (pair
         (lit call)
         (fn (_ self . args) (%py-dict-get self (first args))))
       (pair
         (lit iter)
-        (fn (_ self) (%i-make %py-dict-step (rest (first self))))))))
+        (fn (_ self) (%i-make %py-dict-step (%py-dict-entries self)))))))
 
 ; --- Operators ---------------------------------------------------------------
 ;
