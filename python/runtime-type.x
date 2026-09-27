@@ -1,9 +1,9 @@
 ; # x-python -- Python on x-lang
 ;
-; ## python/runtime-type.x -- type objects, constructors, slicing and def
+; ## python/runtime-type.x -- type objects, constructors and slicing
 ;
 ; @description The type objects themselves, the constructors behind int() and
-;   friends, slicing, and def at whatever frame depth it appears.
+;   friends, and slicing.
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan
 ; @license MIT No Attribution (MIT-0)
@@ -1402,15 +1402,6 @@
         (#t (Err raise (lit type) "unhashable type: 'slice'" ()))))))
 
 (%py-sweep!)
-; --- def, whatever the frame depth -------------------------------------------
-;
-; The REPL's conditional hoists run inside a guard HANDLER, where a plain def
-; binds in the handler's frame and vanishes with it.  base/def-global is the
-; engine door that defines for the CALLER at any depth; the symbol comes
-; quoted, the value evaluated.
-(def %py-defg-prim (prim-ref (lit base) (lit def-global)))
-(def %py-defg (fn (_ sym v) (%py-defg-prim sym v)))
-
 ; Each of these was a bare function until the corpus asked to subclass one.
 (def %py-cls-map       (%py-class-new "map"       %py-cls-object (%py-lazy-methods %py-map)       "map"))
 (def %py-cls-filter    (%py-class-new "filter"    %py-cls-object (%py-lazy-methods %py-filter)    "filter"))

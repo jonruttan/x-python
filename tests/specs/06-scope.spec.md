@@ -147,3 +147,64 @@ UnboundLocalError cannot access local variable 'k' where it is not associated wi
 (4, 1, [2, 3], 'entered', 'entered', 1, [0, 4, 8], 3, 4, 14)
 entered
 ```
+
+## scope of a program
+
+A program's globals are an environment of its own, below the root, so a
+run of `python-run` shares no names with another, and the runtime's own names,
+in the root, are found past the program's and never replaced by them.
+
+### two programs share no names
+
+```python
+(do
+  (python-run "x = 5\nprint(x)")
+  (python-run "try:\n    print(x)\nexcept NameError as e:\n    print(type(e).__name__, e)"))
+```
+---
+```output
+5
+NameError name 'x' is not defined
+```
+
+### a program that assigns a builtin's name shadows it in its own names only
+
+```python
+(do
+  (python-run "print(\"before\")\ndef show(s):\n    print(s)\nshow(\"from a function\")\nprint = len")
+  (python-run "print(\"after\")"))
+```
+---
+```output
+before
+from a function
+after
+```
+
+### eval and exec run in the program's names, called from anywhere in it
+
+```python
+(do
+  (python-run "x = 3\nprint(eval(\"x + 1\"))\nexec(\"y = x * 2\")\nprint(y)\ndef f():\n    return eval(\"x * 10\")\nprint(f())")
+  (python-run "try:\n    print(y)\nexcept NameError:\n    print(\"no y here\")"))
+```
+---
+```output
+4
+6
+30
+no y here
+```
+
+### import * binds in the program's names
+
+```python
+(do
+  (python-run "from math import *\nprint(floor(2.5))")
+  (python-run "try:\n    floor\nexcept NameError:\n    print(\"no floor here\")"))
+```
+---
+```output
+2
+no floor here
+```

@@ -99,7 +99,7 @@
   %py-str %py-repr-of %py-repr-builtin %py-mklist-of %py-hasattr
   %py-cls-type %py-cls-int %py-cls-float %py-cls-bool %py-cls-str
   %py-cls-list %py-cls-dict %py-cls-tuple %py-cls-NoneType %py-cls-set %py-cls-frozenset
-  %py-type-of %py-isinstance %py-truthy %py-slice %py-defg
+  %py-type-of %py-isinstance %py-truthy %py-slice %py-hoist
   %py-exc-Exception %py-exc-ArithmeticError %py-exc-LookupError
   %py-exc-ZeroDivisionError %py-exc-IndexError %py-exc-KeyError
   %py-exc-AttributeError %py-exc-NameError %py-exc-TypeError
