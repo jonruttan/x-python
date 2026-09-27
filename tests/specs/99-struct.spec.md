@@ -77,3 +77,17 @@ pack obj b'\x00\x00 @'
 round trip f [0.10000000149011612, 0.3333333432674408, 16777216.0, -2.4999999777439474e-38]
 round trip e [1.099609375, 65504.0, 0.00012302398681640625, -3.140625]
 ```
+
+### -0.0 comes back as -0.0 through e, f and d, and through array('d')
+
+```python
+(python-run "import struct, array, math\nfor code in (\"<e\", \"<f\", \"<d\", \">d\"):\n    b = struct.pack(code, -0.0)\n    x = struct.unpack(code, b)[0]\n    print(code, b, repr(x), math.copysign(1.0, x))\na = array.array(\"d\", [-0.0, 0.0])\nb = array.array(\"d\", bytes(a))\nprint(list(b), [math.copysign(1.0, v) for v in b])")
+```
+---
+```output
+<e b'\x00\x80' -0.0 -1.0
+<f b'\x00\x00\x00\x80' -0.0 -1.0
+<d b'\x00\x00\x00\x00\x00\x00\x00\x80' -0.0 -1.0
+>d b'\x80\x00\x00\x00\x00\x00\x00\x00' -0.0 -1.0
+[-0.0, 0.0] [-1.0, 1.0]
+```
