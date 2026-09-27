@@ -1,6 +1,6 @@
 ; # x-python -- Python on x-lang
 ;
-; ## python/util.x -- the two list walks the whole bundle does
+; ## python/util.x -- the list walks the whole bundle does
 ;
 ; @description Bundle-local `reverse` and `length`, because the List class's
 ;   are built on `List fold` and that costs 53,000 objects a call.
@@ -42,7 +42,8 @@
 ; `List from-seq`; these take a list or nil, which is what all 131 call sites
 ; passed.  A call that wants an iterable should still say `List`.
 
-(provide python/util %py-reverse %py-rev-onto %py-length %py-byte-len %py-sweep!)
+(provide python/util
+  %py-reverse %py-rev-onto %py-length %py-append %py-take %py-byte-len %py-sweep!)
 
 ; A sweep after each of the loads this bundle drives.  The load is mostly
 ; garbage -- 734M objects allocated for 305K live, python/runtime's seven
@@ -80,6 +81,14 @@
     (if (null? xs) n (self (rest xs) (+ n 1)))))
 
 (def %py-length (fn (_ xs) (%py-count-from xs 0)))
+
+; Append and take, which the parser and the runtime both walk with.
+(def %py-append
+  (fn (self a b)
+    (if (null? a) b (pair (first a) (self (rest a) b)))))
+(def %py-take
+  (fn (self n l)
+    (if (= n 0) () (if (null? l) () (pair (first l) (self (- n 1) (rest l)))))))
 
 ; A string's length through the raw byte door, not the Str8 class: the class
 ; call is ~15,000 objects, the primitive is at the floor, and the number
