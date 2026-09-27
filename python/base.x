@@ -67,19 +67,46 @@
 (def python-version %py-implementation-version)
 
 ; (python-run SRC) -- run a Python program held in a string.
+; (python-run SRC FILE) -- run it as the file FILE, as CPython runs a script:
+; __file__ is FILE, and FILE's directory is the first place an import looks.
 ;
 ; Lex, parse, evaluate, in an environment of the program's own
-; (%py-module-env below), so two runs share no names.  Returns nil: a Python
-; statement has no value to show and `print` writes to stdout itself, so the
-; REPL printer has nothing to say about a program that ran.  An expression
-; typed at the prompt is a different question, and %python-repl-print below is
-; where it gets answered.
+; (%py-module-env below) that is the module __main__ of a table of the
+; program's own, so two runs share no names and no modules.  Without a FILE
+; an import looks in the working directory first, as `python -c` does.
+; Returns nil: a Python statement has no value to show and `print` writes to
+; stdout itself, so the REPL printer has nothing to say about a program that
+; ran.  An expression typed at the prompt is a different question, and
+; %python-repl-print below is where it gets answered.
 (def python-run
-  (fn (_ src)
+  (fn (_ src . file)
+    (def before (first %py-program))
+    (%set-first! %py-program
+      (%py-program-new (if (null? file) "" (%py-parent-dir (first file)))))
+    (def env (%py-module-env))
+    (%py-env-def! env (lit py-__name__) (%py-str-of-x "__main__"))
+    (if (null? file) () (%py-env-def! env (lit py-__file__) (%py-str-of-x (first file))))
+    (%py-dset (%py-modules-now) (%py-str-of-x "__main__") (%py-mod-new env))
     ; raise SystemExit ends the program QUIETLY; anything else uncaught
-    ; travels on to whoever ran the program
-    (guard (e (if (%py-exc-match e %py-exc-SystemExit) () (error e)))
-      (%seq (%py-code-run (%py-module-env) (python-parse src) ()) ()))))
+    ; travels on to whoever ran the program, the table the caller had put back
+    ; first either way
+    (guard (e (%seq (%set-first! %py-program before)
+                (if (%py-exc-match e %py-exc-SystemExit) () (error e))))
+      (%seq (%py-code-run env (python-parse src) ())
+        (%seq (%set-first! %py-program before) ())))))
+
+; FILE's directory: everything before its last slash, or the working
+; directory, '', when it has none.
+(def %py-parent-dir
+  (fn (_ file)
+    (let ((i (%py-last-slash file (- (Str8 length file) 1))))
+      (if (null? i) "" (Str8 sub 0 i file)))))
+(def %py-last-slash
+  (fn (self s i)
+    (match
+      ((< i 0) ())
+      ((= (%py-code-at s i) 47) i)
+      (#t (self s (- i 1))))))
 
 ; --- eval, exec, compile -----------------------------------------------------
 ;
@@ -175,23 +202,39 @@
           (%seq (%py-code-run env (%py-code-of src "exec") ()) ())))
       "exec" (list "source" "globals" "locals") 1 #f)))
 
-; A program's environment, descended from the root.  Between the two is a
-; scope of the program's own holding the builtins that act on the program's
-; names, eval and exec, each a closure over the program's environment: the
-; eval a program's code finds evaluates in the program's names, and what the
-; program itself binds is its globals and nothing else.
+; globals() is the program's names as a dict, a copy made at the call.
+(def %py-globals-for
+  (fn (_ env)
+    (%py-sig!
+      (fn (_) (%py-dict-new (%py-attr-entries (%py-env-rows (first env) ()))))
+      "globals" () 0 #f)))
+
+; A program's environment, descended from the root, and the module the
+; program is.  Between the two is a scope of the program's own holding the
+; builtins that act on the program's names -- eval, exec and globals -- each a
+; closure over the program's environment: the eval a program's code finds
+; evaluates in the program's names, and what the program itself binds is its
+; globals and nothing else.
 (def %py-module-env
   (fn (_)
-    (def scope (pair () (%py-root-of (%py-here))))
+    (def scope (pair () (%py-root (%py-here))))
     (def env (pair () scope))
     (%py-env-def! scope (lit %py-eval) (%py-eval-for env))
     (%py-env-def! scope (lit %py-exec) (%py-exec-for env))
+    (%py-env-def! scope (lit %py-globals) (%py-globals-for env))
     env))
 
 ; The root's own, for the prompt, whose lines are evaluated there
-; (python/repl.x).
-(def %py-eval (%py-eval-for (%py-root-of (%py-here))))
-(def %py-exec (%py-exec-for (%py-root-of (%py-here))))
+; (python/repl.x).  The prompt's names are x's root, which nothing here can
+; list, so globals() says so, as dir() with no argument does.
+(def %py-eval (%py-eval-for (%py-root (%py-here))))
+(def %py-exec (%py-exec-for (%py-root (%py-here))))
+(def %py-globals
+  (%py-sig!
+    (fn (_)
+      (Err raise (lit type)
+        "globals() at the prompt needs a namespace this runtime does not list" ()))
+    "globals" () 0 #f))
 
 ; `single` is `exec` here: the mode is about echoing a value at a prompt, and
 ; this compiles rather than prompts.  A mode that is none of the three is a

@@ -270,6 +270,7 @@ python/runtime.x             what the parser emits calls to
 tests/spec-runner.sh         sources the platform's shared runner
 tests/gen-harness.sh         writes tests/lib/harness.gen.x (generated)
 tests/specs/                 the bundle's own suite -- the pipeline
+tests/modules/               the Python modules the import specs load
 tools/conformance/
   upstream.pin.xon           the corpus: commit, digest, licence, suites
   fetch.sh                   fetch, verify, unpack into deps/

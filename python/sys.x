@@ -130,9 +130,10 @@
           ; the largest int a CPython machine word holds; this runtime has
           ; bigints and no such limit, and the number is what programs test
           (pair "maxsize" 9223372036854775807)
-          (pair "path" (%py-list-new ()))
+          ; the running program's own, which the importer reads (runtime-flow.x)
+          (pair "path" (%py-path-now))
           (pair "argv" (%py-list-new ()))
-          (pair "modules" (%py-dict-new ()))
+          (pair "modules" (%py-modules-now))
           (pair "stdin" (%py-io-std 0 "<stdin>" #f))
           (pair "stdout" (%py-io-std 1 "<stdout>" #t))
           (pair "stderr" (%py-io-std 2 "<stderr>" #t))

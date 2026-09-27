@@ -188,7 +188,7 @@ def main():
                 continue
 
             key = (suite, group_of(fn[:-3]))
-            groups.setdefault(key, []).append((fn, src, want))
+            groups.setdefault(key, []).append((fn, src, want, os.path.abspath(path)))
 
     total = 0
     # ONE PROCESS PER FILE, AND A FILE IS AT MOST CHUNK CASES.  The runner
@@ -227,9 +227,12 @@ def main():
         with open(out, "w", encoding="utf-8") as fh:
             fh.write(HEADER % (suite, group, len(cases)))
             fh.write("## %s/%s\n\n" % (suite, group))
-            for fn, src, want in chunk:
+            # AS THE FILE IT CAME FROM, as CPython ran it: __file__ is the
+            # file, and its directory is where an import looks first, so the
+            # import suite finds the modules and packages beside each program.
+            for fn, src, want, where in chunk:
                 fh.write("### %s\n\n" % fn)
-                fh.write("```python\n(python-run %s)\n```\n" % xstr(src))
+                fh.write("```python\n(python-run %s %s)\n```\n" % (xstr(src), xstr(where)))
                 fh.write("---\n```output\n%s\n```\n\n" % "\n".join(want))
         total += len(chunk)
 
@@ -263,7 +266,8 @@ CPython run on this machine.  Regenerate with: make gen
 Suite %s, group %s, %d cases.  Each case is one whole program compared on its
 whole stdout -- the output-fenced expected block, not the default last-line
 compare, because a conformance case that only checks its last line is not
-checking the program.
+checking the program.  Each runs as the corpus file it came from, as CPython
+ran it, so its imports find the modules beside it.
 -->
 
 """
