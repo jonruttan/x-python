@@ -152,8 +152,8 @@
 (import python/struct %py-struct-module)
 (%py-sweep!)
 (import python/io
-  %py-cls-BytesIO %py-cls-StringIO %py-io-attr %py-io-drain! %py-io-is
-  %py-io-module %py-io-text?)
+  %py-cls-BytesIO %py-cls-StringIO %py-io-attr %py-io-class %py-io-drain! %py-io-is
+  %py-io-line! %py-io-module %py-io-text? %py-open)
 (%py-sweep!)
 (import python/sys %py-implementation-version %py-sys-module)
 (%py-sweep!)

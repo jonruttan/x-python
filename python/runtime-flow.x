@@ -1864,6 +1864,9 @@
         (match
           ((%py-gen-is it) (%py-gen-resume it (lit send) ()))
           ((%py-it-is it) (%py-it-answer ((%py-it-step it))))
+          ; a stream is its own iterator, over its lines
+          ((%py-io-is it)
+            (let ((l (%py-io-line! it))) (if (null? l) (%py-raise-stop ()) l)))
           ((%py-obj-is it)
             (let ((m (%py-dunder it "__next__")))
               (if (null? m) (%py-not-iterator it) (m))))
@@ -1889,6 +1892,7 @@
   (fn (_ v)
     (match
       ((if (%py-gen-is v) #t (%py-it-is v)) v)
+      ((%py-io-is v) v)
       ((if (%py-obj-is v) (not (null? (%py-dunder v "__iter__"))) #f)
         ((%py-dunder v "__iter__")))
       ((%py-range-is v) (%py-range-iter v))
@@ -1929,8 +1933,14 @@
                 (if (null? nx)
                   (pair (%py-iter-answer it) ())
                   (list (lit %py-cursor) nx))))))
-        ; a range is read a step at a time too, never built
-        (if (%py-range-is v) (%py-range-iter v) (pair (elems) ()))))))
+        ; a range is read a step at a time too, never built, and a stream a
+        ; line at a time
+        (match
+          ((%py-range-is v) (%py-range-iter v))
+          ((%py-io-is v)
+            (list (lit %py-cursor)
+              (fn (_) (let ((l (%py-io-line! v))) (if (null? l) %py-gen-done l)))))
+          (#t (pair (elems) ())))))))
 (def %py-iter-pull!
   (fn (_ src)
     (match
