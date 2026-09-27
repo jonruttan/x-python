@@ -2256,12 +2256,14 @@
 ; every name it has that does not begin with an underscore -- a module's own
 ; names, and the attributes of anything else the program's table holds.  The
 ; parser cannot know them, so this reads them at run time and defines each in
-; the environment the statement runs in, which is why it is an operative.  It
-; lives in this file because turning a Python name into a symbol is the
-; parser's own reader.
+; the module the statement is in -- only a module's top level may say it --
+; found from the environment it runs in, which is why it is an operative; at
+; the prompt, that environment.  It lives in this file because turning a
+; Python name into a symbol is the parser's own reader.
 (def %py-import-star
   (op (module) e
-    (%py-star-bind! e (eval module e))))
+    (let ((ns (%py-ns-around e)))
+      (%py-star-bind! (if (null? ns) e (first (first ns))) (eval module e)))))
 
 (def %py-star-bind!
   (fn (_ env m)
@@ -2333,7 +2335,9 @@
                   ; call answers, as Python does; with `as` the name is the
                   ; named module's
                   (list (%py-name->sym (%py-import-head name)) after (%py-imp-form name () 0)))))
-          (let ((acc2 (pair (list (lit def) (first bound) (first (rest (rest bound)))) acc))
+          ; assigned, as a def's name is (%py-stmt-binds)
+          (%py-bound! (list (first bound)))
+          (let ((acc2 (pair (list (lit set!) (first bound) (first (rest (rest bound)))) acc))
                 (rest-toks (first (rest bound))))
             (if (%py-op-is? (if (null? rest-toks) () (first rest-toks)) ",")
               (self (rest rest-toks) acc2)
@@ -2361,10 +2365,14 @@
             (self rel (rest toks) (pair (list attr (%py-name->sym attr)) specs))))))))
 (def %py-from-bind-form
   (fn (_ rel specs)
+    ; the names are bound for the statements after this one
+    (%py-bound! (%py-spec-syms specs))
     (pair (lit %py-from-bind)
       (pair (%py-imp-form (first rel) (%py-spec-attrs specs) (rest rel)) specs))))
 (def %py-spec-attrs
   (fn (self specs) (if (null? specs) () (pair (first (first specs)) (self (rest specs))))))
+(def %py-spec-syms
+  (fn (self specs) (if (null? specs) () (pair (first (rest (first specs))) (self (rest specs))))))
 
 ; The call an import statement makes: whichever __import__ the program's
 ; builtins hold, with the name, the names asked for (() for None), the level,
@@ -3873,11 +3881,16 @@
               ; skips def bodies, so their targets are hoisted HERE instead,
               ; as a `let` (NOT `def`: x's `def` decides global-versus-local
               ; by save-stack depth, and under TCO that stack can be empty,
-              ; so a body `def` clobbered the module's name with nil).
+              ; so a body `def` clobbered the module's name with nil).  So are
+              ; the names its def and import statements bind (%py-stmt-binds),
+              ; which those statements assign, wherever in the body they stand.
               ; Parameters are already bound and are not re-declared; the
               ; rest start out unbound, as %py-deleted.
               (let ((locals (%py-minus
-                              (%py-dedupe () (%py-assign-targets (%py-block-contents after) ()) ())
+                              (%py-dedupe ()
+                                (%py-append (%py-assign-targets (%py-block-contents after) ())
+                                  (%py-stmt-binds (%py-block-contents after) ()))
+                                ())
                               (%py-append declared all-syms))))
                 ; the parameters and the names the body binds, less the ones it
                 ; declares global or nonlocal, are this body's own for
@@ -3939,8 +3952,13 @@
                       (list (lit %py-here))))
                   (%set-first! %py-current-self outer-self)
                   (%set-first! %py-in-async %py-async-outer)
+                  ; the name is bound for the statements after this one
+                  (%py-bound! (list (%py-name->sym (%py-val name))))
+                  ; ASSIGNED, as an assignment is: the name is bound before
+                  ; the scope's first statement (%py-stmt-binds), so a def in
+                  ; a block binds the one the rest of the scope reads
                   (pair
-                    (list (lit def) (%py-name->sym (%py-val name))
+                    (list (lit set!) (%py-name->sym (%py-val name))
                       (let ((all-dflts (%py-append dflts (%py-kwo-dflts kwonly ()))))
                         (if (null? all-dflts)
                           sig-form
@@ -4204,6 +4222,55 @@
               (%py-append (%py-strs->syms (%py-walrus-names (%py-group-of t) ())) acc)))
           (#t (self (rest toks) acc)))))))
 
+; THE NAMES A SCOPE'S def AND import STATEMENTS BIND, at any depth of its
+; blocks, as symbols: a def's name, and each name an import binds -- the head
+; of `import a.b`, the name after `as`, each name `from m import` takes.  A
+; nested def's body and a class's body are scopes of their own, and are not
+; read.  A function's are its locals, as its assignment targets are; a
+; module's are bound before its first statement, so a def or an import in a
+; block binds the name the rest of the module reads (python-parse).
+(def %py-stmt-binds
+  (fn (self toks acc)
+    (if (null? toks)
+      (%py-reverse acc)
+      (let ((t (first toks)))
+        (match
+          ((%py-block? t)
+            (self (rest toks) (%py-rev-onto (self (%py-block-toks t) ()) acc)))
+          ((%py-kw? t "def")
+            (let ((n (if (null? (rest toks)) () (first (rest toks)))))
+              (self (%py-skip-def (rest toks) 0)
+                (if (eq? (%py-tag n) (lit tok-name)) (pair (%py-name->sym (%py-val n)) acc) acc))))
+          ((%py-kw? t "class") (self (%py-skip-def (rest toks) 0) acc))
+          ((%py-kw? t "import") (self (rest toks) (%py-import-binds (rest toks) acc)))
+          (#t (self (rest toks) acc)))))))
+
+; What an import list binds: each `NAME.NAME...` its head, or with `as` the
+; name after it, the items separated by commas.
+(def %py-import-binds
+  (fn (self toks acc)
+    (let ((t (if (null? toks) () (first toks))))
+      (if (not (eq? (%py-tag t) (lit tok-name)))
+        acc
+        (let ((after (%py-dotted-skip (rest toks))))
+          (if (%py-kw? (if (null? after) () (first after)) "as")
+            (let ((n (if (null? (rest after)) () (first (rest after)))))
+              (%py-import-binds-next (if (null? (rest after)) () (rest (rest after)))
+                (if (eq? (%py-tag n) (lit tok-name)) (pair (%py-name->sym (%py-val n)) acc) acc)))
+            (%py-import-binds-next after (pair (%py-name->sym (%py-val t)) acc))))))))
+(def %py-import-binds-next
+  (fn (_ toks acc)
+    (if (%py-op-is? (if (null? toks) () (first toks)) ",")
+      (%py-import-binds (rest toks) acc)
+      acc)))
+(def %py-dotted-skip
+  (fn (self toks)
+    (if (if (%py-op-is? (if (null? toks) () (first toks)) ".")
+          (if (null? (rest toks)) #f (eq? (%py-tag (first (rest toks))) (lit tok-name)))
+          #f)
+      (self (rest (rest toks)))
+      toks)))
+
 ; The name after `as` in an except clause.
 (def %py-as-target?
   (fn (_ toks)
@@ -4356,9 +4423,24 @@
                      (%py-append (%py-bound-names %toks ()) (%py-param-names %toks ()))
                      ()))
     (%set-first! %py-undef-names %undef)
+    ; the names def and import statements bind that neither hoist above binds:
+    ; a builtin's, which starts as the builtin (%py-hoist), or one some def
+    ; also takes as a parameter
+    (def %binds
+      (%py-minus (%py-dedupe () (%py-stmt-binds %toks ()) ())
+        (%py-append (%py-strs->syms %undef) %targets)))
     (def %body (%py-check-escapes (first (%py-stmts (%py-semi->nl %toks) ()))))
     (%py-append (%py-shims %undef ())
-      (%py-append (%py-decls %targets ()) %body))))
+      (%py-append (%py-bind-hoists %binds)
+        (%py-append (%py-decls %targets ()) %body)))))
+
+; A module's def and import names bound first, unbound as %py-deleted, so the
+; statement's own assignment finds them wherever it stands.
+(def %py-bind-hoists
+  (fn (self syms)
+    (if (null? syms)
+      ()
+      (pair (list (lit %py-hoist) (first syms) (lit %py-deleted)) (self (rest syms))))))
 
 ; Parameter names: any name between a def's parens.
 (def %py-param-names
