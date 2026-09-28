@@ -748,6 +748,8 @@
 (def %py-exc-OSError         (%py-exc-new "OSError"         %py-exc-Exception))
 (def %py-exc-FileNotFoundError
   (%py-exc-new "FileNotFoundError" %py-exc-OSError))
+(def %py-exc-FileExistsError
+  (%py-exc-new "FileExistsError" %py-exc-OSError))
 (def %py-exc-PermissionError
   (%py-exc-new "PermissionError" %py-exc-OSError))
 (def %py-exc-IsADirectoryError

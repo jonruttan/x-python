@@ -7,8 +7,8 @@
 ;   points for the text one and bytes for the binary one, which is the only
 ;   difference between them -- what read and getvalue hand back, and what
 ;   write takes apart.  A file open() answers is that stream over a
-;   descriptor, read a chunk at a time as it is asked for.  And the classes
-;   of the standard streams sys holds.
+;   descriptor, read a chunk at a time as it is asked for and written as it
+;   is written to.  And the classes of the standard streams sys holds.
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan
 ; @license MIT No Attribution (MIT-0)
@@ -38,10 +38,13 @@
 ; field holds what it was opened as, (NAME MODE ENCODING), and a sixth what
 ; reading it keeps:
 ;
-;   0 the descriptor        4 whether a \r waits for what follows it
-;   1 bytes not yet decoded 5 (ENCODING ERRORS NEWLINE), for text
-;   2 whether the end came  6 the string each read fills
-;   3 the position the buffer starts at
+;   0 the descriptor        5 (ENCODING ERRORS NEWLINE), for text
+;   1 bytes not yet decoded 6 the string each read fills
+;   2 whether the end came  7 whether it reads
+;   3 the position the      8 whether it writes
+;     buffer starts at
+;   4 whether a \r waits
+;     for what follows it
 ;
 ; The buffer holds what was read and not yet taken, so a file costs what is
 ; asked of it.  An in-memory stream has neither field, and its buffer starts
@@ -51,10 +54,10 @@
 (def %py-io-bref (prim-ref (lit str) (lit byte-ref)))
 (def %py-io-code (prim-ref (lit char) (lit ->int)))
 (def %py-io-file-new
-  (fn (_ text? info fd decode)
+  (fn (_ text? info fd decode reads? writes? at)
     (%make-instance %py-io
-      (list text? (list ()) (list 0) (list #f) info
-        (list fd () #f 0 #f decode (%py-io-make %py-io-chunk))))))
+      (list text? (list ()) (list at) (list #f) info
+        (list fd () #f at #f decode (%py-io-make %py-io-chunk) reads? writes?)))))
 (def %py-io-info
   (fn (_ v)
     (let ((r (rest (rest (rest (rest (first v)))))))
@@ -73,7 +76,9 @@
     (match
       ((null? (%py-io-info v)) (if (%py-io-text? v) "io.StringIO" "io.BytesIO"))
       ((%py-io-text? v) "_io.TextIOWrapper")
-      (#t "_io.BufferedReader"))))
+      ((not (%py-io-st v 8)) "_io.BufferedReader")
+      ((%py-io-st v 7) "_io.BufferedRandom")
+      (#t "_io.BufferedWriter"))))
 
 ; The class a stream answers to, for type() and isinstance: a file's is the
 ; one CPython opens it as.
@@ -82,7 +87,9 @@
     (match
       ((null? (%py-io-info v)) (if (%py-io-text? v) %py-cls-StringIO %py-cls-BytesIO))
       ((%py-io-text? v) %py-cls-TextIOWrapper)
-      (#t %py-cls-BufferedReader))))
+      ((not (%py-io-st v 8)) %py-cls-BufferedReader)
+      ((%py-io-st v 7) %py-cls-BufferedRandom)
+      (#t %py-cls-BufferedWriter))))
 
 ; <io.StringIO object>, and a file as CPython prints one:
 ; <_io.TextIOWrapper name='a.txt' mode='r' encoding='utf-8'>, or for bytes
@@ -112,6 +119,18 @@
         (if (%py-io-file? v) "I/O operation on closed file." "I/O operation on closed file")
         ())
       ())))
+
+; An open stream that reads, or the refusal of one that does not.
+(def %py-io-reads!
+  (fn (_ v)
+    (%seq (%py-io-shut! v)
+      (if (if (%py-io-file? v) (not (%py-io-st v 7)) #f)
+        (%py-io-refuse! "not readable")
+        ()))))
+(def %py-io-refuse!
+  (fn (_ what)
+    (%py-raise
+      (%py-instantiate %py-exc-UnsupportedOperation (list (%py-str-of-x what))))))
 
 ; A stream prints as its class and nothing about its contents, which is the
 ; shape every object here prints in; a file, as its name and mode too.
@@ -227,8 +246,9 @@
             (%py-io-st! v 3 (+ (%py-io-base v) k)))))
       ())))
 
-(def %py-io-newline?
-  (fn (self l) (if (null? l) #f (if (= (first l) 10) #t (self (rest l))))))
+(def %py-io-member?
+  (fn (self x l) (if (null? l) #f (if (= (first l) x) #t (self x (rest l))))))
+(def %py-io-newline? (fn (_ l) (%py-io-member? 10 l)))
 
 ; WANT is a count of elements, () for all there is, or `line` for as far as
 ; the next \n: whether N elements, the newest of them C, are enough.
@@ -307,10 +327,11 @@
 
 ; A position in bytes is the descriptor's offset, so a byte file seeks there
 ; and reads nothing.  A position in text is a count of code points, which
-; only reading finds: backwards is from the start again.
+; only reading finds: backwards is from the start again.  A text file that
+; does not read has only its descriptor to go by, and its positions are bytes.
 (def %py-io-file-seek!
   (fn (_ v off whence)
-    (if (%py-io-text? v)
+    (if (if (%py-io-text? v) (%py-io-st v 7) #f)
       (let ((p (+ off (match
                         ((= whence 1) (%py-io-pos v))
                         ((= whence 2) (%py-io-end! v))
@@ -334,15 +355,126 @@
         ())
       (%seq (%set-first! (List ref 3 (first v)) #t) ()))))
 
+; --- writing a file ---------------------------------------------------------------
+; A write goes to the descriptor as it is made: nothing waits in a buffer, so
+; a file that is never closed has what was written to it.
+
+; BS written, all of it.
+(def %py-io-put!
+  (fn (self v bs)
+    (if (null? bs)
+      ()
+      (let ((n (%ps-write-bytes-to (%py-io-st v 0) bs)))
+        (match
+          ((< n 0) (%py-os-raise! (Err errno-of n) (first (%py-io-info v))))
+          ((< n (%py-length bs)) (self v (%py-drop bs n)))
+          (#t ()))))))
+
+; What a write takes: a str for text, bytes or a bytearray for bytes.
+(def %py-io-written
+  (fn (_ v x)
+    (match
+      ((%py-io-text? v)
+        (if (%py-str-is x)
+          (%py-str-cps x)
+          (Err raise (lit type)
+            (Str8 append "write() argument must be str, not "
+              (%py-class-name (%py-type-of x))) ())))
+      ((%py-bytes-is x) (%py-bytes-list x))
+      (#t
+        (Err raise (lit type)
+          (Str8 append "a bytes-like object is required, not '"
+            (Str8 append (%py-class-name (%py-type-of x)) "'")) ())))))
+
+; The bytes text goes out as: each \n as the newline argument when that is
+; \r or \r\n, and the whole in the file's encoding.
+(def %py-io-encoded
+  (fn (_ v cps)
+    (let ((d (%py-io-st v 5)))
+      (let ((nl (first (rest (rest d)))))
+        (%ps-encode-as
+          (if (null? nl) cps
+            (let ((to (%py-str-cps nl)))
+              (if (%py-io-member? 13 to) (%py-io-turn cps to ()) cps)))
+          (first d) (first (rest d)))))))
+(def %py-io-turn
+  (fn (self cps to acc)
+    (match
+      ((null? cps) (%py-reverse acc))
+      ((= (first cps) 10) (self (rest cps) to (%py-rev-onto to acc)))
+      (#t (self (rest cps) to (pair (first cps) acc))))))
+
+; What was read ahead of the position is let go before a write.  In bytes
+; the descriptor's offset is brought back to the position, which is that
+; offset.  In text the write lands where the descriptor is, past what was
+; read ahead, and what was read and not taken is dropped: CPython's text
+; files do the same, and a program that means the position seeks to it.
+(def %py-io-sync!
+  (fn (_ v)
+    (%seq (%py-io-trim! v)
+      (match
+        ((not (%py-io-st v 7)) ())
+        ((%py-io-text? v)
+          (%py-io-restart! v (%py-io-lseek! v 0 (lit cur)) (%py-io-pos v)))
+        (#t (%py-io-restart! v (%py-io-pos v) (%py-io-pos v)))))))
+
+(def %py-io-file-write!
+  (fn (_ v x)
+    (if (not (%py-io-st v 8))
+      (%py-io-refuse! "not writable")
+      (let ((new (%py-io-written v x)))
+        (%seq (%py-io-sync! v)
+          (%seq (%py-io-put! v (if (%py-io-text? v) (%py-io-encoded v new) new))
+            (%seq (%py-io-wrote! v (%py-length new))
+              (%py-length new))))))))
+
+; After a write the position is past it; in bytes that is where the
+; descriptor is, which for a file that appends is its end.
+(def %py-io-wrote!
+  (fn (_ v n)
+    (let ((p (if (%py-io-text? v)
+               (+ (%py-io-pos v) n)
+               (%py-io-lseek! v 0 (lit cur)))))
+      (%seq (%py-io-pos! v p)
+        (%seq (%py-io-buf! v ())
+          (%seq (%py-io-st! v 3 p) (%py-io-st! v 2 #f)))))))
+
+; truncate(), truncate(None): at the position; truncate(n): at n bytes.  The
+; position stays.  A text file's position is not a count of bytes, so with
+; text read and not taken there is no saying where it is, and truncate()
+; wants its size.
+(def %py-io-truncate!
+  (fn (_ v . more)
+    (%seq (%py-io-shut! v)
+      (if (not (if (%py-io-file? v) (%py-io-st v 8) #f))
+        (%py-io-refuse! "truncate")
+        (%seq
+          (if (match
+                ((not (%py-io-text? v)) #f)
+                ((not (null? more)) (null? (first more)))
+                (#t #t))
+            (%seq (%py-io-trim! v)
+              (if (if (null? (%py-io-buf v)) (null? (%py-io-st v 1)) #f)
+                ()
+                (%py-io-refuse! "truncate() after a read wants a size")))
+            ())
+          (%seq (%py-io-sync! v)
+            (let ((n (match
+                       ((null? more) (%py-io-lseek! v 0 (lit cur)))
+                       ((null? (first more)) (%py-io-lseek! v 0 (lit cur)))
+                       (#t (%py-boolnorm (first more))))))
+              (let ((r (File truncate (%py-io-st v 0) n)))
+                (if (< r 0)
+                  (%py-os-raise! (Err errno-of r) (first (%py-io-info v)))
+                  n)))))))))
+
 ; --- the operations ---------------------------------------------------------------
 
 (def %py-io-write!
   (fn (_ v x)
     (%seq (%py-io-shut! v)
       (if (%py-io-file? v)
-        ; a file is open for reading only
-        (%py-raise
-          (%py-instantiate %py-exc-UnsupportedOperation (list (%py-str-of-x "not writable"))))
+        (%py-io-file-write! v x)
         (let ((new (%py-io-elems-of v x)))
           (%seq
             (%py-io-buf! v (%py-io-lay (%py-io-buf v) (%py-io-pos v) new))
@@ -358,7 +490,7 @@
 ; read(), read(None) and read(-1) are all there is; read(n) at most n.
 (def %py-io-read
   (fn (_ v . more)
-    (%seq (%py-io-shut! v)
+    (%seq (%py-io-reads! v)
       (let ((n (match
                  ((null? more) ())
                  ((null? (first more)) ())
@@ -391,7 +523,7 @@
 
 (def %py-io-readinto!
   (fn (_ v arr)
-    (%seq (%py-io-shut! v)
+    (%seq (%py-io-reads! v)
       (if (not (%py-barr-is arr))
         (Err raise (lit type) "readinto() wants a bytearray" ())
         (let ((room (%py-length (%py-bytes-list arr))))
@@ -416,7 +548,7 @@
 ; readlines() -- with the position where the last of them ended.
 (def %py-io-drain!
   (fn (_ v)
-    (%seq (%py-io-shut! v)
+    (%seq (%py-io-reads! v)
       (%seq (%py-io-need! v ())
         (let ((ls (%py-io-elems v)))
           (%seq (%py-io-pos! v (+ (%py-io-base v) (%py-length (%py-io-buf v))))
@@ -436,10 +568,13 @@
 ; a file is read as far as the loop has come.
 (def %py-io-line!
   (fn (_ v)
-    (%seq (%py-io-shut! v)
+    (%seq (%py-io-reads! v)
       (%seq (%py-io-need! v (lit line))
         (let ((got (%py-io-took! v (%py-io-line-take (%py-io-rest v) ()))))
           (if (null? got) () (%py-io-value-of v got)))))))
+
+(def %py-io-each
+  (fn (self f l) (if (null? l) () (%seq (f (first l)) (self f (rest l))))))
 
 (def %py-io-readline
   (fn (_ v)
@@ -463,7 +598,7 @@
       ((Str8 =? name "seek") (fn (_ n . a) (apply %py-io-seek! (pair v (pair n a)))))
       ((Str8 =? name "readinto") (fn (_ arr) (%py-io-readinto! v arr)))
       ((Str8 =? name "readline") (fn (_) (%py-io-readline v)))
-      ((Str8 =? name "flush") (fn (_) ()))
+      ((Str8 =? name "flush") (fn (_) (%py-io-shut! v)))
       ((Str8 =? name "close") (fn (_) (%py-io-close! v)))
       ((Str8 =? name "__enter__") (fn (_) (%seq (%py-io-shut! v) v)))
       ((Str8 =? name "__exit__") (fn (_ . a) (%py-io-close! v)))
@@ -472,8 +607,14 @@
         (fn (_) (let ((l (%py-io-line! v))) (if (null? l) (%py-raise-stop ()) l))))
       ((Str8 =? name "readlines") (fn (_) (%py-io-iter! v)))
       ((Str8 =? name "closed") (%py-io-closed? v))
-      ((Str8 =? name "readable") (fn (_) (%seq (%py-io-shut! v) #t)))
-      ((Str8 =? name "writable") (fn (_) (%seq (%py-io-shut! v) (not (%py-io-file? v)))))
+      ((Str8 =? name "readable")
+        (fn (_) (%seq (%py-io-shut! v) (if (%py-io-file? v) (%py-io-st v 7) #t))))
+      ((Str8 =? name "writable")
+        (fn (_) (%seq (%py-io-shut! v) (if (%py-io-file? v) (%py-io-st v 8) #t))))
+      ((Str8 =? name "writelines")
+        (fn (_ lines)
+          (%seq (%py-io-each (fn (_ x) (%py-io-write! v x)) (%py-iter-elems lines)) ())))
+      ((Str8 =? name "truncate") (fn (_ . a) (apply %py-io-truncate! (pair v a))))
       ((Str8 =? name "seekable")
         (fn (_)
           (%seq (%py-io-shut! v)
@@ -624,6 +765,9 @@
 (def %py-cls-BufferedReader
   (%py-class-new "BufferedReader" %py-cls-IOBase (%py-io-std-methods %py-io-std-write-bytes)
     "_io.BufferedReader"))
+(def %py-cls-BufferedRandom
+  (%py-class-new "BufferedRandom" %py-cls-IOBase (%py-io-std-methods %py-io-std-write-bytes)
+    "_io.BufferedRandom"))
 
 ; One standard stream: fd, its name as CPython spells it, and whether it writes.
 (def %py-io-std
@@ -646,19 +790,20 @@
 
 ; --- files --------------------------------------------------------------------------
 ; open(file, mode='r', buffering, encoding, errors, newline, closefd, opener): a
-; file opened to read.  Opening one reads nothing: what is asked of it is read
-; from its descriptor a chunk at a time -- the text the bytes decode to, or,
-; with a b in the mode, the bytes themselves -- and close() closes the
-; descriptor.  A text read turns \r\n and \r into \n unless the newline
-; argument asks otherwise, as CPython's universal newlines do.  A relative
-; path is the working directory's, as the process has it.  Writing a file is
-; not offered here, and a mode that asks for it is refused.
+; file opened as the mode says -- r to read, w to write from empty, a to
+; write at the end, x to write a file that must not exist yet, each with a +
+; to do both.  Opening one reads nothing: what is asked of it is read from its
+; descriptor a chunk at a time -- the text the bytes decode to, or, with a b
+; in the mode, the bytes themselves -- a write goes to the descriptor as it
+; is made, and close() closes it.  A text read turns \r\n and \r into \n
+; unless the newline argument asks otherwise, as CPython's universal newlines
+; do.  A relative path is the working directory's, as the process has it.
 (def %py-open
   (%py-sig!
     (fn (_ file . a)
       (def mode (%py-open-text (%py-opt a 0 ()) "r"))
       (def encoding (%py-opt a 2 ()))
-      (def binary? (not (null? (Str8 index-of "b" mode))))
+      (def binary? (%py-open-has? mode "b"))
       (%py-open-mode! mode binary? encoding)
       (def path
         (if (%py-str-is file)
@@ -667,21 +812,54 @@
       (def enc (%py-open-text encoding "utf-8"))
       ; an encoding nothing here knows is refused before the file is opened
       (if binary? () (%ps-codec enc))
+      (def both? (%py-open-has? mode "+"))
+      (def reads? (if both? #t (%py-open-has? mode "r")))
+      (def writes? (if both? #t (not (%py-open-has? mode "r"))))
+      (def fd (%py-open-fd path (%py-open-flags mode both?)))
+      ; a file that appends starts at its end
+      (def at (if (%py-open-has? mode "a") (File seek fd 0 (lit end)) 0))
       (if binary?
-        (%py-io-file-new #f (list path mode ()) (%py-open-fd path) ())
-        (%py-io-file-new #t (list path mode enc) (%py-open-fd path)
-          (list enc (%py-open-text (%py-opt a 3 ()) "strict") (%py-opt a 4 ())))))
+        (%py-io-file-new #f (list path (%py-open-bytes-mode mode both?) ()) fd ()
+          reads? writes? at)
+        (%py-io-file-new #t (list path mode enc) fd
+          (list enc (%py-open-text (%py-opt a 3 ()) "strict") (%py-opt a 4 ()))
+          reads? writes? at)))
     "open" (list "file" "mode" "buffering" "encoding" "errors" "newline" "closefd" "opener")
     1 #f))
 
+(def %py-open-has?
+  (fn (_ mode c) (not (null? (Str8 index-of c mode)))))
+
+; What the platform's open is asked for.
+(def %py-open-flags
+  (fn (_ mode both?)
+    (pair (if both? (lit rdwr) (if (%py-open-has? mode "r") (lit rdonly) (lit wronly)))
+      (match
+        ((%py-open-has? mode "w") (list (lit creat) (lit trunc)))
+        ((%py-open-has? mode "a") (list (lit creat) (lit append)))
+        ((%py-open-has? mode "x") (list (lit creat) (lit excl)))
+        (#t ())))))
+
+; The mode a byte file answers, which is CPython's spelling and not the one
+; it was opened with: xb, ab, rb+ for any that reads and writes, wb, rb.
+(def %py-open-bytes-mode
+  (fn (_ mode both?)
+    (match
+      ((%py-open-has? mode "x") (if both? "xb+" "xb"))
+      ((%py-open-has? mode "a") (if both? "ab+" "ab"))
+      (both? "rb+")
+      ((%py-open-has? mode "w") "wb")
+      (#t "rb"))))
+
 ; The descriptor, or the OSError that says why there is none.  A directory
 ; opens to read as a descriptor nothing can be read from, so it is refused
-; here, as CPython refuses it.
+; here, as CPython refuses it.  A file made here is made readable and
+; writable by all, less what the process's umask takes away.
 (def %py-open-fd
-  (fn (_ path)
+  (fn (_ path flags)
     (if (%py-open-dir? path)
       (%py-os-raise! 21 path)
-      (let ((fd (File open path (lit rdonly))))
+      (let ((fd (File open path flags 438)))
         (if (< fd 0) (%py-os-raise! (Err errno-of fd) path) fd)))))
 ; the file type bits of the mode say directory
 (def %py-open-dir?
@@ -697,6 +875,7 @@
         (match
           ((= en 2) %py-exc-FileNotFoundError)
           ((= en 13) %py-exc-PermissionError)
+          ((= en 17) %py-exc-FileExistsError)
           ((= en 21) %py-exc-IsADirectoryError)
           (#t %py-exc-OSError))
         (list en (%py-str-of-x (%py-os-text en)) (%py-str-of-x path))))))
@@ -714,35 +893,38 @@
       ((%py-str-is v) (%py-text->x v))
       (#t (Err raise (lit type) "open() takes its mode, encoding and errors as strs" ())))))
 
-; What CPython refuses in a mode it refuses here too; what it would open for
-; writing is refused here as not offered.
+; What CPython refuses in a mode is refused here, in its words and its order.
 (def %py-open-mode!
   (fn (_ mode binary? encoding)
-    (match
-      ((%py-open-any? mode (list "w" "a" "x" "+"))
-        (%py-raise
-          (%py-instantiate %py-exc-UnsupportedOperation
-            (list (%py-str-of-x "open() here reads files; writing one is not offered")))))
-      ((not (%py-open-only? mode 0))
-        (Err raise (lit value) (Str8 append "invalid mode: '" (Str8 append mode "'")) ()))
-      ((if binary? (not (null? (Str8 index-of "t" mode))) #f)
-        (Err raise (lit value) "can't have text and binary mode at once" ()))
-      ((if binary? (not (null? encoding)) #f)
-        (Err raise (lit value) "binary mode doesn't take an encoding argument" ()))
-      (#t ()))))
-(def %py-open-any?
-  (fn (self mode cs)
-    (if (null? cs) #f
-      (if (null? (Str8 index-of (first cs) mode)) (self mode (rest cs)) #t))))
-; every character r, t or b
+    (let ((n (%py-open-count mode (list "r" "w" "a" "x") 0)))
+      (match
+        ((not (%py-open-only? mode 0 ""))
+          (Err raise (lit value) (Str8 append "invalid mode: '" (Str8 append mode "'")) ()))
+        ((if binary? (%py-open-has? mode "t") #f)
+          (Err raise (lit value) "can't have text and binary mode at once" ()))
+        ((> n 1)
+          (Err raise (lit value) "must have exactly one of create/read/write/append mode" ()))
+        ((= n 0)
+          (Err raise (lit value)
+            "Must have exactly one of create/read/write/append mode and at most one plus"
+            ()))
+        ((if binary? (not (null? encoding)) #f)
+          (Err raise (lit value) "binary mode doesn't take an encoding argument" ()))
+        (#t ())))))
+(def %py-open-count
+  (fn (self mode cs n)
+    (if (null? cs) n
+      (self mode (rest cs) (if (%py-open-has? mode (first cs)) (+ n 1) n)))))
+; every character one a mode may hold, and none of them twice
 (def %py-open-only?
-  (fn (self mode i)
+  (fn (self mode i seen)
     (if (>= i (Str8 length mode))
       #t
       (let ((c (Str8 sub i 1 mode)))
-        (if (match ((Str8 =? c "r") #t) ((Str8 =? c "t") #t) (#t (Str8 =? c "b")))
-          (self mode (+ i 1))
-          #f)))))
+        (match
+          ((not (%py-open-has? "rwaxbt+" c)) #f)
+          ((%py-open-has? seen c) #f)
+          (#t (self mode (+ i 1) (Str8 append seen c))))))))
 
 ; \r\n and a lone \r read as \n when NEWLINE is None, the default.
 (def %py-universal
