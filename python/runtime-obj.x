@@ -794,12 +794,14 @@
         (rest (first rows))
         (self k (rest rows))))))
 
-; The platform's door to an error's tag.  This straddled two spellings while
-; the pin sat at v0.13.0, which said (Err kind-of e), and x-lang main had
-; already moved to (Err tag e) -- the probe is gone now that the pin declares
-; v0.14.0, which is the release that renamed it.  That was the instruction the
-; probe left for whoever moved the pin.
-(def %py-err-tag (fn (_ e) (Err tag e)))
+; The platform's door to an error's label, by whichever name the platform
+; has for it: (Err tag e) up to v0.16.0, (Err label e) after it.  Asked once,
+; at load.  When the pin declares a release that says (Err label e), the
+; probe goes and the second spelling stays.
+(def %py-err-tag
+  (guard (_ (fn (_ e) (Err tag e)))
+    (do (Err label "probe")
+        (fn (_ e) (Err label e)))))
 
 ; The class of whatever was raised, whichever of the two shapes it is.
 (def %py-exc-class-of
