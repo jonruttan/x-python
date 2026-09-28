@@ -173,6 +173,39 @@ denotes belongs to the evaluator, not here.
 ---
     (('tok-number "1_000" 1))
 
+### the two doors are the platform's, under the name it has
+
+An accepting state declares which number it saw, and the reader recovers it,
+through a pair of platform names: `%score-label!` and `%read-label`, or
+`%score-variant!` and `%read-variant` through x-lang v0.16.0. Each door takes
+the name it finds bound, the newer first, so on either platform the door is
+the platform's own function and not the fallback that answers nothing.
+
+```python
+(do (import python/tokens %py-variant! %py-read-variant)
+  (list (same? %py-variant! (guard (e (guard (e ()) %score-variant!)) %score-label!))
+          (same? %py-read-variant (guard (e (guard (e ()) %read-variant)) %read-label))))
+```
+---
+    (#t #t)
+
+### the compiled number states spell the same name
+
+The compiled states declare through the assembler lane, which knows the
+platform's name and refuses the other. The attempt tries the newer name, then
+the older, and keeps the one the lane took. Where the platform compiles no
+states at all the attempt raises, and there is nothing to check.
+
+```python
+(do (import python/tokens %py-jit-variants %py-jit-compile!)
+  (guard (e #t)
+    (%py-jit-compile!)
+    (eq? (first %py-jit-variants)
+         (guard (e (lit %score-variant!)) (%seq %score-label! (lit %score-label!))))))
+```
+---
+    #t
+
 ## tokenizer strings
 
 A string token's value is a list of UTF-8 BYTES, not a platform string, and
