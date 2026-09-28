@@ -97,14 +97,20 @@
 ; and the token is (tok-number "text" VARIANT).
 ;
 ; TWO DOORS, ONE FALLBACK.  On a platform with the channel (x-lang
-; reader/intrinsics.x: %score-variant! at the analyser's end, %read-variant at the
-; reader's; the engine hangs a variant cell off the score), the state's
-; declaration reaches the read handler.  On one without, both names are
-; unbound, the two doors below answer nothing, and the read handler derives
-; the same variant from the text through the raw byte primitives -- so the token
-; stream is identical either way, and %py-num never rescans.
-(def %py-variant! (guard (e (fn (_ score variant) ())) %score-variant!))
-(def %py-read-variant (guard (e (fn (_ args) ())) %read-variant))
+; reader/intrinsics.x: one name at the analyser's end, one at the reader's;
+; the engine hangs a cell off the score), the state's declaration reaches the
+; read handler.  The platform names the pair %score-label! and %read-label, and
+; named it %score-variant! and %read-variant through v0.16.0; each door takes
+; the name it finds bound, the newer first.  On a platform without the channel
+; neither is bound, the two doors below answer nothing, and the read handler
+; derives the same variant from the text through the raw byte primitives -- so
+; the token stream is identical either way, and %py-num never rescans.
+(def %py-variant!
+  (guard (e (guard (e (fn (_ score variant) ())) %score-variant!))
+    %score-label!))
+(def %py-read-variant
+  (guard (e (guard (e (fn (_ args) ())) %read-variant))
+    %read-label))
 
 (def %py-code-at (fn (_ s i) (%py-char->int (%str-ref s i))))
 
@@ -1471,15 +1477,16 @@
 ; is a transient and %py-tok-reset! empties it with the base.
 (def %py-jit-states (pair () ()))
 ; THE COMPILED STATES DECLARE VARIANTS ONLY WHERE THE LANE CAN SPELL IT.  A
-; platform whose emitter has no %score-variant! refuses the form, and the attempt
-; runs under a guard that would pin `failed` for all of it -- so the attempt
-; probes once and builds the number states with or without the declaration.
+; platform whose emitter has neither %score-label! nor %score-variant! refuses
+; the form, and the attempt runs under a guard that would pin `failed` for all
+; of it -- so the attempt probes once and builds the number states with or
+; without the declaration.  The cell holds the name the lane spells, or #f.
 ; The interpreted twins go through %py-variant!, a no-op on such a platform.
 (def %py-jit-variants (pair #f ()))
 (def %py-jit-accept
   (fn (_ k)
     (if (first %py-jit-variants)
-      (list (lit %seq) (list (lit %score-variant!) (lit score) k) (lit (%score-set score 1 buffer)))
+      (list (lit %seq) (list (first %py-jit-variants) (lit score) k) (lit (%score-set score 1 buffer)))
       (lit (%score-set score 1 buffer)))))
 (def %py-jit-unread-accept
   (fn (_ k) (list (lit %seq) (lit (%buffer-unread buffer)) (%py-jit-accept k))))
@@ -1508,8 +1515,11 @@
     (def jc (fn (_ form fvars) (%py-jit-keep! (compile-asm form fvars #t))))
     ; can this lane spell a variant?  (probed, never called -- see %py-jit-variants)
     (%set-first! %py-jit-variants
-      (guard (e #f)
-        (%seq (jc (lit (fn (_ buffer score chr) (%score-variant! score 1))) ()) #t)))
+      (guard (e (guard (e #f)
+                  (%seq (jc (lit (fn (_ buffer score chr) (%score-variant! score 1))) ())
+                        (lit %score-variant!))))
+        (%seq (jc (lit (fn (_ buffer score chr) (%score-label! score 1))) ())
+              (lit %score-label!))))
     ; -- body states --
     (def wsc
       (jc
@@ -1937,4 +1947,5 @@
   mk-tok-bytes mk-tok-fstring mk-tok-group mk-tok-block
   %py-unescape-bytes %py-unescape-cps %py-code-at
   %py-hexval %py-int->char %py-list->string
-  %py-jit %py-jit-compile! %py-jit-threshold)
+  %py-jit %py-jit-compile! %py-jit-threshold %py-jit-variants
+  %py-variant! %py-read-variant)

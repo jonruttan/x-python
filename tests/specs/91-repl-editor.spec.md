@@ -121,7 +121,8 @@ left of the cursor, so a stand-in with that method serves here as it does in
 (%seq
   (do
     (import python/line %py-complete)
-    (def-class %spec-edit () text (method before (self) (member (lit text))))
+    (def-class %spec-edit () text
+      (method before (self) (guard (_ (member (lit text))) (field (lit text)))))
     (write (list (%py-complete (new %spec-edit text "x = pri"))
                  (%py-complete (new %spec-edit text "x = ")))))
   (newline))
