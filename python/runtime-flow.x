@@ -1008,13 +1008,15 @@
     (if (= (Str8 length dir) 0) name (Str8 append dir (Str8 append "/" name)))))
 
 ; The type of what PATH names -- 'file, 'dir or another -- or () when nothing
-; is there.  It is the row File stat keys `kind` (x/sys/file).
+; is there.  It is the row File stat keys `kind` up to x-lang v0.16.0 and
+; `file-type` after it (x/sys/file), and either is taken.
 (def %py-file-type
   (fn (_ path) (guard (_ ()) (%py-stat-type (File stat path)))))
 (def %py-stat-type
   (fn (self rows)
     (match
       ((null? rows) ())
+      ((eq? (first (first rows)) (lit file-type)) (rest (first rows)))
       ((eq? (first (first rows)) (lit kind)) (rest (first rows)))
       (#t (self (rest rows))))))
 
