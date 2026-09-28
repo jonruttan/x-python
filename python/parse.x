@@ -1689,6 +1689,7 @@
         (list "OSError"           (lit %py-exc-OSError))
         (list "FileNotFoundError" (lit %py-exc-FileNotFoundError))
         (list "PermissionError"   (lit %py-exc-PermissionError))
+        (list "FileExistsError"   (lit %py-exc-FileExistsError))
         (list "IsADirectoryError" (lit %py-exc-IsADirectoryError))
         (list "open"              (lit %py-open))
         (list "IOError"           (lit %py-exc-OSError))

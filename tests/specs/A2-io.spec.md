@@ -85,8 +85,9 @@ True True
 
 ## files
 
-`open` opens a file to read and reads nothing: what is asked of the file is
-read from its descriptor a chunk of 8192 bytes at a time -- the text the bytes
+`open` opens a file as its mode says and reads nothing: a write goes to the
+descriptor as it is made, and what is asked of the file is read from its
+descriptor a chunk of 8192 bytes at a time -- the text the bytes
 decode to, with `\r\n` and a lone `\r` read as `\n`, or with a `b` in the
 mode the bytes themselves.  A relative path is the working directory's, which
 is the bundle's root here.
@@ -176,15 +177,91 @@ LookupError unknown encoding: klingon
 True False
 ```
 
-### a mode that would write is refused
-
-DIVERGENCE: CPython opens the file for writing; writing a file is not offered
-here, and the refusal is an `io.UnsupportedOperation`, an `OSError`.
+### text written, appended and read back, and a file never closed
 
 ```python
-(python-run "try:\n    open(\"tests/modules/data/out.txt\", \"w\")\nexcept OSError as e:\n    print(type(e).__name__)")
+(do (guard (_ ()) (File unlink "/tmp/x-python-io-w1.txt"))
+    (python-run "p = \"/tmp/x-python-io-w1.txt\"\nf = open(p, \"w\", encoding=\"utf-8\")\nprint(f.write(\"first été\\n\"), f.write(\"\"), f.writable(), f.readable(), f.mode, type(f).__name__)\nprint(f)\ntry:\n    f.read()\nexcept OSError as e:\n    print(type(e).__name__, e)\ntry:\n    f.write(b\"x\")\nexcept TypeError as e:\n    print(\"TypeError\", e)\nf.writelines([\"a\\n\", \"b\\n\"])\nf.close()\ntry:\n    f.write(\"x\")\nexcept ValueError as e:\n    print(\"ValueError\", e)\nwith open(p, \"a\", encoding=\"utf-8\") as f:\n    print(f.write(\"more π\\n\"), f.mode)\nprint(repr(open(p, encoding=\"utf-8\").read()))\nwith open(p, \"rb\") as f:\n    print(f.read())\nwith open(p, \"w\") as f:\n    pass\nprint(repr(open(p).read()))\nwith open(p, \"w\", newline=\"\\r\\n\") as f:\n    f.write(\"a\\nb\\n\")\nprint(open(p, \"rb\").read())\nopen(p, \"w\").write(\"never closed\\n\")\nprint(open(p).read())")
+    (File unlink "/tmp/x-python-io-w1.txt")
+    ())
 ```
 ---
 ```output
-UnsupportedOperation
+10 0 True False w TextIOWrapper
+<_io.TextIOWrapper name='/tmp/x-python-io-w1.txt' mode='w' encoding='utf-8'>
+UnsupportedOperation not readable
+TypeError write() argument must be str, not bytes
+ValueError I/O operation on closed file.
+7 a
+'first été\na\nb\nmore π\n'
+b'first \xc3\xa9t\xc3\xa9\na\nb\nmore \xcf\x80\n'
+''
+b'a\r\nb\r\n'
+never closed
+
+```
+
+### bytes written, a file read and written, seeks and truncate
+
+```python
+(do (guard (_ ()) (File unlink "/tmp/x-python-io-w2.txt"))
+    (python-run "p = \"/tmp/x-python-io-w2.txt\"\nwith open(p, \"wb\") as f:\n    print(f.write(b\"0123456789\"), f.write(bytearray(b\"\\x00\\xff\")), f.tell(), f.mode, type(f).__name__, f)\n    try:\n        f.write(\"x\")\n    except TypeError as e:\n        print(\"TypeError\", e)\nwith open(p, \"r+b\") as f:\n    print(f.read(3), f.write(b\"AB\"), f.tell(), f.read(2), f.mode, type(f).__name__, f.readable(), f.writable())\n    print(f.seek(-2, 2), f.write(b\"zz!\"), f.seek(0), f.read())\n    print(f.seek(4), f.truncate(), f.truncate(6), f.tell(), f.seek(0), f.read())\nwith open(p, \"ab\") as f:\n    print(f.tell(), f.write(b\"++\"), f.tell())\nwith open(p, \"a+b\") as f:\n    print(f.tell(), f.write(b\"--\"), f.seek(0), f.read(), f.mode)\nwith open(p, \"w+b\") as f:\n    print(f.read(), f.write(b\"new\"), f.seek(0), f.read(), f.mode)")
+    (File unlink "/tmp/x-python-io-w2.txt")
+    ())
+```
+---
+```output
+10 2 12 wb BufferedWriter <_io.BufferedWriter name='/tmp/x-python-io-w2.txt'>
+TypeError a bytes-like object is required, not 'str'
+b'012' 2 5 b'56' rb+ BufferedRandom True True
+10 3 0 b'012AB56789zz!'
+4 4 6 4 0 b'012A\x00\x00'
+6 2 8
+8 2 0 b'012A\x00\x00++--' ab+
+b'' 3 0 b'new' rb+
+```
+
+### a text write after a read lands past what was read ahead
+
+```python
+(do (guard (_ ()) (File unlink "/tmp/x-python-io-w4.txt"))
+    (python-run "p = \"/tmp/x-python-io-w4.txt\"\nwith open(p, \"w\", encoding=\"utf-8\") as f:\n    f.write(\"été\\ncd\\nef\\n\")\nwith open(p, \"r+\", encoding=\"utf-8\") as f:\n    print(repr(f.readline()), f.write(\"XY\"), repr(f.readline()), f.seek(0), repr(f.read()))\nwith open(p, \"wb\") as f:\n    f.write(b\"ab\\r\\ncd\\r\\n\")\nwith open(p, \"r+\") as f:\n    print(repr(f.readline()), f.write(\"XY\"), repr(f.readline()))\n    print(f.seek(0), f.write(\"XY\"), f.seek(0), repr(f.read()))")
+    (File unlink "/tmp/x-python-io-w4.txt")
+    ())
+```
+---
+```output
+'été\n' 2 '' 0 'été\ncd\nef\nXY'
+'ab\n' 2 ''
+0 2 0 'XY\ncd\nXY'
+```
+
+### a file that must not exist yet, the modes refused, and the errors of opening
+
+```python
+(do (guard (_ ()) (File unlink "/tmp/x-python-io-w3.txt"))
+    (python-run "p = \"/tmp/x-python-io-w3.txt\"\nwith open(p, \"x\", encoding=\"utf-8\") as f:\n    print(f.write(\"made\\n\"), f.mode)\ntry:\n    open(p, \"x\")\nexcept FileExistsError as e:\n    print(type(e).__name__, e.errno, e)\nwith open(p, \"r+\", encoding=\"utf-8\") as f:\n    print(repr(f.read()), f.write(\"tail\\n\"), f.seek(0), repr(f.read()), f.mode)\nwith open(p, \"w+\", encoding=\"utf-8\") as f:\n    print(f.write(\"été\\nxy\\n\"), f.seek(0), repr(f.readline()), repr(f.read()))\nfor mode in (\"rw\", \"wa\", \"rr\", \"+\", \"w++\", \"U\", \"\", \"bt\", \"wbt\"):\n    try:\n        open(p, mode)\n    except ValueError as e:\n        print(repr(mode), \"ValueError\", e)\nfor args in ((\"/tmp/x-python-io-none/a.txt\", \"w\"), (\"/tmp\", \"w\")):\n    try:\n        open(*args)\n    except OSError as e:\n        print(type(e).__name__, e.errno, e)\ntry:\n    open(p, \"w\", encoding=\"ascii\").write(\"é\")\nexcept UnicodeEncodeError as e:\n    print(type(e).__name__)\nprint(issubclass(FileExistsError, OSError))\nimport io\nprint(io.open is open)")
+    (File unlink "/tmp/x-python-io-w3.txt")
+    ())
+```
+---
+```output
+5 x
+FileExistsError 17 [Errno 17] File exists: '/tmp/x-python-io-w3.txt'
+'made\n' 5 0 'made\ntail\n' r+
+7 0 'été\n' 'xy\n'
+'rw' ValueError must have exactly one of create/read/write/append mode
+'wa' ValueError must have exactly one of create/read/write/append mode
+'rr' ValueError invalid mode: 'rr'
+'+' ValueError Must have exactly one of create/read/write/append mode and at most one plus
+'w++' ValueError invalid mode: 'w++'
+'U' ValueError invalid mode: 'U'
+'' ValueError Must have exactly one of create/read/write/append mode and at most one plus
+'bt' ValueError can't have text and binary mode at once
+'wbt' ValueError can't have text and binary mode at once
+FileNotFoundError 2 [Errno 2] No such file or directory: '/tmp/x-python-io-none/a.txt'
+IsADirectoryError 21 [Errno 21] Is a directory: '/tmp'
+UnicodeEncodeError
+True
+True
 ```
