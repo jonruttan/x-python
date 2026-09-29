@@ -151,6 +151,8 @@
 (%py-sweep!)
 (import python/struct %py-struct-module)
 (%py-sweep!)
+(import python/cmath %py-cmath-module)
+(%py-sweep!)
 (import python/io
   %py-cls-BytesIO %py-cls-StringIO %py-io-attr %py-io-class %py-io-drain! %py-io-is
   %py-io-line! %py-io-module %py-io-text? %py-open)
