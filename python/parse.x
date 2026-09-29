@@ -59,7 +59,7 @@
 (import python/str)
 (import python/runtime)
 
-(provide python/parse python-parse python-parse-expr)
+(provide python/parse python-parse python-parse-expr python-parse-single)
 
 ; A NAME BECOMES A SYMBOL THROUGH THE ENGINE'S OWN DOOR.  (prim-ref str ->sym)
 ; is the interning the reader itself uses -- four objects, even for a symbol
@@ -775,13 +775,25 @@
         (def own
           (%py-minus (%py-strs->syms (%py-walrus-names (%py-before (rest sp) (rest b)) ()))
             (%py-param-syms sig)))
-        (def body
-          ((%py-fn-prelude "<lambda>" names dflts rest-sym () kwonly nreq)
-            (if (null? own) (first b) (list (lit let) (%py-lets own () ()) (first b)))))
+        (def inner
+          (if (null? own) (first b) (list (lit let) (%py-lets own () ()) (first b))))
+        (def body ((%py-fn-prelude "<lambda>" names dflts rest-sym () kwonly nreq) inner))
+        ; what its __code__ holds takes no default, as a def's does not
+        (def code-body
+          (if (if (null? dflts) (null? (%py-kwo-dflts kwonly ())) #f)
+            body
+            ((%py-fn-prelude "<lambda>" names () rest-sym () (%py-kwo-bare kwonly ())
+               (%py-length names))
+              inner)))
         (def sig-form
           (list (lit %py-sig!) (list (lit fn) (pair (lit %py-fn) (lit %py-more)) body)
             "<lambda>" (pair (lit list) names) nreq (not (null? rest-sym)) ()
-            (pair (lit list) (%py-kwo-names kwonly ())) #t (list (lit %py-here))))
+            (pair (lit list) (%py-kwo-names kwonly ())) #t (list (lit %py-here))
+            ; what its __code__ is made of (python/runtime-str.x)
+            (list (lit lit)
+              (list (list (lit fn) (pair (lit %py-fn) (lit %py-more)) code-body)
+                "<lambda>" names (%py-length names) (not (null? rest-sym)) ()
+                (%py-kwo-names kwonly ())))))
         (def all-dflts (%py-append dflts (%py-kwo-dflts kwonly ())))
         (pair (if (null? all-dflts) sig-form (list (lit let) (%py-dflt-lets all-dflts 0) sig-form))
           (rest b))))))
@@ -2628,13 +2640,13 @@
         ; parser.
         ((if (%py-op-is? t "-") #t
                     (if (%py-op-is? t "+") #t (%py-op-is? t "~")))
-          (%py-exprlist toks))
+          (%py-echoed (%py-exprlist toks)))
         ; A KEYWORD THAT BEGINS AN EXPRESSION -- yield, not, lambda, await
         ; -- begins an expression STATEMENT when no arm above claimed it.
         ; The postfix-target probe below has no arm for a keyword token
         ; (it used to see these as names and tolerate them by accident),
         ; so they go straight to the expression parser, which owns them.
-        ((eq? (%py-tag t) (lit tok-kw)) (%py-exprlist toks))
+        ((eq? (%py-tag t) (lit tok-kw)) (%py-echoed (%py-exprlist toks)))
         ; ASSIGNMENT IS DECIDED BY WHAT FOLLOWS A TARGET, not by the
         ; shape of the first token.  Parse a postfix expression -- a
         ; name, a subscript, an attribute, a call -- and then look.
@@ -2650,7 +2662,7 @@
                   (pair (%py-store (first tgt) (first r)) (rest r)))
                 (let ((aug (%py-op-sym nxt %py-aug-ops)))
                   (if (null? aug)
-                    (%py-exprlist toks)
+                    (%py-echoed (%py-exprlist toks))
                     ; `t op= v` is `t = t op v`, and v is an expression
                     ; list: `t += 1, 2` adds a tuple.  The target is
                     ; evaluated twice for a subscript, which is wrong for an
@@ -3074,6 +3086,11 @@
       (self (rest kwonly)
         (if (null? (rest (first kwonly))) acc
           (pair (pair (%py-name->sym (first (first kwonly))) (first (rest (first kwonly)))) acc))))))
+; the kw-only entries with no default among them
+(def %py-kwo-bare
+  (fn (self kwonly acc)
+    (if (null? kwonly) (%py-reverse acc)
+      (self (rest kwonly) (pair (list (first (first kwonly))) acc)))))
 (def %py-kwo-names
   (fn (self kwonly acc)
     (if (null? kwonly) (%py-reverse acc)
@@ -3929,21 +3946,30 @@
                   ; The fn's own name is %py-fn, which nothing else binds: the
                   ; call's frame is the one a bare dir() or locals() stops at
                   ; (python/runtime-flow.x, %py-frame-rows).
-                  (def fn-form
+                  (def inner
                     (if (if (first %py-async-me) #t (%py-has-yield? (%py-block-contents after) #f))
-                      (list (lit fn) (pair (lit %py-fn) params)
-                        (prelude
-                          (list (lit %py-gen-new)
-                            (list (lit fn) (list (lit _) (lit %py-gen))
-                              (list (lit %py-escape)
-                                (list (lit fn) (list (lit _) (lit %py-return))
-                                  (list (lit %seq) (%py-check-escapes body0) ()))))
-                            (%py-val name))))
-                      (list (lit fn) (pair (lit %py-fn) params)
-                        (prelude
+                      (list (lit %py-gen-new)
+                        (list (lit fn) (list (lit _) (lit %py-gen))
                           (list (lit %py-escape)
                             (list (lit fn) (list (lit _) (lit %py-return))
-                              (list (lit %seq) (%py-check-escapes body0) ())))))))
+                              (list (lit %seq) (%py-check-escapes body0) ()))))
+                        (%py-val name))
+                      (list (lit %py-escape)
+                        (list (lit fn) (list (lit _) (lit %py-return))
+                          (list (lit %seq) (%py-check-escapes body0) ())))))
+                  (def fn-form (list (lit fn) (pair (lit %py-fn) params) (prelude inner)))
+                  ; The fn its __code__ holds takes no default from the def:
+                  ; a function's defaults are its own and not its code's, so
+                  ; one made of the code has none (python/base.x,
+                  ; %py-function-over).  With no default written it is the
+                  ; fn above.
+                  (def code-form
+                    (if (if (null? dflts) (null? (%py-kwo-dflts kwonly ())) #f)
+                      fn-form
+                      (list (lit fn) (pair (lit %py-fn) params)
+                        ((%py-fn-prelude (%py-val name) names () rest-sym kw-sym
+                           (%py-kwo-bare kwonly ()) (%py-length names))
+                          inner))))
                   ; %py-sig! records the parameter names for keyword calls and
                   ; answers the closure, so this is still the def's value form
                   ; -- a class body reads it as the method.
@@ -3954,7 +3980,13 @@
                       (pair (lit list) (%py-kwo-names kwonly ()))
                       #t
                       ; where the def runs, for its __globals__
-                      (list (lit %py-here))))
+                      (list (lit %py-here))
+                      ; what its __code__ is made of (python/runtime-str.x)
+                      (list (lit lit)
+                        (list code-form (%py-val name) names (%py-length names)
+                          (not (null? rest-sym))
+                          (if (null? kw-name) () kw-name)
+                          (%py-kwo-names kwonly ())))))
                   (%set-first! %py-current-self outer-self)
                   (%set-first! %py-in-async %py-async-outer)
                   ; the name is bound for the statements after this one
@@ -4397,6 +4429,25 @@
     (if (>= i n) n
       (if (= (%py-code-at s i) 10) (+ i 1) (self s (+ i 1) n)))))
 
+; THE MODE `single` is a prompt's: an expression statement prints its value,
+; unless that is None.  That holds for one in a compound statement too, and
+; not for one in a def's or a class's body.  %py-echo-next says the parse
+; about to start is in that mode, and %py-echo-on that the one running is.
+(def %py-echo-next (pair #f ()))
+(def %py-echo-on (pair #f ()))
+(def %py-echoed
+  (fn (_ r)
+    (if (match
+          ((not (first %py-echo-on)) #f)
+          ((not (eq? (first %py-fn-depth) 0)) #f)
+          (#t (null? (first %py-current-class))))
+      (pair (list (lit %py-echo) (first r)) (rest r))
+      r)))
+(def python-parse-single
+  (fn (_ src)
+    (%set-first! %py-echo-next #t)
+    (python-parse src)))
+
 (def python-parse
   (fn (_ src)
     ; PER-RUN STATE, RESET HERE.  The lexical cells are saved and restored around
@@ -4407,6 +4458,8 @@
     ; inside a class body and left the class behind.
     (%set-first! %py-current-class ())
     (%set-first! %py-current-self ())
+    (%set-first! %py-echo-on (first %py-echo-next))
+    (%set-first! %py-echo-next #f)
     (if (%py-first-line-indented? src 0 (%py-byte-len src))
       (Err raise (lit indent) "unexpected indent" ())
       ())

@@ -426,6 +426,7 @@
       ((%py-gen-is v) (%py-id v))
       ((%py-it-is v) (%py-id v))
       ((%py-class-is v) (%py-id v))
+      ((%py-code-is v) (%py-id v))
       ; super(), classmethod(f), staticmethod(f) and property(f) too
       ((%py-super-is v) (%py-id v))
       ((%py-desc-is v) (%py-id v))
