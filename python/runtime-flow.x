@@ -888,6 +888,7 @@
     (match
       ((Str8 =? name "sys") (%py-sys-module))
       ((Str8 =? name "math") (%py-math-module))
+      ((Str8 =? name "cmath") (%py-cmath-module))
       ((Str8 =? name "collections") (%py-collections-module))
       ((Str8 =? name "array") (%py-array-module))
       ((Str8 =? name "struct") (%py-struct-module))
