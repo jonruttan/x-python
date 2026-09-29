@@ -130,6 +130,58 @@
 ; type() and isinstance see one class for every module.
 (def %py-cls-module (%py-class-new "module" %py-cls-object () "module"))
 
+; --- code objects --------------------------------------------------------------
+; What compile() answers and what eval and exec take beside a string: the
+; forms the source parsed to, the mode it was parsed in, and the file it was
+; said to come from.  A function's code, its __code__, is the same value in
+; the mode `function`: its one form is the fn the def or lambda compiled to,
+; and RECORD is what %py-sig! is told of it -- (NAME NAMES NREQ HAS-REST
+; KWNAME KWONLY) -- so the function can be made again over other globals
+; (python/base.x, %py-function-over).  There is no bytecode here, so a code
+; object has no co_code and nothing that counts in it.
+(def %py-code ())
+(def %py-code-new
+  (fn (_ mode forms file name record)
+    (%make-instance %py-code (list mode forms file name record))))
+(def %py-code-is (fn (_ v) (%type? v %py-code)))
+(def %py-code-mode (fn (_ c) (first (first c))))
+(def %py-code-forms (fn (_ c) (List ref 1 (first c))))
+(def %py-code-file (fn (_ c) (List ref 2 (first c))))
+(def %py-code-name (fn (_ c) (List ref 3 (first c))))
+(def %py-code-record (fn (_ c) (List ref 4 (first c))))
+(def %py-cls-code
+  (%py-class-new "code" %py-cls-object (list (pair "%final" #t)) "code"))
+
+; <code object NAME at 0xADDR, file "FILE">
+(def %py-code-repr
+  (fn (_ c)
+    (Str8 append "<code object "
+      (Str8 append (%py-code-name c)
+        (Str8 append " at "
+          (Str8 append (%py-str (%py-hex (%py-id c)))
+            (Str8 append ", file \""
+              (Str8 append (%py-code-file c) "\">"))))))))
+(set! %py-code
+  (%make-type
+    "PY-CODE"
+    (list
+      (pair (lit write) (fn (_ self) (display (%py-code-repr self)))))))
+
+(def %py-code-attr
+  (fn (_ c name)
+    (match
+      ((Str8 =? name "co_name") (%py-str-of-x (%py-code-name c)))
+      ((Str8 =? name "co_filename") (%py-str-of-x (%py-code-file c)))
+      (#t
+        (Err raise (lit attribute)
+          (Str8 append "'code' object has no attribute '" (Str8 append name "'")) ())))))
+
+; What an expression statement compiled in the mode `single` does with its
+; value: prints its repr, unless it is None.
+(def %py-echo
+  (fn (_ v)
+    (if (null? v) () (%seq (%py-write v) (%seq (newline) ())))))
+
 ; The module's own binding of NAME, or this marker when it has none -- a
 ; deleted name is one it has none of.  NAME is looked up as the symbol the
 ; module's code binds it under, so a module's `len` is what a `def len` bound.

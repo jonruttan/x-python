@@ -61,7 +61,8 @@
 (%py-sweep!)
 
 (provide python/base python-version python-run python-tokenize python-lex python-parse python-parse-expr %python-repl-print
-  %py-eval %py-exec %py-compile %py-module-env %py-code-run)
+  %py-eval %py-exec %py-compile %py-module-env %py-code-run %py-function-over
+  %py-code-answer)
 
 ; the one number sys.implementation.version is read from too
 (def python-version %py-implementation-version)
@@ -124,10 +125,8 @@
 ; (%py-code-in below).
 
 ; A CODE OBJECT is what compile() answers and what eval and exec take beside a
-; string: the forms, already parsed, and the mode they were parsed in.
-(def %py-code-new  (fn (_ mode forms) (list (lit %py-code) mode forms)))
-(def %py-code-is   (fn (_ v) (if (pair? v) (eq? (first v) (lit %py-code)) #f)))
-(def %py-code-forms (fn (_ c) (first (rest (rest c)))))
+; string: the forms, already parsed, and the mode they were parsed in
+; (python/runtime-flow.x).
 
 ; `eval` mode is ONE EXPRESSION and nothing after it but the newlines that end
 ; its lines.  python-parse-expr answers (form . rest), and a rest holding
@@ -162,9 +161,10 @@
         (Err raise (lit type) "eval()/exec() wants a string or a code object" ()))
       (#t
         (let ((x (%ps->x (%py-str-cps src))))
-          (if (Str8 =? mode "eval")
-            (list (%py-eval-expr (python-lex x)))
-            (python-parse x)))))))
+          (match
+            ((Str8 =? mode "eval") (list (%py-eval-expr (python-lex x))))
+            ((Str8 =? mode "single") (python-parse-single x))
+            (#t (python-parse x))))))))
 
 ; The forms evaluated in ENV, one at a time, answering the last one's value.
 (def %py-code-run
@@ -274,9 +274,9 @@
         "globals() at the prompt needs a namespace this runtime does not list" ()))
     "globals" () 0 #f))
 
-; `single` is `exec` here: the mode is about echoing a value at a prompt, and
-; this compiles rather than prompts.  A mode that is none of the three is a
-; ValueError, as it is in Python.
+; `single` is `exec` whose expression statements print their values, as a
+; prompt's do (python/parse.x, python-parse-single).  A mode that is none of
+; the three is a ValueError, as it is in Python.
 (def %py-compile
   (%py-sig!
     (fn (_ src file mode0)
@@ -286,10 +286,50 @@
       ; one too: it asks the same question of it.
       (def mode (if (%py-str-is mode0) (%ps->x (%py-str-cps mode0)) mode0))
       (if (if (Str8 =? mode "exec") #t (if (Str8 =? mode "eval") #t (Str8 =? mode "single")))
-        (%py-code-new mode (%py-code-of src mode))
+        (%py-code-new mode (%py-code-of src mode)
+          (if (%py-str-is file) (%py-text->x file) "<string>") "<module>" ())
         (Err raise (lit value)
           "compile() mode must be 'exec', 'eval' or 'single'" ())))
     "compile" (list "source" "filename" "mode") 3 #f))
+
+; function(code, globals): the function CODE is of, made again with GLOBALS
+; for its globals.  The fn CODE holds is evaluated in the environment the
+; dict stands for -- a module's own for its namespace dict, and for a dict a
+; program made one with the dict's names bound in it, as exec does
+; (%py-dict-env).  The function has the code's signature and no defaults,
+; which are the function's and not its code's.  Code compile() answered makes
+; a function of no arguments that runs it there, answering what an `eval`
+; mode's expression does and None for the other modes.
+(def %py-function-over
+  (fn (_ code globals)
+    (match
+      ((not (%py-code-is code))
+        (Err raise (lit type) "function() argument 'code' must be code" ()))
+      ((not (%py-dict? globals))
+        (Err raise (lit type) "function() argument 'globals' must be dict" ()))
+      (#t
+        (eval (%py-function-form code)
+          (%py-dict-env globals (fn (_) (%py-module-env))))))))
+(def %py-function-form
+  (fn (_ code)
+    (if (Str8 =? (%py-code-mode code) "function")
+      (let ((r (%py-code-record code)) (f (first (%py-code-forms code))))
+        (list (lit %py-sig!) f (first r)
+          (list (lit lit) (List ref 1 r))
+          (List ref 2 r) (List ref 3 r)
+          (list (lit lit) (List ref 4 r))
+          (list (lit lit) (List ref 5 r))
+          #t
+          (list (lit %py-here))
+          (list (lit lit) (pair f r))))
+      (list (lit %py-sig!)
+        (list (lit fn) (pair (lit %py-fn) (lit %py-more))
+          (list (lit %py-code-answer) (list (lit lit) code) (list (lit %py-here))))
+        (%py-code-name code) () 0 #f () () #t (list (lit %py-here))))))
+(def %py-code-answer
+  (fn (_ code env)
+    (let ((v (%py-code-run env (%py-code-forms code) ())))
+      (if (Str8 =? (%py-code-mode code) "eval") v ()))))
 
 (def %python-repl-print
   (fn (_ result)

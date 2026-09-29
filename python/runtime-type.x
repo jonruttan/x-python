@@ -925,8 +925,13 @@
 ; separates a def from a builtin, and the seventh signature field is what
 ; tells them apart here: a def or a lambda records one, a builtin does not.
 ; None of them, nor NoneType, is an acceptable base, as in CPython.
+; function(code, globals) is the code's function over those globals
+; (python/base.x, %py-function-over).
 (def %py-cls-function
-  (%py-class-new "function" %py-cls-object (list (pair "%final" #t)) "function"))
+  (%py-class-new "function" %py-cls-object
+    (list (pair "%final" #t)
+      (pair "%ctor" (fn (_ code globals . more) (%py-function-over code globals))))
+    "function"))
 (def %py-cls-builtin-function
   (%py-class-new "builtin_function_or_method" %py-cls-object (list (pair "%final" #t))
     "builtin_function_or_method"))
@@ -1169,6 +1174,7 @@
       ((%py-desc-is v) (%py-desc-class v))
       ((%py-obj-is v) (%py-obj-class v))
       ((%py-mod-is v) %py-cls-module)
+      ((%py-code-is v) %py-cls-code)
       ((%py-class-is v) %py-cls-type)
       ((%py-gen-is v) %py-cls-generator)
       ((%py-it-is v) (%py-it-class v))

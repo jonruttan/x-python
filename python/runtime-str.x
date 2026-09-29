@@ -46,6 +46,7 @@
     (match
       ((%py-obj-is obj) (%py-obj-attr obj name))
       ((%py-mod-is obj) (%py-mod-attr obj name))
+      ((%py-code-is obj) (%py-code-attr obj name))
       ; every value has a __class__; an instance answered its own above
       ((Str8 =? name "__class__") (%py-type-of obj))
       ((%py-io-is obj) (%py-io-attr obj name))
@@ -83,9 +84,33 @@
           (match
             ((if (null? sig) #f (Str8 =? name "__name__")) (%py-str-of-x (first sig)))
             ((if (null? sig) #f (Str8 =? name "__globals__")) (%py-sig-globals sig))
+            ((if (null? sig) #f (Str8 =? name "__code__")) (%py-sig-code sig))
             (#t
               (Err raise (lit attribute)
                 (Str8 append (Str8 append "object has no attribute '" name) "'")()))))))))
+
+; A function's __code__, made of what its def or lambda recorded when it is
+; first asked for and the same value after.  The ninth signature field holds
+; it: a box of the record, then of the code object.  A builtin has none.
+(def %py-sig-code
+  (fn (_ sig)
+    (let ((box (%py-nth-or sig 8 ())))
+      (match
+        ((null? box) (Err raise (lit attribute) "object has no attribute '__code__'" ()))
+        ((%py-code-is (first box)) (first box))
+        (#t
+          (let ((r (first box)))
+            (%seq
+              (%set-first! box
+                (%py-code-new "function" (list (first r)) (%py-sig-file sig)
+                  (first (rest r)) (rest r)))
+              (first box))))))))
+; the file of the module the definition ran in, when it has one
+(def %py-sig-file
+  (fn (_ sig)
+    (let ((env (%py-nth-or sig 7 ())))
+      (let ((f (if (null? env) () (guard (_ ()) (eval (lit py-__file__) env)))))
+        (if (%py-str-is f) (%py-text->x f) "<string>")))))
 
 ; A function's __globals__: the namespace dict of the module whose code
 ; defined it, found from the environment its def or lambda ran in (%py-sig!).
