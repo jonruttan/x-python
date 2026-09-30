@@ -1,11 +1,11 @@
-Assignment is decided by what follows a *target*, not by the shape of the first
-token. The parser reads a list of targets from the tokens (names, subscripts,
+Assignment is decided by what follows a *target*, not by the structure of the
+first token. The parser reads a list of targets from the tokens (names, subscripts,
 attributes, and `( )` or `[ ]` lists of targets, at most one of them starred)
 and then looks for `=`; `a = b = v` has two target lists. A postfix expression
 followed by an augmented operator is an augmented assignment. If neither
 follows, the statement is re-parsed as an expression from the start.
 
-A store depends on the target's shape: a name is a `set!`, a subscript is an
+A store depends on the target's structure: a name is a `set!`, a subscript is an
 item assignment, and a list of targets unpacks the value into each in turn.
 
 ## assign subscript

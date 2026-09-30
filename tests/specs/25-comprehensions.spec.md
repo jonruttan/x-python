@@ -13,7 +13,7 @@ precisely what this must NOT do.
 
 ## list comprehensions
 
-### the basic shape
+### the basic layout
 
 ```python
 (python-run "print([x * 2 for x in [1, 2, 3]])")
@@ -104,7 +104,7 @@ Python 3's own scope rule, and the reason the binding is a `let`: the module's
 
 ## dict comprehensions
 
-### the basic shape
+### the basic layout
 
 ```python
 (python-run "print({k: k * 2 for k in [1, 2]})")

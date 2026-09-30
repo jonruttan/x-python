@@ -216,7 +216,7 @@
     (let ((n (%py-boolnorm v)))
       (match
         ((not (null? (%py-arr-format e))) (%py-arr-float (%py-arr-format e) v))
-        ((not (eq? (%py-num-kind n) (lit int)))
+        ((not (eq? (%py-num-py-type n) (lit int)))
           (Err raise (lit type) "array item must be an integer" ()))
         ((< n (%py-arr-low e))
           (Err raise (lit overflow) "value out of range for the array's typecode" ()))

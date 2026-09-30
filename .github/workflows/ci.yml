@@ -122,8 +122,8 @@ jobs:
     # is a RATCHET over tools/contract/if-ladders.txt: the debt it was born
     # with may only shrink, and a new ladder fails here rather than in review.
     #
-    # It needs the platform, because the checker is x -- an if ladder is a
-    # SHAPE, and reading the file as s-expressions is the only way to see one.
+    # It needs the platform, because the checker is x -- an if ladder is
+    # STRUCTURAL, and reading the file as s-expressions is the only way to see one.
     name: if ladders are match
     runs-on: ubuntu-latest
     steps:

@@ -156,7 +156,7 @@
             (%py-f-2d (if (< xa 0) (- 0 xa) xa))))))))
 
 ; The exact decimal expansion, shared with %-formatting (python/format.x):
-; (kind sign digits exp10) where kind is 'num / 'inf / 'nan, digits is every
+; (label sign digits exp10) where label is 'num / 'inf / 'nan, digits is every
 ; digit of m*2^e (no leading zeros; "0" for zero), and the value is
 ; digits[0].digits[1:] * 10^exp10.
 (def %py-f-exact
@@ -331,7 +331,7 @@
                       (Err raise (lit type)
                         "complex() first argument must be a string or a number" ())
                       (%py-complex-of (f)))))))
-            ((null? (%py-num-kind (if (eq? x #t) 1 (if (eq? x #f) 0 x))))
+            ((null? (%py-num-py-type (if (eq? x #t) 1 (if (eq? x #f) 0 x))))
               (Err raise (lit type)
                 "complex() first argument must be a string or a number" ()))
             (#t (%py-complex-of x)))
@@ -387,7 +387,7 @@
   (fn (self es acc)
     (if (null? es) acc (self (rest es) (+ acc (%py-hash (first es)))))))
 (def %py-hash
-  ; What a value hashes to, one arm per kind, so a match.
+  ; What a value hashes to, one arm per type, so a match.
   (fn (_ v)
     (match
       ((eq? v #t) 1)
@@ -402,7 +402,7 @@
       ((%py-float-is v) (if (= v (Float floor v)) (Float ->int v) (first v)))
       ((%py-complex-is v)
         (+ (%py-hash (%py-cre v)) (* 1000003 (%py-hash (%py-cim v)))))
-      ((eq? (%py-num-kind v) (lit int)) v)
+      ((eq? (%py-num-py-type v) (lit int)) v)
       ((%py-str-is v) (%py-cp-hash (%py-str-cps v) 0))
       ; bytes hash as the str of the same characters does, as in CPython; a
       ; bytearray is unhashable
@@ -431,10 +431,10 @@
       ((%py-super-is v) (%py-id v))
       ((%py-desc-is v) (%py-id v))
       ((%py-view-is v)
-        (if (Str8 =? (%py-view-kind v) "dict_values")
+        (if (Str8 =? (%py-view-py-type v) "dict_values")
           (%py-set-hash (%py-view-elems v) 0)
           (Err raise (lit type)
-            (Str8 append (Str8 append "unhashable type: '" (%py-view-kind v)) "'") ())))
+            (Str8 append (Str8 append "unhashable type: '" (%py-view-py-type v)) "'") ())))
       ((%py-tuple-is v) (%py-set-hash (%py-tuple-elems v) 0))
       (#t (%py-unhashable v)))))
 
@@ -483,10 +483,10 @@
     (match
       ((eq? h #t) 1)
       ((eq? h #f) 0)
-      ((eq? (%py-num-kind h) (lit int)) h)
+      ((eq? (%py-num-py-type h) (lit int)) h)
       (#t (Err raise (lit type) "__hash__ method should return an integer" ())))))
 
-; Is v a machine float?  The type-handle compare %py-num-kind uses, taken
+; Is v a machine float?  The type-handle compare %py-num-py-type uses, taken
 ; directly so the writer below can ask cheaply.
 (def %py-float-is
   (fn (_ v) (eq? (%py-typeof-prim v) %py-th-float)))
@@ -607,22 +607,22 @@
 ;
 ; PYTHON'S EXCEPTION TYPES ARE CLASSES, AND THE HIERARCHY IS THE POINT.
 ;
-; The first version of this file mapped exception NAMES to x error KINDS with a
-; string table, and `Exception` matched everything by a special case written
+; The first version of this file mapped exception NAMES to x error LABELS with
+; a string table, and `Exception` matched everything by a special case written
 ; into the matcher.  That worked and could not grow: `except LookupError`
 ; catching both IndexError and KeyError is not a special case, it is what
 ; deriving from a common base MEANS, and a flat table has no way to say it.
 ;
-; So the builtin exceptions are real PY-CLASS values, in Python's own shape, and
+; So the builtin exceptions are real PY-CLASS values, in Python's own layout, and
 ; matching walks the base chain.  `Exception` is no longer special -- it is just
 ; the root every other one reaches.
 ;
-; TWO SHAPES OF RAISED VALUE ARRIVE HERE.  A `raise` in Python source produces a
+; TWO LAYOUTS OF RAISED VALUE ARRIVE HERE.  A `raise` in Python source produces a
 ; PY-OBJ instance.  Everything this runtime raises itself -- a bad subscript, a
-; missing key -- produces an Err carrying a tag symbol, because those raises
+; missing key -- produces an Err carrying a label symbol, because those raises
 ; predate classes by a long way and rewriting them would gain nothing.  The
-; tag table below is the bridge: an Err's tag names the class it would have
-; been, and from there both shapes of value match identically.
+; label table below is the bridge: an Err's label names the class it would
+; have been, and from there both layouts of value match identically.
 
 ; EVERY CLASS DESCENDS FROM object, and until now nothing here said so:
 ; `class C(object)` named an unbound global, which this runtime binds to a
@@ -765,11 +765,11 @@
 (def %py-exc-UnicodeEncodeError
   (%py-exc-new "UnicodeEncodeError" %py-exc-UnicodeError))
 
-; An Err's tag names the class it would have been.  A tag with no row -- one
+; An Err's label names the class it would have been. A label with no row -- one
 ; raised by the platform rather than by this runtime -- answers Exception, so
 ; `except Exception` still catches it rather than letting it through a handler
 ; that looks like it should have caught it.
-(def %py-tag-classes
+(def %py-label-classes
   (list
     (pair (lit type)          %py-exc-TypeError)
     (pair (lit value)         %py-exc-ValueError)
@@ -789,7 +789,7 @@
     (pair (lit unicode-encode) %py-exc-UnicodeEncodeError)
     (pair (lit lookup)        %py-exc-LookupError)))
 
-(def %py-tag-class
+(def %py-label-class
   (fn (self k rows)
     (if (null? rows)
       %py-exc-Exception
@@ -797,21 +797,15 @@
         (rest (first rows))
         (self k (rest rows))))))
 
-; The platform's door to an error's label, by whichever name the platform
-; has for it: (Err tag e) up to v0.16.0, (Err label e) after it.  Asked once,
-; at load.  When the pin declares a release that says (Err label e), the
-; probe goes and the second spelling stays.
-(def %py-err-tag
-  (guard (_ (fn (_ e) (Err tag e)))
-    (do (Err label "probe")
-        (fn (_ e) (Err label e)))))
+; The platform's door to an error's label: (Err label e).
+(def %py-err-label (fn (_ e) (Err label e)))
 
-; The class of whatever was raised, whichever of the two shapes it is.
+; The class of whatever was raised, whichever of the two layouts it is.
 (def %py-exc-class-of
   (fn (_ e)
     (if (%py-obj-is e)
       (%py-obj-class e)
-      (%py-tag-class (%py-err-tag e) %py-tag-classes))))
+      (%py-label-class (%py-err-label e) %py-label-classes))))
 
 (def %py-subclass?
   (fn (self c target)
@@ -935,7 +929,7 @@
   ; ANCESTORS before the next base, and since every class now roots at object,
   ; `class C(tuple, Base)` found object.__init__ through tuple and never asked
   ; Base at all.  Skipping object during the walk and asking it at the end is
-  ; the same answer C3 gives for every shape a program without diamonds
+  ; the same answer C3 gives for every hierarchy a program without diamonds
   ; writes, at a fraction of the machinery.
   (fn (self cls name)
     (let ((m (%py-method-find-below cls name)))
@@ -954,7 +948,7 @@
           (if (null? e)
             ; DEPTH FIRST, LEFT TO RIGHT across every base: `class Sub(A, B)`
             ; finds A's method before B's, and A's own bases before B at all,
-            ; which is the order Python's MRO gives for the shapes a program
+            ; which is the order Python's MRO gives for the hierarchies a program
             ; without diamonds writes.
             (%py-method-find-bases (%py-class-bases cls) name)
             (rest e)))))))
@@ -1005,7 +999,7 @@
               (Str8 append "' object has no attribute '" (Str8 append name "'")))
             ()))
         ((%py-desc-is m)
-          (if (eq? (%py-desc-kind m) (lit classmethod))
+          (if (eq? (%py-desc-py-type m) (lit classmethod))
             (%py-bound-new (%py-desc-fn m) cls)
             (%py-desc-fn m)))
         ((not (%py-fn-is m)) m)
@@ -1040,7 +1034,7 @@
           (let ((m (%py-method-find (%py-obj-class obj) name)))
             (match
               ((%py-desc-is m)
-                (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
+                (let ((f (%py-desc-fn m)) (k (%py-desc-py-type m)))
                   (if (eq? k (lit static))
                     f
                     (if (eq? k (lit classmethod))
@@ -1215,8 +1209,8 @@
 (def %py-desc-class
   (fn (_ d)
     (match
-      ((eq? (%py-desc-kind d) (lit property)) %py-cls-property)
-      ((eq? (%py-desc-kind d) (lit classmethod)) %py-cls-classmethod)
+      ((eq? (%py-desc-py-type d) (lit property)) %py-cls-property)
+      ((eq? (%py-desc-py-type d) (lit classmethod)) %py-cls-classmethod)
       (#t %py-cls-staticmethod))))
 
 ; A descriptor's own attributes.  A property answers fget, fset, fdel and
@@ -1227,7 +1221,7 @@
 (def %py-desc-attr
   (fn (_ d name)
     (match
-      ((not (eq? (%py-desc-kind d) (lit property)))
+      ((not (eq? (%py-desc-py-type d) (lit property)))
         (if (Str8 =? name "__func__")
           (%py-desc-fn d)
           (%py-class-row-attr (%py-desc-class d) d name (%py-class-name (%py-desc-class d)))))
@@ -1272,11 +1266,11 @@
             (Str8 append "' object has no " what)))))))
 ; Is D a property, the descriptor a store or a delete goes through?
 (def %py-prop?
-  (fn (_ d) (if (%py-desc-is d) (eq? (%py-desc-kind d) (lit property)) #f)))
+  (fn (_ d) (if (%py-desc-is d) (eq? (%py-desc-py-type d) (lit property)) #f)))
 
 ; StopIteration CARRIES A VALUE -- what a generator returned -- and Python
 ; spells it as an attribute: StopIteration("x").value is "x", and with no
-; argument it is None.  A property is the honest shape for something read off
+; argument it is None.  A property is the honest form for something read off
 ; the arguments rather than stored.
 ; OSError's ARGUMENTS ARE ITS errno, strerror and filename, read off them the
 ; same way StopIteration reads its value, as CPython reads them: given two to

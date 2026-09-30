@@ -9,9 +9,9 @@ line to line, and when a line opens a block.
 ## what echoes
 
 CPython echoes an expression statement's repr and nothing else. The emitted
-form's shape says which is which — with one refinement: `let` heads both
+form's structure says which is which — with one refinement: `let` heads both
 tuple-unpacking STATEMENTS (binding `%py-unpacked`) and EXPRESSIONS
-(comprehensions bind `%py-acc`, and/or bind `%py-lhs`), and the expression kind
+(comprehensions bind `%py-acc`, and/or bind `%py-lhs`), and the expression variant
 must echo.
 
 ### statements are silent

@@ -191,7 +191,7 @@ esac
 
 # NO COLLECT AT SNIPPET SEAMS.  python-run builds an isolated tokenizer base,
 # which is C-held state the collector's mark cannot see (the x-lang#283 rooting
-# family) -- so the platform runner's per-seam collect (x-lang#568) frees it
+# gap) -- so the platform runner's per-seam collect (x-lang#568) frees it
 # LIVE, and the third eval in a process walks freed memory and segfaults.
 # x-lang#572 added this run-level door out; this suite opts out wholesale,
 # which is the right granularity because every generated conformance case
@@ -223,7 +223,7 @@ export TIMEOUT_UNIT_SECS="${TIMEOUT_UNIT_SECS:-300}"
 # SIZE THE CEILING FOR THE CONFORMANCE BATCHES ONLY, as the platform
 # runner's own comment instructs a seam-collect opt-out to do.  With no
 # per-snippet collect a conformance file's 15-case batch accumulates every
-# case's parse-time garbage, and the float family's heaviest file crossed
+# case's parse-time garbage, and the heaviest float-themed file crossed
 # the 300M default when the expression ladder grew its bitwise levels --
 # the interpreter died mid-batch three cases from the end, which reads as
 # a regression and is a resource limit.

@@ -1,8 +1,8 @@
 ; # x-python -- Python on x-lang
 ;
-; ## python/runtime-type.x -- type objects, constructors and slicing
+; ## python/runtime-py-type.x -- Python's type objects, constructors and slicing
 ;
-; @description The type objects themselves, the constructors behind int() and
+; @description Python's type objects themselves, the constructors behind int() and
 ;   friends, and slicing.
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan
@@ -99,7 +99,7 @@
             (digits 1 0 #f)
             (digits 0 0 #f)))))))
 
-; float('...') is shape-checked before Float from sees it: sign, digits, one
+; float('...') is structure-checked before Float from sees it: sign, digits, one
 ; dot, one exponent.  Stricter than CPython (no inf/nan, no surrounding
 ; spaces), and strictness fails LOUDLY where the alternative answered 0.0.
 (def %py-float-str-ok?
@@ -134,7 +134,7 @@
 ; Python's float() also takes "inf", "infinity" and "nan" in any case, with an
 ; optional sign and surrounding whitespace, and underscores between digits.
 ; The specials are matched HERE and handed to strtod by their canonical
-; spelling; everything else is underscore-stripped and shape-checked as before.
+; spelling; everything else is underscore-stripped and structure-checked as before.
 (def %py-f-trim
   (fn (_ s)
     (def n (Str8 length s))
@@ -262,7 +262,7 @@
 ; as the int it is
 (def %py-int-answer
   (fn (_ v)
-    (if (eq? (%py-num-kind (%py-boolnorm v)) (lit int))
+    (if (eq? (%py-num-py-type (%py-boolnorm v)) (lit int))
       (%py-boolnorm v)
       (Err raise (lit type)
         (Str8 append "__int__ returned non-int (type "
@@ -278,7 +278,7 @@
         ((not (null? (rest a)))
           (let ((v (first a)) (base (%py-boolnorm (first (rest a)))))
             (match
-              ((not (eq? (%py-num-kind base) (lit int)))
+              ((not (eq? (%py-num-py-type base) (lit int)))
                 (Err raise (lit type) "'base' must be an integer" ()))
               ((if (= base 0) #f (if (< base 2) #t (> base 36)))
                 (Err raise (lit value) "int() base must be >= 2 and <= 36, or 0" ()))
@@ -300,7 +300,7 @@
                     (Err raise (lit type) "int() argument must be a number or string" ())
                     (%py-int-answer (m)))))
               (#t
-                (let ((k (%py-num-kind v)))
+                (let ((k (%py-num-py-type v)))
                   (if (eq? k (lit int)) v
                   (if (eq? k (lit float))
                     ; toward zero, as math.trunc takes it
@@ -344,7 +344,7 @@
           ((%py-buffer? v) (%py-float-of-str (%py-buffer-text v)))
           ((%py-obj-is v) (%py-obj-float v))
           (#t
-            (let ((k (%py-num-kind v)))
+            (let ((k (%py-num-py-type v)))
               (if (eq? k (lit float)) v
               (if (eq? k (lit int)) (* v 1.0)
                 (%py-float-refuse v))))))))))
@@ -613,7 +613,7 @@
 (def %py-int-length
   (fn (_ v)
     (let ((n (%py-boolnorm v)))
-      (if (not (eq? (%py-num-kind n) (lit int)))
+      (if (not (eq? (%py-num-py-type n) (lit int)))
         (Err raise (lit type) "'length' must be an integer" ())
         (if (< n 0)
           (Err raise (lit value) "length argument must be non-negative" ())
@@ -688,7 +688,7 @@
           (Err raise (lit attribute)
             (Str8 append "'int' object has no attribute '" (Str8 append name "'")) ()))
         ((%py-desc-is m)
-          (if (eq? (%py-desc-kind m) (lit classmethod))
+          (if (eq? (%py-desc-py-type m) (lit classmethod))
             (%py-bound-new (%py-desc-fn m) %py-cls-int)
             (%py-desc-fn m)))
         (#t (%py-bound-new m v))))))
@@ -1056,7 +1056,7 @@
       (List reverse acc)
       (let ((c (%py-boolnorm (first codes))))
         (match
-          ((not (eq? (%py-num-kind c) (lit int)))
+          ((not (eq? (%py-num-py-type c) (lit int)))
             (Err raise (lit type)
               (Str8 append (Str8 append "'" (%py-class-name (%py-type-of c)))
                 "' object cannot be interpreted as an integer") ()))
@@ -1150,8 +1150,8 @@
 
 (def %py-type-of
   ; ELEVEN ARMS, so a match: the class a value answers to, asked once per
-  ; kind.  bool is checked before int because True is an int in this runtime
-  ; as it is in Python, and the numeric kinds are read from one place at the
+  ; type.  bool is checked before int because True is an int in this runtime
+  ; as it is in Python, and the numeric types are read from one place at the
   ; end rather than re-asked per arm.
   (fn (_ v)
     (match
@@ -1180,11 +1180,11 @@
       ((%py-it-is v) (%py-it-class v))
       ((%py-bound-is v) %py-cls-method)
       ((%py-fn-is v) (if (%py-user-fn? v) %py-cls-function %py-cls-builtin-function))
-      ; an error the runtime raised by tag is an instance of the class the
-      ; tag names, as far as type() can tell
+      ; an error the runtime raised by label is an instance of the class
+      ; the label names, as far as type() can tell
       ((Err err? v) (%py-exc-class-of v))
       (#t
-        (let ((k (%py-num-kind v)))
+        (let ((k (%py-num-py-type v)))
           (match
             ((eq? k (lit int)) %py-cls-int)
             ((eq? k (lit float)) %py-cls-float)
@@ -1316,7 +1316,7 @@
 (def %py-sl-indices
   (fn (_ v n)
     (match
-      ((not (eq? (%py-num-kind (%py-boolnorm n)) (lit int)))
+      ((not (eq? (%py-num-py-type (%py-boolnorm n)) (lit int)))
         (Err raise (lit type)
           (Str8 append "'" (Str8 append (%py-class-name (%py-type-of n))
             "' object cannot be interpreted as an integer")) ()))

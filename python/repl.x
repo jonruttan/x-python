@@ -31,7 +31,7 @@
 ;
 ; WHAT ECHOES.  CPython echoes the repr of an EXPRESSION statement's value and
 ; nothing else -- an assignment is silent even though our emitted set! has a
-; value.  The parse result's shape says which is which: statement emissions
+; value.  The parse result's structure says which is which: statement emissions
 ; lead with set!/def/let/guard/if or a loop-call, and everything else is an
 ; expression.  That inspection lives here because it is a REPL rule, not a
 ; language rule.
@@ -99,7 +99,7 @@
 ; --- what echoes -------------------------------------------------------------
 ; `let` needs a second look: the parser emits it for BOTH tuple-unpacking
 ; statements (binding %py-unpacked) and for expressions -- comprehensions bind
-; %py-acc, and/or bind %py-lhs -- and the expression kind MUST echo:
+; %py-acc, and/or bind %py-lhs -- and the expression variant MUST echo:
 ; `[n * n for n in range(4)]` at the prompt answers a list in CPython.
 (def %py-stmt-let?
   (fn (_ form)

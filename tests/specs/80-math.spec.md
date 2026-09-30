@@ -26,7 +26,7 @@ True True False
 1024.0 5.0
 ```
 
-### the trigonometric family
+### the trigonometric functions
 
 ```python
 (python-run "import math\nprint(round(math.sin(0), 10), round(math.cos(0), 10), round(math.tan(0), 10))\nprint(round(math.asin(1), 10), round(math.acos(1), 10), round(math.atan(1), 10))\nprint(round(math.atan2(1, 1), 10))\nprint(round(math.sinh(1), 10), round(math.cosh(1), 10), round(math.tanh(1), 10))\nprint(round(math.asinh(1), 10), round(math.acosh(1), 10), round(math.atanh(0.5), 10))\nprint(round(math.degrees(math.pi), 10), round(math.radians(180), 10))")

@@ -1,6 +1,6 @@
 Strings, the rest of the surface (`python/tokens.x`, `python/runtime.x`):
 searching and testing: endswith/startswith with ranges and tuples,
-the find family, count, the is-predicates.
+find and its siblings, count, the is-predicates.
 Every expectation is a real CPython output.  Split across files because a
 string-heavy batch accumulates past the object ceiling in one process.
 
@@ -18,7 +18,7 @@ True False True False True
 True False True True True True
 ```
 
-### find family with ranges, a start past the end
+### find and its siblings with ranges, a start past the end
 
 ```python
 (python-run "print(\"hello\".find(\"l\"), \"hello\".find(\"l\", 3), \"hello\".find(\"z\"), \"hello\".rfind(\"l\"), \"hello\".index(\"e\"), \"hello\".rindex(\"l\"), \"hello\".find(\"l\", 0, 2), \"hello\".find(\"\", 5), \"hello\".find(\"\", 6))\ntry:\n    \"hello\".index(\"z\")\nexcept ValueError:\n    print(\"ValueError\")")

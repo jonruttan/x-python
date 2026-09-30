@@ -69,7 +69,7 @@ True
 
 ## constructors
 
-### int, from the shapes Python accepts
+### int, from the structures Python accepts
 
 `int('abc')` is walked BY HAND: the reader-base shortcut accepts prefixes
 ("12ab" would answer 12) — a silent wrong number, so it is not trusted with
@@ -110,7 +110,7 @@ input the program supplied. Truncation is toward zero, which is Python's.
 
 ### float of garbage raises rather than answering 0.0
 
-`Float from "abc"` answers 0.0 — measured — so the string is shape-checked
+`Float from "abc"` answers 0.0 — measured — so the string is structure-checked
 first. Stricter than CPython (no inf/nan, no surrounding spaces), and the
 strictness fails loudly where the alternative was silent.
 

@@ -85,8 +85,8 @@
 (def %buffer-token (prim-ref (lit buf) (lit tok)))
 (def %py-char->int (prim-ref (lit char) (lit ->int)))
 
-; --- The variant channel --------------------------------------------------------
-; A NUMBER TOKEN CARRIES ITS VARIANT, decided where it is known.  The analyser's
+; --- The number-label channel ---------------------------------------------------
+; A NUMBER TOKEN CARRIES ITS LABEL, decided where it is known.  The analyser's
 ; states already tell an integer from a fraction from an exponent from an
 ; imaginary from a based literal, by which state accepts -- and used to throw
 ; that away, leaving %py-num to rescan the text through the Str8 class at
@@ -94,23 +94,19 @@
 ;
 ;   1 integer    2 float (a fraction or an exponent)    3 imaginary    4 based
 ;
-; and the token is (tok-number "text" VARIANT).
+; and the token is (tok-number "text" LABEL).
 ;
 ; TWO DOORS, ONE FALLBACK.  On a platform with the channel (x-lang
-; reader/intrinsics.x: one name at the analyser's end, one at the reader's;
-; the engine hangs a cell off the score), the state's declaration reaches the
-; read handler.  The platform names the pair %score-label! and %read-label, and
-; named it %score-variant! and %read-variant through v0.16.0; each door takes
-; the name it finds bound, the newer first.  On a platform without the channel
+; reader/intrinsics.x: %score-label! at the analyser's end, %read-label at the
+; reader's; the engine hangs a label cell off the score), the state's
+; declaration reaches the read handler.  On a platform without the channel
 ; neither is bound, the two doors below answer nothing, and the read handler
-; derives the same variant from the text through the raw byte primitives -- so
+; derives the same label from the text through the raw byte primitives -- so
 ; the token stream is identical either way, and %py-num never rescans.
-(def %py-variant!
-  (guard (e (guard (e (fn (_ score variant) ())) %score-variant!))
-    %score-label!))
-(def %py-read-variant
-  (guard (e (guard (e (fn (_ args) ())) %read-variant))
-    %read-label))
+(def %py-number-label!
+  (guard (e (fn (_ score label) ())) %score-label!))
+(def %py-read-number-label
+  (guard (e (fn (_ args) ())) %read-label))
 
 (def %py-code-at (fn (_ s i) (%py-char->int (%str-ref s i))))
 
@@ -135,10 +131,10 @@
           #t
           (self s (+ i 1) n))))))
 
-; The fallback: the variant read off the text, in the order the analyser would
+; The fallback: the label read off the text, in the order the analyser would
 ; have decided it -- based before float, so 0xe1's e is a digit; imaginary
 ; before float, so 2.5j is imaginary.
-(def %py-variant-of-text
+(def %py-number-label-of-text
   (fn (_ s)
     (let ((n (%py-byte-len s)))
       (let ((i (let ((c0 (%py-code-at s 0))) (if (if (= c0 45) #t (= c0 43)) 1 0))))
@@ -158,7 +154,7 @@
 (def %py-list->string (fn (_ l) (if (null? l) "" (%py-cvt l %py-th-str))))
 
 ; --- Token values ------------------------------------------------------------
-; Plain lists, the shape ash settled on: readable in a spec without a printer.
+; Plain lists, the convention ash settled on: readable in a spec without a printer.
 (def mk-tok-name    (fn (_ s) (list (lit tok-name) s)))
 (def mk-tok-kw      (fn (_ s) (list (lit tok-kw) s)))
 (def mk-tok-number  (fn (_ s k) (list (lit tok-number) s k)))
@@ -312,7 +308,7 @@
 ; mode is Python's IndentationError, which is the one place Logo, x-sweet and
 ; this bundle genuinely disagree -- and the first error it raises is parked
 ; here for python-tokenize to re-raise once reading is over and x is driving
-; again.  The error object is kept whole, so the tag and message are the ones
+; again.  The error object is kept whole, so the label and message are the ones
 ; Indent chose.
 (def %py-ind-error (pair () ()))
 
@@ -442,7 +438,7 @@
 ; deciding it in the parser cost a string compare at every grammar question
 ; that asked, 444 of them for an eight-line program, each a Str8 =? class call
 ; (19,347 objects on a hit).  So the token arrives classified, (tok-kw "if"),
-; and the parser asks the tag.
+; and the parser asks the label.
 ;
 ; THE TRIE IS GENERATED FROM %py-keywords, once, at load: one node per
 ; distinct prefix (121 for these 32), each a state that dispatches on the next
@@ -670,8 +666,8 @@
     (match
       ((%py-digit? chr) %py-number-exp-digits)
       ((= chr 95) %py-number-exp-digits)
-      ((if (= chr 106) #t (= chr 74)) (%seq (%py-variant! score 3) (%score-set score 1 buffer)))
-      (#t (%seq (%buffer-unread buffer) (%seq (%py-variant! score 2) (%score-set score 1 buffer)))))))
+      ((if (= chr 106) #t (= chr 74)) (%seq (%py-number-label! score 3) (%score-set score 1 buffer)))
+      (#t (%seq (%buffer-unread buffer) (%seq (%py-number-label! score 2) (%score-set score 1 buffer)))))))
 
 ; After the `e`: an optional sign, then at least one digit.
 (def %py-number-exp-first
@@ -690,8 +686,8 @@
       ((%py-digit? chr) %py-number-frac)
       ((= chr 95) %py-number-frac)
       ((if (= chr 101) #t (= chr 69)) %py-number-exp-sign)
-      ((if (= chr 106) #t (= chr 74)) (%seq (%py-variant! score 3) (%score-set score 1 buffer)))
-      (#t (%seq (%buffer-unread buffer) (%seq (%py-variant! score 2) (%score-set score 1 buffer)))))))
+      ((if (= chr 106) #t (= chr 74)) (%seq (%py-number-label! score 3) (%score-set score 1 buffer)))
+      (#t (%seq (%buffer-unread buffer) (%seq (%py-number-label! score 2) (%score-set score 1 buffer)))))))
 
 (set! %py-number-body
   (fn (_ buffer score chr)
@@ -700,8 +696,8 @@
       ((= chr 95) %py-number-body)
       ((= chr 46) %py-number-frac)
       ((if (= chr 101) #t (= chr 69)) %py-number-exp-sign)
-      ((if (= chr 106) #t (= chr 74)) (%seq (%py-variant! score 3) (%score-set score 1 buffer)))
-      (#t (%seq (%buffer-unread buffer) (%seq (%py-variant! score 1) (%score-set score 1 buffer)))))))
+      ((if (= chr 106) #t (= chr 74)) (%seq (%py-number-label! score 3) (%score-set score 1 buffer)))
+      (#t (%seq (%buffer-unread buffer) (%seq (%py-number-label! score 1) (%score-set score 1 buffer)))))))
 
 ; 0x 0o 0b: a zero, the base letter, then that base's digits (underscores
 ; allowed).  The parse reads the base back off the text.
@@ -714,7 +710,7 @@
           ((if (>= chr 65) (<= chr 70) #f) #t)
           (#t (= chr 95)))
       %py-number-based
-      (%seq (%buffer-unread buffer) (%seq (%py-variant! score 4) (%score-set score 1 buffer))))))
+      (%seq (%buffer-unread buffer) (%seq (%py-number-label! score 4) (%score-set score 1 buffer))))))
 (def %py-number-base-first
   (fn (_ buffer score chr)
     (if (match
@@ -779,15 +775,15 @@
     (pair (lit read)
       (fn (_ . args)
         (let ((text (%buffer-token (first args))))
-          (let ((k (%py-read-variant args)))
-            (let ((v (if (null? k) (%py-variant-of-text text) k)))
+          (let ((k (%py-read-number-label args)))
+            (let ((v (if (null? k) (%py-number-label-of-text text) k)))
               (%seq (%py-leading-zeros! text v)
                 (%seq (%py-number-ended! (first args) text)
                   (mk-tok-number text v))))))))))
 
 ; A DECIMAL INTEGER MAY NOT OPEN WITH A ZERO unless it is all zeros: 01 is a
 ; SyntaxError in Python 3, where 00 and 0_0 are 0.  A float, an imaginary and a
-; based literal may, so only variant 1 is asked.
+; based literal may, so only label 1 is asked.
 (def %py-leading-zeros!
   (fn (_ text v)
     (if (if (= v 1) (%py-zero-led? text) #f)
@@ -1021,7 +1017,7 @@
       ((= code 120)
         (let ((h1 (if (< (+ i 2) len) (%py-hexval (at (+ i 2))) ()))
               (h2 (if (< (+ i 3) len) (%py-hexval (at (+ i 3))) ())))
-          ; fewer than two hex digits is refused, each literal kind in its words
+          ; fewer than two hex digits is refused, each literal type in its words
           (if (if (null? h1) #t (null? h2))
             (%py-esc-refused s i
               (if raw?
@@ -1276,7 +1272,7 @@
 ; AND THE MATCH RUNS THREE CHARACTERS DEEP: `//=` `**=` `>>=` `<<=` are the
 ; augmented forms of the doubled operators, so a pair is not always the end.
 ;
-; THE SHAPE IS ash's SH-OP, INCLUDING THE `(+ chr 0)`.  Two earlier attempts
+; THE PATTERN IS ash's SH-OP, INCLUDING THE `(+ chr 0)`.  Two earlier attempts
 ; died here and both are worth recording:
 ;
 ;   Closing over `chr` DIRECTLY inside analyse killed the interpreter -- it
@@ -1296,8 +1292,8 @@
     ; (Python's other @ is matrix multiply, which this runtime has no use
     ; for).  GENERATED from the code list -- and a match, not a chain of ifs
     ; nested through their else branches: one arm per code, flat, which is
-    ; what the primitive is for.  A hand-nested predicate of this shape is
-    ; paren-balanced and silently wrong, which is how x-python#40 reached CI
+    ; what the primitive is for.  A hand-nested predicate of this STRUCTURE
+    ; is paren-balanced and silently wrong, which is how x-python#40 reached CI
     ; red.
     (match
       ((= c 43) #t)
@@ -1385,7 +1381,7 @@
       #f)))
 
 ; The third character is `=` and nothing else, so this state closes over
-; nothing and is an ordinary global -- the shape %py-sq-esc uses, and the one
+; nothing and is an ordinary global -- the pattern %py-sq-esc uses, and the one
 ; form of state the note above is not warning about.
 (def %py-op-third
   (fn (_ buffer score chr)
@@ -1476,17 +1472,17 @@
 ; e-name -> nb handoff.  Native code is this process's alone, so the list
 ; is a transient and %py-tok-reset! empties it with the base.
 (def %py-jit-states (pair () ()))
-; THE COMPILED STATES DECLARE VARIANTS ONLY WHERE THE LANE CAN SPELL IT.  A
-; platform whose emitter has neither %score-label! nor %score-variant! refuses
+; THE COMPILED STATES DECLARE LABELS ONLY WHERE THE LANE CAN SPELL IT.  A
+; platform whose emitter has no %score-label! refuses
 ; the form, and the attempt runs under a guard that would pin `failed` for all
 ; of it -- so the attempt probes once and builds the number states with or
 ; without the declaration.  The cell holds the name the lane spells, or #f.
-; The interpreted twins go through %py-variant!, a no-op on such a platform.
-(def %py-jit-variants (pair #f ()))
+; The interpreted twins go through %py-number-label!, a no-op on such a platform.
+(def %py-jit-number-labels (pair #f ()))
 (def %py-jit-accept
   (fn (_ k)
-    (if (first %py-jit-variants)
-      (list (lit %seq) (list (first %py-jit-variants) (lit score) k) (lit (%score-set score 1 buffer)))
+    (if (first %py-jit-number-labels)
+      (list (lit %seq) (list (first %py-jit-number-labels) (lit score) k) (lit (%score-set score 1 buffer)))
       (lit (%score-set score 1 buffer)))))
 (def %py-jit-unread-accept
   (fn (_ k) (list (lit %seq) (lit (%buffer-unread buffer)) (%py-jit-accept k))))
@@ -1513,11 +1509,9 @@
       #t)
     ; each state rooted as it is made -- see %py-jit-states
     (def jc (fn (_ form fvars) (%py-jit-keep! (compile-asm form fvars #t))))
-    ; can this lane spell a variant?  (probed, never called -- see %py-jit-variants)
-    (%set-first! %py-jit-variants
-      (guard (e (guard (e #f)
-                  (%seq (jc (lit (fn (_ buffer score chr) (%score-variant! score 1))) ())
-                        (lit %score-variant!))))
+    ; can this lane spell a label?  (probed, never called -- see %py-jit-number-labels)
+    (%set-first! %py-jit-number-labels
+      (guard (e #f)
         (%seq (jc (lit (fn (_ buffer score chr) (%score-label! score 1))) ())
               (lit %score-label!))))
     ; -- body states --
@@ -1947,5 +1941,5 @@
   mk-tok-bytes mk-tok-fstring mk-tok-group mk-tok-block
   %py-unescape-bytes %py-unescape-cps %py-code-at
   %py-hexval %py-int->char %py-list->string
-  %py-jit %py-jit-compile! %py-jit-threshold %py-jit-variants
-  %py-variant! %py-read-variant)
+  %py-jit %py-jit-compile! %py-jit-threshold %py-jit-number-labels
+  %py-number-label! %py-read-number-label)

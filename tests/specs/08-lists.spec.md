@@ -1,4 +1,4 @@
-Python lists. A list is tagged `(py-list . elements)` rather than a bare x list,
+Python lists. A list is labelled `(py-list . elements)` rather than a bare x list,
 because an empty list and `None` are different values and a bare x list would
 make both of them nil — `print([])` would print `None`.
 

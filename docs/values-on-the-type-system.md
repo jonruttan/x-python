@@ -1,4 +1,4 @@
-# Python values want x's type system, not tagged pairs
+# Python values want x's type system, not labelled pairs
 
 **Status:** **done for lists**, in `python/types.x`. The first attempt at it
 failed and this note recorded that failure as a property of the design; that was
@@ -10,16 +10,16 @@ one that already carries the numeric tower.
 ## What is there now
 
 A Python list is `(py-list . elements)` and a dict is `(py-dict . entries)` —
-ordinary pairs whose first element is a tag symbol. `%py-list?` sniffs the tag,
+ordinary pairs whose first element is a label symbol. `%py-list?` sniffs the label,
 `%py-write` switches on it to print, and `%py-getattr` dispatches attributes
 through **fourteen string comparisons** in an `if` chain.
 
 That was the shortest path from nothing to working containers, and it earned its
-place twice: the tag keeps `[]` distinguishable from `None`, and it gives a list
+place twice: the label keeps `[]` distinguishable from `None`, and it gives a list
 a stable identity to mutate, which is what makes `x.append(5)` visible through a
 second name.
 
-It is the wrong shape for what comes next:
+It is the wrong layout for what comes next:
 
 - attribute dispatch is linear, and closed — a Python program cannot add to it
 - there is no story for `class`, the largest remaining conformance block
@@ -38,12 +38,12 @@ x's **type system** — `(Base make-type)` with a handler alist, and
 ```
 
 A `write` handler means `display` renders the value correctly with no dispatch
-of ours at all — both printers collapse. `%type?` replaces tag-sniffing with
-real identity. The base config carries a length hook, so `len` can dispatch
+of ours at all — both printers collapse. `%type?` replaces label-sniffing
+with real identity. The base config carries a length hook, so `len` can dispatch
 there too. And a Python class becomes a type, which is the only story that
 scales.
 
-## The constraint that decides the shape
+## The constraint that decides the design
 
 `x_prim_make_instance` (`src/x-prim/type.c:148`) resolves the type handle in the
 **calling** base's alist:
@@ -67,7 +67,7 @@ on. Three consequences, each measured:
 So construction cannot be sent to the types. **The program has to run where the
 types are.**
 
-## The shape that follows
+## The design that follows
 
 Build a Python base up from `(Base make)`, add the types, bind in what generated
 code needs, and evaluate every form there.
@@ -114,7 +114,7 @@ own asserting each name resolves.
 ~0.027 ms, about 38x. That turned out not to matter: the statements fold into
 one form with the parser's own %py-seq-of, so it is one eval per PROGRAM, about
 a millisecond. Recorded because the measurement was worth having and the fold is
-the right shape regardless.
+right regardless.
 
 ## The wrong turn, and what it cost
 
@@ -152,7 +152,7 @@ that "the `base` namespace exposes `make-type`, `make-tok`, `make`, `eval` and
 `bind`, and none of them yields the current base" was true and beside the point:
 the answer was not in the `base` namespace at all.
 
-The cost was one wrong conclusion written down as a finding — the expensive kind
+The cost was one wrong conclusion written down as a finding — the expensive type
 of mistake, because a note that says "does not work" stops the next attempt
 before it starts. It survived about a day.
 
@@ -180,14 +180,14 @@ than an error.
 **The %-globals share one flat namespace across the bundle's modules.** Naming
 the element accessor `%py-elems` collided with `parse.x`'s list-literal element
 parser of the same name, and 47 specs failed with a *syntax* error from a change
-that touched only the runtime. It is the second collision of this kind here; the
+that touched only the runtime. It is the second collision of this type here; the
 first was `%py-len`, defined once as a parser helper and once as Python's
 `len`, which made `len('hello')` answer 119. Grep the bundle for a name before
 defining it.
 
 ## Why not sooner
 
-The tagged-pair representation was right for lists and dicts and would have been
+The labelled-pair representation was right for lists and dicts and would have been
 wrong to skip — it is what made mutation work, and the identity argument behind
 it is the same one the type system needs. The refactor is worth doing **before**
 `class`, and before more container types accrete on the current scheme, not

@@ -20,7 +20,7 @@
 ;                        682 programs with a CPython oracle
 ;
 ; The files are tiny, import nothing and assert by printing -- one program, one
-; stdout blob -- which is the same shape a .spec.md case is.  Only 65 of the 576
+; stdout blob -- which is the same layout a .spec.md case is.  Only 65 of the 576
 ; carry a .exp file; the rest are DIFFERENTIAL, meaning upstream generates the
 ; expectation by running CPython, which is what gen-specs.sh does too.
 ;

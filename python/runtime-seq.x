@@ -161,7 +161,7 @@
       ((%py-arr-is v) (%py-arr-el v))
       ((%py-dq-is v) (%py-dq-el v))
       (#t ()))))
-; only two of one kind: a list beside a tuple does not order, as in Python
+; only two of the same Python type: a list beside a tuple does not order, as in Python
 (def %py-same-seq?
   (fn (_ a b)
     (match
@@ -279,10 +279,10 @@
 
 ; --- Lists ------------------------------------------------------------------
 ;
-; TAGGED, not a bare x list.  An empty Python list and None are different
+; LABELLED, not a bare x list.  An empty Python list and None are different
 ; values, and a bare x list would make both of them nil -- so `print([])` would
-; print None.  A list is (py-list . elements): the tag distinguishes it from
-; every other value this runtime produces, and from nil.
+; print None.  A list is (py-list . elements): the label distinguishes it
+; from every other value this runtime produces, and from nil.
 (def %py-mklist (fn (_ . elems) (%py-list-new elems)))
 
 ; A SUBCLASS OF list IS A list wherever the runtime asks.  The question every
@@ -331,7 +331,7 @@
 (def %py-seq-index
   (fn (_ i what)
     (let ((k (%py-boolnorm i)))
-      (if (eq? (%py-num-kind k) (lit int))
+      (if (eq? (%py-num-py-type k) (lit int))
         k
         (Err raise (lit type)
           (%py-seq-index-refusal what (%py-class-name (%py-type-of i))) ())))))
@@ -384,7 +384,7 @@
       (#t (v (%py-seq-index i "list"))))))
 
 ; Store into a list at an index.  Rebuilds the element list and hangs it back on
-; the SAME tag pair, so every reference sees the store -- the identity argument
+; the SAME label pair, so every reference sees the store -- the identity argument
 ; that made append work.
 (def %py-set-nth
   (fn (self lst k v)
@@ -432,7 +432,7 @@
     (match
       ((null? v)
         (Err raise (lit type) "cannot convert 'NoneType' object to bytearray" ()))
-      ((if (%py-str-is v) #t (not (null? (%py-num-kind (%py-boolnorm v)))))
+      ((if (%py-str-is v) #t (not (null? (%py-num-py-type (%py-boolnorm v)))))
         (Err raise (lit type)
           "can assign only bytes, buffers, or iterables of ints in range(0, 256)" ()))
       ; a memoryview is a buffer, and its elements are what it assigns
@@ -538,7 +538,7 @@
 ; the duration of its body and drops it again on the way out; an escape runs
 ; everything the jump is about to skip, innermost first, before it jumps.
 ;
-; The shape is x-r5rs's dynamic-wind (r5rs/scm/control.scm) over this same
+; This follows x-r5rs's dynamic-wind (r5rs/scm/control.scm) over this same
 ; stack-copying call/cc, with the two differences Python asks for:
 ;
 ;   * ESCAPES ONLY TRAVEL OUTWARD.  `return`, `break` and `continue` are
@@ -713,7 +713,7 @@
   (fn (_ v)
     (let ((n (%py-boolnorm v)))
       (let ((k (if (%py-obj-is n) (%py-obj-native n) n)))
-        (if (if (null? k) #f (eq? (%py-num-kind k) (lit int)))
+        (if (if (null? k) #f (eq? (%py-num-py-type k) (lit int)))
           k
           (Err raise (lit type)
             (Str8 append (Str8 append "'" (%py-class-name (%py-type-of v)))
@@ -803,7 +803,7 @@
 (def %py-range-has?
   (fn (_ r x)
     (def k (%py-boolnorm x))
-    (if (eq? (%py-num-kind k) (lit int))
+    (if (eq? (%py-num-py-type k) (lit int))
       (%py-range-holds? r k)
       (%py-in-pull x (%py-range-iter r)))))
 
@@ -811,7 +811,7 @@
 (def %py-range-count
   (fn (_ r x)
     (def k (%py-boolnorm x))
-    (if (eq? (%py-num-kind k) (lit int))
+    (if (eq? (%py-num-py-type k) (lit int))
       (if (%py-range-holds? r k) 1 0)
       (%py-range-tally x (%py-range-iter r) 0))))
 (def %py-range-tally
@@ -825,7 +825,7 @@
   (fn (_ r x)
     (def k (%py-boolnorm x))
     (match
-      ((not (eq? (%py-num-kind k) (lit int))) (%py-range-find x (%py-range-iter r) 0))
+      ((not (eq? (%py-num-py-type k) (lit int))) (%py-range-find x (%py-range-iter r) 0))
       ((%py-range-holds? r k)
         (Num quotient (- k (%py-range-start r)) (%py-range-step r)))
       (#t (Err raise (lit value) "range.index(x): x not in range" ())))))

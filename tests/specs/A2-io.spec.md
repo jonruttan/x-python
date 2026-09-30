@@ -66,7 +66,7 @@ flushed
 none
 ```
 
-### a closed stream, the wrong kind of value, and what the module names
+### a closed stream, a value of the wrong Python type, and what the module names
 
 ```python
 (python-run "import io\na = io.StringIO()\na.close()\nfor f in [a.read, a.getvalue, lambda: a.write(\"\")]:\n    try:\n        f()\n        print(\"no error\")\n    except ValueError as e:\n        print('ValueError', e)\nb = io.BytesIO()\ntry:\n    b.write(\"text\")\nexcept TypeError:\n    print('TypeError')\nc = io.StringIO()\ntry:\n    c.write(b\"bytes\")\nexcept TypeError:\n    print('TypeError')\nprint(type(io.StringIO()).__name__, type(io.BytesIO()).__name__)\nprint(io.StringIO.__name__, io.BytesIO.__name__, io.IOBase.__name__)\nprint(isinstance(io.StringIO(), io.IOBase), issubclass(io.BytesIO, io.IOBase))\n")

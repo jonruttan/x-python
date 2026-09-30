@@ -410,7 +410,7 @@
             ; everything found was bound.  The three built-in descriptors keep
             ; their meanings here too.
             ((%py-desc-is m)
-              (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
+              (let ((f (%py-desc-fn m)) (k (%py-desc-py-type m)))
                 (match
                   ((eq? k (lit static)) f)
                   ((eq? k (lit classmethod)) (%py-bound-new f owner))
@@ -624,7 +624,7 @@
 ; bin(-15) is -0b1111, not 0b-1111.
 (def %py-based-str
   (fn (_ v base pfx)
-    (if (not (eq? (%py-num-kind (%py-boolnorm v)) (lit int)))
+    (if (not (eq? (%py-num-py-type (%py-boolnorm v)) (lit int)))
       (Err raise (lit type) "an integer is required" ())
       (let ((m (%py-fmt-base (%py-boolnorm v) base #f)))
         ; bin/hex/oct ARE PYTHON-FACING and answer strs -- its only three
@@ -663,7 +663,7 @@
 ; handler that subscripts it and died on the missing index.  So a call asks
 ; first, and refuses in CPython's words.
 ;
-; EACH CALLABLE KIND KEEPS ITS OWN ARM, though apply no longer needs them.
+; EACH CALLABLE VARIANT KEEPS ITS OWN ARM, though apply no longer needs them.
 ; Since x-lang#782 (v0.15.0) apply takes any value through its type's call
 ; handler, which for a class, an instance and a bound method is the code the
 ; arm calls -- reached through the door's value path, which looks the type
@@ -722,10 +722,10 @@
   (fn (_ n)
     (match
       ((%py-str-is n) (%ps->x (%py-str-cps n)))
-      ; ALREADY THE PLATFORM'S, AND SO ALREADY DONE.  These doors have two kinds
+      ; ALREADY THE PLATFORM'S, AND SO ALREADY DONE.  These doors have two variants
       ; of caller: getattr/setattr/delattr/hasattr, where the name is a str the
       ; program computed, and the PARSER, where `del obj.x` read the name out of
-      ; the source and never had a str to begin with.  Refusing the second kind
+      ; the source and never had a str to begin with.  Refusing the second variant
       ; made `del obj.x` raise "attribute name must be string" about a name that
       ; is right there in the statement.
       ((str? n) n)
@@ -784,7 +784,7 @@
         (pair (first as) (self (rest as) n))))))
 
 ; the explicit super(type, obj) form: unimplemented, and every argument
-; shape the corpus passes is one Python itself rejects
+; signature the corpus passes is one Python itself rejects
 ; super(type, obj): the explicit form, the same record the zero-argument
 ; form builds from the class the parser supplies.  obj may be an instance
 ; of type or a subclass of it.

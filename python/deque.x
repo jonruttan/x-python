@@ -90,7 +90,7 @@
 (def %py-dq-pos
   (fn (_ v i)
     (let ((k (%py-boolnorm i)) (n (%py-length (%py-dq-el v))))
-      (if (eq? (%py-num-kind k) (lit int))
+      (if (eq? (%py-num-py-type k) (lit int))
         (let ((p (if (< k 0) (+ n k) k)))
           (if (if (< p 0) #t (>= p n))
             (Err raise (lit index) "deque index out of range" ())
@@ -174,7 +174,7 @@
 (def %py-dq-repeat
   (fn (_ a k)
     (let ((n (%py-boolnorm k)))
-      (if (eq? (%py-num-kind n) (lit int))
+      (if (eq? (%py-num-py-type n) (lit int))
         (let ((v (%py-dq-new (%py-dq-max a) ())))
           (%seq (%py-dq-set! v (%py-dq-fit v (%py-els-repeat (%py-dq-el a) n ()) #t)) v))
         (Err raise (lit type) "can't multiply sequence by non-int" ())))))
@@ -208,7 +208,7 @@
       (match
         ((null? k) ())
         ((same? k %py-dflt) ())
-        ((not (eq? (%py-num-kind k) (lit int))) (Err raise (lit type) "an integer is required" ()))
+        ((not (eq? (%py-num-py-type k) (lit int))) (Err raise (lit type) "an integer is required" ()))
         ((< k 0) (Err raise (lit value) "maxlen must be non-negative" ()))
         (#t k)))))
 

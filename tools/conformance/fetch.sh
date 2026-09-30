@@ -14,7 +14,7 @@
 #     (   )
 #      " "
 #
-# THE SAME SHAPE tools/engine/fetch.sh HAS: read a pin, fetch what it names,
+# THE SAME STEPS tools/engine/fetch.sh HAS: read a pin, fetch what it names,
 # verify the digest, unpack.  A corpus is a third-party tree and gets treated
 # like one -- verified on arrival, kept out of the bundle, and re-fetchable from
 # the pin alone.

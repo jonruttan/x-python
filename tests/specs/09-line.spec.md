@@ -22,7 +22,7 @@ lets these cases run on a platform that has no editor to build a buffer with.
 ```python
 (do (import python/line %py-word-at)
     (def-class %spec-buf () text
-      (method before (self) (guard (_ (member (lit text))) (field (lit text)))))
+      (method before (self) (field (lit text))))
     (%py-word-at (new %spec-buf text "x = pri")))
 ```
 ---

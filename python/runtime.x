@@ -128,9 +128,9 @@
 (%py-sweep!)
 (include-once "./runtime-call.x")
 (%py-sweep!)
-(include-once "./runtime-type.x")
+(include-once "./runtime-py-type.x")
 (%py-sweep!)
-; The standard modules, after runtime-type.x, whose classes they build on.
+; The standard modules, after runtime-py-type.x, whose classes they build on.
 ; Each is a module of its own; the names the runtime's files read of one are
 ; bound here in the root by a selective import, where those files read them.
 (import python/collections %py-collections-module)

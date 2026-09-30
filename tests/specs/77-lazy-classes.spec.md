@@ -1,4 +1,4 @@
-# map and its family are classes
+# map and its siblings are classes
 
 ### subclassing map
 

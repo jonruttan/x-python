@@ -49,5 +49,5 @@ done
 True
 ```
 
-## comprehension shapes
+## comprehension layouts
 

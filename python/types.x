@@ -1,10 +1,10 @@
 ; # x-python -- Python on x-lang
 ;
-; ## python/types.x -- Python's values are x TYPES, not tagged pairs
+; ## python/types.x -- Python's values are x TYPES, not labelled pairs
 ;
 ; @description Registers Python's container types on the running base, so that
 ;   printing, indexing, length and iteration are dispatched by the engine
-;   rather than by a chain of tag tests in the runtime.
+;   rather than by a chain of label tests in the runtime.
 ; @author [Jon Ruttan](jonruttan@gmail.com)
 ; @copyright 2026 Jon Ruttan
 ; @license MIT No Attribution (MIT-0)
@@ -38,7 +38,7 @@
 ;
 ; `make-instance` gives an object with one data slot.  Putting the elements
 ; DIRECTLY in that slot would make `x.append(5)` rebuild-and-return, which is
-; the bug the old tagged pair was shaped to avoid.  So the slot holds a cell --
+; the bug the old labelled pair was laid out to avoid.  So the slot holds a cell --
 ; a pair whose rest is the element list -- and append replaces the rest of that
 ; cell.  Every reference to the list holds the same instance, the instance
 ; holds the same cell, so every reference sees the store.
@@ -56,7 +56,7 @@
   %py-it %py-it-new %py-it-is %py-it-step %py-it-class
   %py-rng %py-range-new %py-range-is %py-range-start %py-range-stop %py-range-step
   %py-set %py-set-new %py-set-is %py-set-elems %py-set-set! %py-set-frozen?
-  %py-view %py-view-new %py-view-is %py-view-kind %py-view-elems
+  %py-view %py-view-new %py-view-is %py-view-py-type %py-view-elems
   %py-list %py-list-new %py-list-is %py-list-elems %py-list-set!
   %py-dict %py-dict-new %py-dict-is %py-dict-entries %py-dict-set! %py-dict-get
   %py-repr %py-equal %py-repeat
@@ -67,7 +67,7 @@
   %py-obj %py-obj-new %py-obj-is %py-obj-class %py-obj-attrs %py-obj-set-attrs!
   %py-obj-native %py-obj-native! %py-native-of
   %py-super-t %py-super-new %py-super-is %py-super-from %py-super-self
-  %py-desc %py-desc-new %py-desc-is %py-desc-kind %py-desc-fn
+  %py-desc %py-desc-new %py-desc-is %py-desc-py-type %py-desc-fn
   %py-prop-new %py-desc-fset %py-desc-fdel %py-desc-doc)
 
 ; Fetch the type prims from the catalog (ns `type` is de-registered, R5).
@@ -79,7 +79,7 @@
 ; EXHAUSTION RIDES THE STATE, NOT THE VALUE.  A step answers
 ; (value . next-state) and only a nil PAIR ends the walk -- so a nil VALUE is an
 ; ordinary element.  That is what makes a list containing None iterable, and it
-; is the whole reason these are shaped this way: the first version returned bare
+; is the whole reason these are laid out this way: the first version returned bare
 ; values and ended on nil, which would have stopped at the first None.  Nothing
 ; consumed the slot, so nothing caught it.
 (def %py-list-step
@@ -103,7 +103,7 @@
 ; --- The element cell --------------------------------------------------------
 
 ; A float index is a TypeError, so the subscript handler needs to recognise a
-; machine float; the type handle compare is the same shape runtime.x uses.
+; machine float; the type handle compare is the same check runtime.x uses.
 (def %py-t-typeof (prim-ref (lit type) (lit of)))
 (def %py-t-th-float (%py-t-typeof 1.5))
 (def %py-t-float? (fn (_ v) (eq? (%py-t-typeof v) %py-t-th-float)))
@@ -177,8 +177,8 @@
 
 ; --- PY-SET ------------------------------------------------------------------
 ;
-; A set is a LIST OF DISTINCT ELEMENTS in insertion order, shaped exactly like
-; PY-DICT: a (flag . elements) pair behind the instance, so the cell is what
+; A set is a LIST OF DISTINCT ELEMENTS in insertion order, laid out exactly
+; like PY-DICT: a (flag . elements) pair behind the instance, so the cell is what
 ; makes a mutation visible to every reference.  The flag is the frozen bit --
 ; a frozenset is the same type with mutation refused and hashing allowed.
 ;
@@ -228,9 +228,9 @@
 ; SNAPSHOT rather than CPython's live window -- the corpus prints them and
 ; lists them, and a live view would need the dict to publish changes.
 (def %py-view ())
-(def %py-view-kind (fn (_ v) (first (first v))))
+(def %py-view-py-type (fn (_ v) (first (first v))))
 (def %py-view-elems (fn (_ v) (rest (first v))))
-(def %py-view-new (fn (_ kind elems) (%make-instance %py-view (pair kind elems))))
+(def %py-view-new (fn (_ py-type elems) (%make-instance %py-view (pair py-type elems))))
 (def %py-view-is (fn (_ v) (%type? v %py-view)))
 (def %py-view-step (fn (_ st) (if (null? st) () (pair (first st) (rest st)))))
 (set! %py-view
@@ -842,18 +842,18 @@
 ; staticmethod, classmethod and property are objects that decide what an
 ; attribute access ANSWERS, and this runtime looks methods up in an alist
 ; where a raw closure means "bind self".  A dedicated type says which of the
-; three a method is without stealing a shape a class attribute might want --
-; a tagged pair would collide with a list attribute, since an instance is a
+; three a method is without stealing a layout a class attribute might want --
+; a labelled pair would collide with a list attribute, since an instance is a
 ; cell too.
-; The payload is (KIND FN FSET FDEL DOC): FN is the function, a property's
+; The payload is (PY-TYPE FN FSET FDEL DOC): FN is the function, a property's
 ; getter; the last three are a property's setter, deleter and doc, nil
 ; where it has none.
 (def %py-desc ())
-(def %py-desc-new (fn (_ kind f) (%make-instance %py-desc (list kind f () () ()))))
+(def %py-desc-new (fn (_ py-type f) (%make-instance %py-desc (list py-type f () () ()))))
 (def %py-prop-new
   (fn (_ fget fset fdel doc) (%make-instance %py-desc (list (lit property) fget fset fdel doc))))
 (def %py-desc-is (fn (_ v) (%type? v %py-desc)))
-(def %py-desc-kind (fn (_ d) (first (first d))))
+(def %py-desc-py-type (fn (_ d) (first (first d))))
 (def %py-desc-fn (fn (_ d) (first (rest (first d)))))
 (def %py-desc-fset (fn (_ d) (first (rest (rest (first d))))))
 (def %py-desc-fdel (fn (_ d) (first (rest (rest (rest (first d)))))))
@@ -863,7 +863,7 @@
     "PY-DESC"
     (list
       (pair (lit write)
-        (fn (_ self) (display "<" (%py-desc-kind self) " object>"))))))
+        (fn (_ self) (display "<" (%py-desc-py-type self) " object>"))))))
 
 (def %py-super-t ())
 
@@ -879,8 +879,8 @@
     (list
       ; Python prints the class the walk starts BELOW and the object it is
       ; bound to: <super: <class 'A'>, <A object>>.  The corpus slices the
-      ; first eighteen characters of it, so the shape has to be right and not
-      ; merely informative.
+      ; first eighteen characters of it, so the layout has to be right and
+      ; not merely informative.
       (pair (lit write)
         (fn (_ self)
           (display "<super: <class '" (%py-class-name (%py-super-from self)) "'>, <"

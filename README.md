@@ -82,7 +82,7 @@ assumed:
 | | | **682** |
 
 The files are tiny, import nothing, and assert by printing — one program, one
-stdout blob, which is the same shape a `.spec.md` case is. Only 65 of the 576
+stdout blob, which is the same layout a `.spec.md` case is. Only 65 of the 576
 in `basics/` carry a `.exp` file; the rest are *differential*, meaning upstream
 generates the expectation by running CPython. So does this bundle.
 
@@ -245,10 +245,10 @@ both.
 
 ## Design notes
 
-- [Python values want x's type system, not tagged pairs](docs/values-on-the-type-system.md)
-  — why containers are tagged pairs today, the constraint that decides how they
+- [Python values want x's type system, not labelled pairs](docs/values-on-the-type-system.md)
+  — why containers are labelled pairs today, the constraint that decides how they
   stop being (`make-instance` resolves the type in the *calling* base), and the
-  shape that follows. Designed and proved, not built.
+  design that follows. Designed and proved, not built.
 - [A NUL byte is refused, not carried](docs/nul-and-the-string-layer.md)
   — a string here is a C string by an engine *guarantee*, so a NUL used to
   shorten a value silently: `len(b'\x00')` was 0. Why every spelling now
@@ -335,10 +335,10 @@ have picked:
 
 `basics/fun` (3 of 25) and `basics/try` (5 of 23) are the two already moving,
 which makes them the cheapest evidence that the parser and the exception layer
-are shaped right rather than merely passing their own specs.
+are built right rather than merely passing their own specs.
 
 **The thing worth deciding early** is still the one the design note names:
-Python's containers are tagged pairs today, and
+Python's containers are labelled pairs today, and
 [`docs/values-on-the-type-system.md`](docs/values-on-the-type-system.md) works
 out what it costs to move them onto x's type system instead. `basics/class`
 scoring 0 with a green local class suite is the first real evidence that the

@@ -239,7 +239,7 @@
         (let ((r (if (null? m) () (%py-boolnorm (m)))))
           ; the answer must be an int; CPython names the object's class
           ; either way
-          (if (eq? (%py-num-kind r) (lit int))
+          (if (eq? (%py-num-py-type r) (lit int))
             r
             (Err raise (lit type)
               (Str8 append "%d format: a real number is required, not "
@@ -292,7 +292,7 @@
     (match
       ((if (%py-bytes-is v) (= (%pb-len (%py-bytes-list v)) 1) #f)
         (%pb->str (%py-bytes-list v)))
-      ((eq? (%py-num-kind (%py-boolnorm v)) (lit int))
+      ((eq? (%py-num-py-type (%py-boolnorm v)) (lit int))
         (if (if (< v 0) #t (> v 255))
           (Err raise (lit overflow) "%c arg not in range(256)" ())
           (%pb->str (list v))))
@@ -407,17 +407,17 @@
           (def p (if (>= prec 0) prec 6))
           (def fv (%py-fmt-float-of v))
           (def ex (%py-f-exact fv))
-          (def kind (first ex))
+          (def label (first ex))
           (def neg (Str8 =? (first (rest ex)) "-"))
-          (if (not (eq? kind (lit num)))
+          (if (not (eq? label (lit num)))
             ; inf and nan zero-pad like any number under %-formatting
             ; ('%06e' % inf is 000inf -- measured, not assumed); nan
             ; never carries the value's sign, only a flag's
             (do
-              (def body0 (if (eq? kind (lit inf)) "inf" "nan"))
-              (def body (if upper (if (eq? kind (lit inf)) "INF" "NAN") body0))
+              (def body0 (if (eq? label (lit inf)) "inf" "nan"))
+              (def body (if upper (if (eq? label (lit inf)) "INF" "NAN") body0))
               (%py-fmt-pad
-                (%py-fmt-sign (if (eq? kind (lit nan)) #f neg) plus space)
+                (%py-fmt-sign (if (eq? label (lit nan)) #f neg) plus space)
                 body width left (if left #f zero)))
             (do
               (def D (first (rest (rest ex))))
@@ -447,8 +447,8 @@
 ; its text arrives as the platform string of its bytes and leaves as one, so
 ; only what a conversion inserts can differ, and %py-fmt-one says what does.
 (def %py-format
-  (fn (_ fmt arg . mode)
-    (def bytes? (not (null? mode)))
+  (fn (_ fmt arg . opt)
+    (def bytes? (not (null? opt)))
     ; a tuple SUBCLASS spreads too: "%d %d" % namedtuple_instance takes its
     ; fields as the arguments, which is what makes a namedtuple a tuple here
     (def args
@@ -465,7 +465,7 @@
     (def star!
       (fn (_)
         (let ((v (%py-fmt-take! cell)))
-          (if (eq? (%py-num-kind v) (lit int)) v
+          (if (eq? (%py-num-py-type v) (lit int)) v
             (Err raise (lit type) "* wants int" ())))))
     (def spec-err
       (fn (_ i)
