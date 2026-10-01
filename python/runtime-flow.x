@@ -497,7 +497,7 @@
 
 ; THE RECEIVER IS CHECKED BEFORE IT IS ASKED.  %py-dunder reads the class out
 ; of an instance, so handing it an int walks a number as though it were one --
-; `with 42:` SEGFAULTED before this guard, the same shape as a shim arriving
+; `with 42:` SEGFAULTED before this guard, the same pattern as a shim arriving
 ; as a class base.
 ;
 ; A stream is the one value here that carries the protocol without being an
@@ -573,7 +573,7 @@
 
 ; the exception as Python hands it to __exit__: an instance, whether it was
 ; raised from Python source (already one) or by this runtime (an Err, whose
-; tag names the class it would have been -- the same bridge the except
+; label names the class it would have been -- the same bridge the except
 ; matcher walks, and Err carries its text as the SUBJECT).
 (def %py-exc-instance-of
   (fn (_ e)
@@ -586,7 +586,7 @@
 (def %py-mfloat
   (fn (_ x)
     (let ((n (%py-boolnorm x)))
-      (let ((k (%py-num-kind n)))
+      (let ((k (%py-num-py-type n)))
         (match
           ((eq? k (lit float)) n)
           ((eq? k (lit int)) (* n 1.0))
@@ -645,7 +645,7 @@
 (def %py-mwhole
   (fn (_ x k)
     (let ((n (%py-boolnorm x)))
-      (if (eq? (%py-num-kind n) (lit int))
+      (if (eq? (%py-num-py-type n) (lit int))
         n
         (let ((v (%py-mfinite (%py-mfloat n))))
           (let ((w (match
@@ -679,7 +679,7 @@
     (let ((g (%py-math-1 f #f "expected a positive input")))
       (fn (_ x)
         (let ((n (%py-boolnorm x)))
-          (if (if (eq? (%py-num-kind n) (lit int)) (not (< 0 n)) #f)
+          (if (if (eq? (%py-num-py-type n) (lit int)) (not (< 0 n)) #f)
             (%py-raise (%py-instantiate %py-exc-ValueError (list "expected a positive input")))
             (g n)))))))
 
@@ -1061,8 +1061,7 @@
     (if (= (Str8 length dir) 0) name (Str8 append dir (Str8 append "/" name)))))
 
 ; The type of what PATH names -- 'file, 'dir or another -- or () when nothing
-; is there.  It is the row File stat keys `kind` up to x-lang v0.16.0 and
-; `file-type` after it (x/sys/file), and either is taken.
+; is there: the row File stat keys `file-type` (x/sys/file).
 (def %py-file-type
   (fn (_ path) (guard (_ ()) (%py-stat-type (File stat path)))))
 (def %py-stat-type
@@ -1070,7 +1069,6 @@
     (match
       ((null? rows) ())
       ((eq? (first (first rows)) (lit file-type)) (rest (first rows)))
-      ((eq? (first (first rows)) (lit kind)) (rest (first rows)))
       (#t (self (rest rows))))))
 
 ; A MODULE MADE FROM A FILE is an environment of its own, entered in the
@@ -1638,20 +1636,20 @@
         (%py-gen-set-status! g (lit done))
         ((%py-gen-ck g) (list (lit return) rv))))))
 
-; The caller's side: mode is send or throw; answers the yielded value, or
+; The caller's side: label is send or throw; answers the yielded value, or
 ; raises StopIteration (with the return value) or the body's exception.
 (def %py-gen-resume
-  (fn (_ g mode v)
+  (fn (_ g label v)
     (def st (%py-gen-status g))
     (if (eq? st (lit done))
-      (if (eq? mode (lit throw)) (%py-raise-any v) (%py-raise-stop ()))
+      (if (eq? label (lit throw)) (%py-raise-any v) (%py-raise-stop ()))
     (if (eq? st (lit running))
       (Err raise (lit value) "generator already executing" ())
       (do
-        (if (if (eq? st (lit created)) (if (eq? mode (lit send)) (not (null? v)) #f) #f)
+        (if (if (eq? st (lit created)) (if (eq? label (lit send)) (not (null? v)) #f) #f)
           (Err raise (lit type) "can't send non-None value to a just-started generator" ())
           ())
-        (if (if (eq? st (lit created)) (eq? mode (lit throw)) #f)
+        (if (if (eq? st (lit created)) (eq? label (lit throw)) #f)
           (do (%py-gen-set-status! g (lit done)) (%py-raise-any v))
           ; ACROSS THE BOUNDARY THE WIND STACK IS SWAPPED, not shared: the body
           ; runs owing what the body owes, and hands it back unpaid when it
@@ -1666,7 +1664,7 @@
                          (%set-first! %py-winds (%py-gen-winds g))
                          (if (eq? st (lit created))
                            (%py-gen-run g)
-                           ((%py-gen-gk g) (list mode v)))))))
+                           ((%py-gen-gk g) (list label v)))))))
               (do
                 ; control is back on this side, so what the global holds now is
                 ; whatever the body left owing
@@ -1757,12 +1755,12 @@
             (def thr (if (%py-obj-is it) (%py-dunder it "throw") ()))
             (def cls (if (%py-obj-is it) (%py-dunder it "close") ()))
             (def step
-              (fn (self mode v)
+              (fn (self label v)
                 (let ((r (guard (e (if (%py-exc-match e %py-exc-StopIteration)
                                      (list (lit stop) (%py-stop-value e))
                                      (error e)))
                            (list (lit got)
-                             (if (eq? mode (lit throw))
+                             (if (eq? label (lit throw))
                                (if (null? thr) (%py-raise-any v) (thr v))
                                (if (if (null? v) #t (null? snd)) (nx) (snd v)))))))
                   (if (eq? (first r) (lit stop))
@@ -1775,11 +1773,11 @@
             (step (lit send) ()))))
       (do
         (def step
-          (fn (self mode v)
+          (fn (self label v)
             (let ((r (guard (e (if (%py-exc-match e %py-exc-StopIteration)
                                  (list (lit stop) (%py-stop-value e))
                                  (error e)))
-                       (list (lit got) (%py-gen-resume it mode v)))))
+                       (list (lit got) (%py-gen-resume it label v)))))
               (if (eq? (first r) (lit stop))
                 (first (rest r))
                 (let ((down (%py-yield-raw g (first (rest r)))))
@@ -1802,7 +1800,7 @@
       ((if (eq? a #t) #t (eq? a #f)) (eq? a b))
       ((if (null? b) #t (if (eq? b #t) #t (eq? b #f))) #f)
       ((if (%py-str-is a) (%py-str-is b) #f) (%pb-eq? (%py-str-cps a) (%py-str-cps b)))
-      ((if (eq? (%py-num-kind a) (lit int)) (eq? (%py-num-kind b) (lit int)) #f)
+      ((if (eq? (%py-num-py-type a) (lit int)) (eq? (%py-num-py-type b) (lit int)) #f)
         (= a b))
       (#t #f))))
 

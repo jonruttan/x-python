@@ -42,13 +42,13 @@
 (def %py-NotImplemented (pair (lit %py-NotImplemented) ()))
 
 ; ELLIPSIS IS THE OTHER SINGLETON PYTHON SPELLS AS A LITERAL, `...`, and it
-; takes the same shape for the same reason: one unique pair, identity the
+; takes the same layout for the same reason: one unique pair, identity the
 ; test.  Nothing here reads it -- it exists so that a program that passes it
 ; around, hashes it, or compares it gets the answer Python gives.
 (def %py-Ellipsis (pair (lit %py-Ellipsis) ()))
 
 ; The bound dunder, or nil.  A method compiles to (fn (_ py-self ...) ...),
-; so binding is closing over the object -- the same shape %py-obj-attr uses.
+; so binding is closing over the object -- the same technique %py-obj-attr uses.
 (def %py-dunder
   (fn (_ obj name)
     (let ((m (%py-method-find (%py-obj-class obj) name)))
@@ -56,7 +56,7 @@
         ((null? m) ())
         ; the three built-in descriptors keep their meaning as dunders too
         ((%py-desc-is m)
-          (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
+          (let ((f (%py-desc-fn m)) (k (%py-desc-py-type m)))
             (if (eq? k (lit static)) f
               (if (eq? k (lit classmethod)) (%py-bind-method f (%py-obj-class obj))
                 (%py-bind-method m obj)))))
@@ -197,7 +197,7 @@
 (def %py-th-complex (%py-typeof-prim (Complex make 0.0 1.0)))
 (def %py-complex-is
   (fn (_ v) (eq? (%py-typeof-prim v) %py-th-complex)))
-(def %py-num-kind
+(def %py-num-py-type
   (fn (_ v)
     (let ((h (%py-typeof-prim v)))
       (match
@@ -219,7 +219,7 @@
 
 ; A number on each side, or Python's TypeError.  Past the numbers the platform's
 ; operators do not refuse: they answer a word (1 + memoryview(b"")), raise under
-; a tag no except clause maps, or crash (1 / None).  So each seam asks before its
+; a label no except clause maps, or crash (1 / None).  So each seam asks before its
 ; numeric arm, and the refusal names both types as CPython does.
 (def %py-nums? (fn (_ a b) (if (%py-num? a) (%py-num? b) #f)))
 ; A machine int or a float on each side needs none of a seam's other questions,
@@ -255,7 +255,7 @@
 (def %py-repeat-count
   (fn (_ k)
     (let ((n (%py-boolnorm k)))
-      (if (eq? (%py-num-kind n) (lit int))
+      (if (eq? (%py-num-py-type n) (lit int))
         n
         (Err raise (lit type)
           (Str8 append "can't multiply sequence by non-int of type '"
@@ -264,7 +264,7 @@
 
 ; THE COMPLEX BRANCH OF THE FOUR SEAMS.  A complex beside a non-number is a
 ; TypeError here, not the tower's promotion error -- that one is x's
-; teaching raise (#584) and its tag is not `type`, so `except TypeError`
+; teaching raise (#584) and its label is not `type`, so `except TypeError`
 ; never saw it and 1j + [] killed the program.  And a bigint beside a
 ; complex is FLOATED first, as Python does, because the tower declares no
 ; COMPLEX x BIGINT promotion.  Only the complex case pays: the seams reach
@@ -273,7 +273,7 @@
   (fn (_ a0 b0 op code)
     (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
     (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
-    (if (if (null? (%py-num-kind a)) #t (null? (%py-num-kind b)))
+    (if (if (null? (%py-num-py-type a)) #t (null? (%py-num-py-type b)))
       (%py-op-refuse op a0 b0)
       (do
         (def x (if (eq? (%py-typeof-prim a) %py-th-big) (* 1.0 a) a))
@@ -295,7 +295,7 @@
   (fn (_ a0 b0)
     (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
     (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
-    (if (if (eq? (%py-num-kind a) (lit int)) (eq? (%py-num-kind b) (lit int)) #f)
+    (if (if (eq? (%py-num-py-type a) (lit int)) (eq? (%py-num-py-type b) (lit int)) #f)
       (if (< b 0)
         (Err raise (lit value) "negative shift count" ())
         (* a (Num expt 2 b)))
@@ -309,7 +309,7 @@
   (fn (_ a0 b0)
     (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
     (def b (if (eq? b0 #t) 1 (if (eq? b0 #f) 0 b0)))
-    (if (if (eq? (%py-num-kind a) (lit int)) (eq? (%py-num-kind b) (lit int)) #f)
+    (if (if (eq? (%py-num-py-type a) (lit int)) (eq? (%py-num-py-type b) (lit int)) #f)
       (if (< b 0)
         (Err raise (lit value) "negative shift count" ())
         (let ((p (Num expt 2 b)))
@@ -420,8 +420,8 @@
 ; true and floor division and for modulo.
 ;
 ; These raise an Err rather than building an instance, like every other raise
-; this runtime makes.  The tag is what `except ZeroDivisionError` matches on;
-; see the exception section for why both shapes are caught the same way.
+; this runtime makes.  The label is what `except ZeroDivisionError` matches on;
+; see the exception section for why both layouts are caught the same way.
 (def %py-div
   (fn (_ a0 b0)
     (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
@@ -471,9 +471,9 @@
 ; argument list would be indistinguishable from an ordinary positional one.
 ; The box is a pair whose head is this one unique value, which no program can
 ; produce, so the tail can be read without ambiguity.
-(def %py-kwbox-tag (list (lit %py-kwbox)))
-(def %py-kwbox (fn (_ d) (pair %py-kwbox-tag d)))
-(def %py-kwbox? (fn (_ v) (if (pair? v) (same? (first v) %py-kwbox-tag) #f)))
+(def %py-kwbox-label (list (lit %py-kwbox)))
+(def %py-kwbox (fn (_ d) (pair %py-kwbox-label d)))
+(def %py-kwbox? (fn (_ v) (if (pair? v) (same? (first v) %py-kwbox-label) #f)))
 
 ; The dict a call sent, or an empty one when it sent none -- which is what a
 ; plain call always looks like.
@@ -513,14 +513,14 @@
     (let ((absent (%py-absent-keys names (%py-kwargs-of more) ())))
       (if (null? absent) () (%py-missing! fname "keyword-only" absent)))))
 (def %py-missing!
-  (fn (_ fname kind names)
+  (fn (_ fname label names)
     (let ((n (%py-length names)))
       (Err raise (lit type)
         (Str8 append fname
           (Str8 append "() missing "
             (Str8 append (%py-str n)
               (Str8 append (if (= n 1) " required " " required ")
-                (Str8 append kind
+                (Str8 append label
                   (Str8 append (if (= n 1) " argument: " " arguments: ")
                     (%py-quoted-names names)))))))
         ()))))
@@ -703,7 +703,7 @@
 (def %py-pow-unit?
   (fn (_ v)
     (let ((x (%py-boolnorm v)))
-      (if (eq? (%py-num-kind x) (lit int))
+      (if (eq? (%py-num-py-type x) (lit int))
         (if (= x 0) #t (if (= x 1) #t (= x (- 0 1))))
         #f))))
 ; A bool negates as the int it is, and a value that is no number is refused, as
@@ -714,7 +714,7 @@
       (let ((m (%py-dunder a "__neg__")))
         (if (null? m) (Err raise (lit type) "bad operand type for unary -" ()) (m)))
       (let ((w (%py-boolnorm a)))
-        (if (null? (%py-num-kind w))
+        (if (null? (%py-num-py-type w))
           (Err raise (lit type) "bad operand type for unary -" ())
           (- 0 w))))))
 
@@ -727,7 +727,7 @@
       (let ((m (%py-dunder v "__pos__")))
         (if (null? m) (Err raise (lit type) "bad operand type for unary +" ()) (m)))
     (let ((w (%py-boolnorm v)))
-      (if (null? (%py-num-kind w))
+      (if (null? (%py-num-py-type w))
         (Err raise (lit type) "bad operand type for unary +" ())
         w)))))
 
@@ -737,7 +737,7 @@
       (let ((m (%py-dunder v "__invert__")))
         (if (null? m) (Err raise (lit type) "bad operand type for unary ~" ()) (m)))
     (let ((w (%py-boolnorm v)))
-      (if (eq? (%py-num-kind w) (lit int))
+      (if (eq? (%py-num-py-type w) (lit int))
         (- (- 0 w) 1)
         (Err raise (lit type) "bad operand type for unary ~" ()))))))
 
@@ -809,7 +809,7 @@
   (fn (_ a0 b0 opname tbl fbit)
     (def a (%py-boolnorm a0))
     (def b (%py-boolnorm b0))
-    (if (if (eq? (%py-num-kind a) (lit int)) (eq? (%py-num-kind b) (lit int)) #f)
+    (if (if (eq? (%py-num-py-type a) (lit int)) (eq? (%py-num-py-type b) (lit int)) #f)
       (do
         (def tail? (fn (_ v) (if (= v 0) #t (= v (- 0 1)))))
         (def go
@@ -894,7 +894,7 @@
           ; AN INT IN A BYTES IS A BYTE VALUE, not a type error: bytes are a
           ; sequence OF ints in Python, so `0 in b"1234"` asks whether any byte
           ; is zero and answers False rather than refusing.
-          (if (eq? (%py-num-kind (%py-boolnorm a)) (lit int))
+          (if (eq? (%py-num-py-type (%py-boolnorm a)) (lit int))
             (%py-in-walk (%py-boolnorm a) (%py-bytes-list b))
             (if (%py-arr-is a)
               (%pb-in? (%py-arr-buffer a) (%py-bytes-list b))
@@ -938,7 +938,7 @@
     (match
       ((%py-float-is v) (if (< (first v) 0) (- 0.0 v) v))
       ((%py-complex-is v) (Complex magnitude v))
-      ((eq? (%py-num-kind v) (lit int)) (if (< v 0) (- 0 v) v))
+      ((eq? (%py-num-py-type v) (lit int)) (if (< v 0) (- 0 v) v))
       (#t (Err raise (lit type) "bad operand type for abs()" ())))))
 
 ; rounding an int to a negative number of digits: half goes to EVEN, so
@@ -997,7 +997,7 @@
     (def v (%py-boolnorm (first a)))
     (def nd (if (null? (rest a)) () (first (rest a))))
     (if (not (%py-float-is v))
-      (if (eq? (%py-num-kind v) (lit int))
+      (if (eq? (%py-num-py-type v) (lit int))
         (if (if (null? nd) #f (< (%py-boolnorm nd) 0))
           (%py-round-int v (%py-boolnorm nd))
           v)
@@ -1184,7 +1184,7 @@
 ;
 ; EACH ARM ANSWERS A CLOSURE, so the NAME is resolved when it is asked for
 ; and not when it is called.  That is what makes `bytes.nosuch` an
-; AttributeError at the dot -- which is the shape %py-str-attr already had,
+; AttributeError at the dot -- which is the technique %py-str-attr already had,
 ; and which five conformance programs probe with a bare `bytes.count`.
 ; An encoding or errors argument: the platform string the codec names it by.
 ; A call that left it out, or a constructor carrying %py-dflt for it, takes the
@@ -1468,7 +1468,7 @@
 
 ; A COUNT IS AN INTEGER, and a float is not one: bytes(5.5) asked for five and
 ; a half zero bytes and got five, where CPython refuses the value outright.
-(def %py-bytes-count? (fn (_ v) (eq? (%py-num-kind (%py-boolnorm v)) (lit int))))
+(def %py-bytes-count? (fn (_ v) (eq? (%py-num-py-type (%py-boolnorm v)) (lit int))))
 
 ; CPython's words for a value neither constructor can take.
 (def %py-bytes-refusal

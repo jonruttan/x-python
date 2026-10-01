@@ -65,8 +65,8 @@
 (def %py-sweep!
   (fn (_) (if (first %py-from-image) () (%py-image-collect))))
 
-; Reverse-prepend: the tail-shape list builder.  Every walk in the bundle
-; accumulates front-to-back and reverses once, so this is the shape underneath
+; Reverse-prepend: the accumulate-and-reverse list builder.  Every walk in the bundle
+; accumulates front-to-back and reverses once, so this is the pattern underneath
 ; both names below -- and it is worth having spelled out, because
 ; `(%py-append (%py-reverse xs) acc)` is `(%py-rev-onto xs acc)` without the
 ; intermediate list.

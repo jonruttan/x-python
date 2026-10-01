@@ -29,7 +29,7 @@
 ; the builtin table the parser reads, True/False/None, a leading capital.
 ; The answer for a name is memoised.
 ;
-; The colours are repl/ansi.x's, in the classes the platform painter uses
+; The colours are repl/ansi.x's, in the labels the platform painter uses
 ; for the same things, so a keyword, a literal and a class look the same
 ; being typed in either language.  A colourless terminal short-circuits the
 ; scan, and the last line painted is kept by identity, since a redraw whose
@@ -183,13 +183,13 @@
 ; --- classifying a name ------------------------------------------------------
 (def %pp-kw ())        ; Dict: keyword -> #t
 (def %pp-bi ())        ; Dict: builtin -> #t
-(def %pp-memo ())      ; Dict: name -> class
+(def %pp-memo ())      ; Dict: name -> label
 (def %pp-kw-get ())
 (def %pp-bi-get ())
 (def %pp-memo-get ())
 (def %pp-memo-set ())
 
-(def %pp-class-of
+(def %pp-label-of
   (fn (_ name)
     (match
       ((%pp-kw-get #f name) (lit keyword))
@@ -199,17 +199,17 @@
       ((let ((b0 (%pp-byte name 0))) (if (>= b0 65) (<= b0 90) #f)) (lit class))
       (#t (lit name)))))
 
-(def %py-paint-class
+(def %py-paint-label
   (fn (_ name)
     (let ((hit (%pp-memo-get () name)))
       (if (null? hit)
-        (let ((cls (%pp-class-of name)))
+        (let ((cls (%pp-label-of name)))
           (%pp-memo-set name cls)
           cls)
         hit))))
 
 ; --- the palette -------------------------------------------------------------
-(def %pp-classes
+(def %pp-labels
   (list (lit keyword) (lit bool) (lit builtin) (lit class) (lit name)
         (lit number) (lit string) (lit comment) (lit decorator) (lit plain)))
 (def %pp-pal ())
@@ -229,7 +229,7 @@
                   ((null? names) "")
                   ((eq? cls (first names)) (first codes))
                   (#t (self (rest names) (rest codes)))))))
-      (go %pp-classes %pp-pal))))
+      (go %pp-labels %pp-pal))))
 
 (def %pp-depth-code
   (fn (_ depth focused)
@@ -240,17 +240,17 @@
                     (go (% depth %pp-depth-n) %pp-depth)))))
       (if focused (%pp-append base %pp-focus) base))))
 
-; The painter's answer for a token: its class's code, or a bracket's depth
-; code.  The scan takes this as a function so a spec can ask for classes
+; The painter's answer for a token: its label's code, or a bracket's depth
+; code.  The scan takes this as a function so a spec can ask for labels
 ; instead of codes (%py-paint-tokens).
 (def %pp-painter
   (fn (_ cls depth focused)
     (if (eq? cls (lit bracket)) (%pp-depth-code depth focused) (%pp-code cls))))
-(def %pp-classer (fn (_ cls depth focused) cls))
+(def %pp-labeler (fn (_ cls depth focused) cls))
 
 ; --- bracket marks -----------------------------------------------------------
 ;
-; A mark for every bracket: (offset depth focused), the shape x/repl/paint
+; A mark for every bracket: (offset depth focused), the layout x/repl/paint
 ; answers for parens.  Depth is the nesting level from 0, shared by the two
 ; halves of a pair; a close with nothing to close is -1.  Focused is true on
 ; the pair the cursor is beside: a close just before the cursor first, then
@@ -338,7 +338,7 @@
                   (self s e2 n (pair (pair (code-of (lit string) 0 #f) (%pp-bsub s i (- e2 i))) segs)
                         marks code-of))
                 (let ((text (%pp-bsub s i (- e i))))
-                  (self s e n (pair (pair (code-of (%py-paint-class text) 0 #f) text) segs)
+                  (self s e n (pair (pair (code-of (%py-paint-label text) 0 #f) text) segs)
                         marks code-of)))))
           ((if (= b 64) (if (< (+ i 1) n) (%pp-ident-start? (%pp-byte s (+ i 1))) #f) #f)
             (let ((e (%pp-ident-end s (+ i 1) n)))
@@ -388,7 +388,7 @@
 ; a spec checks, colour or no colour.
 (def %py-paint-tokens
   (fn (_ s)
-    (List reverse (%pp-scan s 0 (%pp-blen s) () (%pp-depths s -1) %pp-classer))))
+    (List reverse (%pp-scan s 0 (%pp-blen s) () (%pp-depths s -1) %pp-labeler))))
 
 ; --- completion --------------------------------------------------------------
 ;
@@ -476,5 +476,5 @@
 (set! %image-recache-hooks (pair (fn (_) (%py-line-install!)) %image-recache-hooks))
 
 (provide python/line
-  %py-read %py-paint %py-marks %py-paint-tokens %py-paint-class
+  %py-read %py-paint %py-marks %py-paint-tokens %py-paint-label
   %py-complete %py-word-at %py-session-name!)

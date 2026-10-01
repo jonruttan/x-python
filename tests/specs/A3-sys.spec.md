@@ -22,7 +22,7 @@ written
 printed to stdout
 ```
 
-### the wrong kind of value, and a write to the stream that reads
+### a value of the wrong Python type, and a write to the stream that reads
 
 ```python
 (python-run "import sys, io\ntry:\n    sys.stdout.write(5)\nexcept TypeError as e:\n    print(\"TypeError\", e)\ntry:\n    sys.stdout.buffer.write(\"text\")\nexcept TypeError as e:\n    print(\"TypeError\", e)\ntry:\n    sys.stdin.write(\"x\")\nexcept OSError as e:\n    print(type(e).__name__, e, isinstance(e, ValueError), isinstance(e, io.UnsupportedOperation))\n")

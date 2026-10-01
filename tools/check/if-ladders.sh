@@ -18,8 +18,8 @@
 # is a function that should become a match, and the file may only get smaller.
 #
 # Set X to point at a particular x; otherwise the one on PATH is used.  The
-# checker itself is x -- an if ladder is a SHAPE, and reading the file as
-# s-expressions is the only way to see one.  A grep would count parens.
+# checker itself is x -- an if ladder is STRUCTURAL, and reading the file
+# as s-expressions is the only way to see one.  A grep would count parens.
 #
 # NOT A GLOB, because a glob only sees one directory deep.  python/ is flat
 # today and this changes nothing here; it is the shape the sibling bundles

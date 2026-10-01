@@ -1,18 +1,18 @@
 Exceptions are classes, and the hierarchy is the point.
 
-The first version of this mapped exception NAMES to error KINDS with a string
+The first version of this mapped exception NAMES to error LABELS with a string
 table, and `Exception` matched everything by a special case written into the
 matcher. That worked and could not grow: `except LookupError` catching both
 IndexError and KeyError is not a special case — it is what deriving from a
 common base MEANS, and a flat table has no way to say it.
 
-So the builtins are real class values in Python's own shape, `Exception` is no
+So the builtins are real class values in Python's own layout, `Exception` is no
 longer special, and a user-defined exception is caught by exactly the same code.
 
-Two shapes of raised value arrive at a handler. A `raise` in Python source makes
+Two layouts of raised value arrive at a handler. A `raise` in Python source makes
 an instance; everything this runtime raises itself makes an `Err` carrying a
-tag, because those raises predate classes by a long way. A tag names the class
-it would have been, and from there both match identically.
+label, because those raises predate classes by a long way. A label names the
+class it would have been, and from there both match identically.
 
 ## the builtin hierarchy
 

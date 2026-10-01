@@ -1,7 +1,7 @@
 Python's lexical layer, on a base isolated from the sexp reader's types
-(`python/tokens.x`). A keyword is its own token kind: PY-KEYWORD, an analyser
+(`python/tokens.x`). A keyword token has a label of its own: PY-KEYWORD, an analyser
 registered ahead of PY-NAME, decides `if` per character, and the parser asks
-the tag rather than comparing the name against a list.
+the label rather than comparing the name against a list.
 
 Every case ends with `(newline)`. Without it the runner has no line boundary
 between cases and attributes one case's output to another, which reads as a
@@ -33,7 +33,7 @@ tokenizer bug and is not one.
 ---
     (('tok-name "_x"))
 
-### a keyword is its own token kind
+### a keyword token has a label of its own
 
 ```python
 (%seq (write (python-tokenize "if")) (newline))
@@ -173,35 +173,30 @@ denotes belongs to the evaluator, not here.
 ---
     (('tok-number "1_000" 1))
 
-### the two doors are the platform's, under the name it has
+### the two doors are the platform's
 
 An accepting state declares which number it saw, and the reader recovers it,
-through a pair of platform names: `%score-label!` and `%read-label`, or
-`%score-variant!` and `%read-variant` through x-lang v0.16.0. Each door takes
-the name it finds bound, the newer first, so on either platform the door is
-the platform's own function and not the fallback that answers nothing.
+through a pair of platform names, `%score-label!` and `%read-label`.  Each
+door is the platform's own function, not the fallback that answers nothing.
 
 ```python
-(do (import python/tokens %py-variant! %py-read-variant)
-  (list (same? %py-variant! (guard (e (guard (e ()) %score-variant!)) %score-label!))
-          (same? %py-read-variant (guard (e (guard (e ()) %read-variant)) %read-label))))
+(do (import python/tokens %py-number-label! %py-read-number-label)
+  (list (same? %py-number-label! %score-label!)
+          (same? %py-read-number-label %read-label)))
 ```
 ---
     (#t #t)
 
 ### the compiled number states spell the same name
 
-The compiled states declare through the assembler lane, which knows the
-platform's name and refuses the other. The attempt tries the newer name, then
-the older, and keeps the one the lane took. Where the platform compiles no
-states at all the attempt raises, and there is nothing to check.
+The compiled states declare through the assembler lane.  Where the platform
+compiles no states at all the attempt raises, and there is nothing to check.
 
 ```python
-(do (import python/tokens %py-jit-variants %py-jit-compile!)
+(do (import python/tokens %py-jit-number-labels %py-jit-compile!)
   (guard (e #t)
     (%py-jit-compile!)
-    (eq? (first %py-jit-variants)
-         (guard (e (lit %score-variant!)) (%seq %score-label! (lit %score-label!))))))
+    (eq? (first %py-jit-number-labels) (lit %score-label!))))
 ```
 ---
     #t

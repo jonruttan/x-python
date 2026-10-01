@@ -11,7 +11,7 @@ Split into small files ON PURPOSE: every yield copies the C stack, the
 batch runner never collects, and a dozen generator cases in one process
 cross the allocation ceiling.
 
-## comprehension shapes
+## comprehension layouts
 
 ### listcomp with operator element
 

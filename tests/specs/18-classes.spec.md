@@ -172,7 +172,7 @@ longer refuses one.
 A control-flow statement is still refused, and that IS a divergence: Python
 runs `if` inside a class body like any other suite.  The refusal comes from
 the expression parser now rather than from the body parser, so the message
-names the token rather than the shape.
+names the token rather than the structure.
 
 ```python
 (python-run "class C:\n    if 1:\n        pass\nprint(C())")

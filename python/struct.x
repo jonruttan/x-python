@@ -58,7 +58,7 @@
 
 ; (order align? first-index) -- the byte order a code is written in, whether
 ; fields are padded to their width, and where the codes start.
-(def %py-st-mode
+(def %py-st-order
   (fn (_ s n)
     (if (= n 0)
       (list "little" #t 0)
@@ -103,7 +103,7 @@
   (fn (_ fmt)
     (let ((s (%py-st-fmt fmt)))
       (let ((n (%py-byte-len s)))
-        (let ((m (%py-st-mode s n)))
+        (let ((m (%py-st-order s n)))
           (list (first m) (List ref 1 m) (%py-st-items s n (List ref 2 m) ())))))))
 
 ; Native fields sit at a multiple of their own width.
@@ -168,11 +168,11 @@
         (%py-st-bad! "not enough arguments for the format")
         (self e (- cnt 1) order (rest vals)
           (%py-list-cat acc
-            (let ((kind (first (rest (rest e)))))
-              (if (pair? kind)
-                (%py-int-encode (%py-st-float-bits (first vals) kind (first e))
+            (let ((label (first (rest (rest e)))))
+              (if (pair? label)
+                (%py-int-encode (%py-st-float-bits (first vals) label (first e))
                   (List ref 1 e) order #f)
-                (%py-int-encode (%py-boolnorm (first vals)) (List ref 1 e) order kind)))))))))
+                (%py-int-encode (%py-boolnorm (first vals)) (List ref 1 e) order label)))))))))
 
 ; (bytes . unused-values)
 (def %py-st-emit

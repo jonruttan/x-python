@@ -142,7 +142,7 @@
   (fn (self toks)
     (if (null? toks)
       #t
-      (if (eq? (%py-tag (first toks)) (lit tok-newline)) (self (rest toks)) #f))))
+      (if (eq? (%py-label (first toks)) (lit tok-newline)) (self (rest toks)) #f))))
 
 ; Source to forms.
 ; THE SOURCE ARRIVES AS A str AND THE LEXER TAKES A PLATFORM STRING, so this

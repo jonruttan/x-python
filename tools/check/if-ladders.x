@@ -12,7 +12,7 @@
 ; and reads worse the longer it gets.  Every arm after the third is a reason to
 ; use the primitive that exists for this.
 ;
-; STRUCTURAL, not a grep: an `if` ladder is a shape, and the shape is only
+; STRUCTURAL, not a grep: an `if` ladder is STRUCTURAL, and that is only
 ; knowable by reading the file as s-expressions.  The file is parsed, never
 ; evaluated.  Symbol comparison is by NAME -- symbols intern per base, so a
 ; symbol read here is not eq? to one written here.

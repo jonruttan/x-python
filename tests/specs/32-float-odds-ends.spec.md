@@ -1,8 +1,8 @@
-The float family's odds and ends: the small semantics float1.py and its
+Float's odds and ends: the small semantics float1.py and its
 neighbours turn out to lean on. Bytes literals exist exactly far enough to
 reach float(); unary + and ~ join -; floor division floors floats; bools
-are ints wherever numbers compare; membership and the bitwise family are
-real operators with Python's refusals. Every expectation is a real CPython
+are ints wherever numbers compare; membership and the bitwise operators
+are real operators with Python's refusals. Every expectation is a real CPython
 output. The big-literal case pins a fix for a silent wrap: integer literals
 used to read through a child base with no bigint type.
 

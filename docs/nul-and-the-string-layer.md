@@ -117,7 +117,7 @@ The limit is stated once, in one sentence, wherever it is reached.
   a raise crossing the C reader boundary arrives at the guard with its
   payload gone, which is why `%py-note-ind-error!` exists — so a NUL escape
   parks a note that `python-tokenize` raises once reading is over and x is
-  driving again. That is the cell-and-re-raise shape `%py-ind-error` already
+  driving again. That is the cell-and-re-raise pattern `%py-ind-error` already
   uses, raised from the same place.
 - **`chr(0)`** refuses in `%py-chr`, which also settles `'%c' % 0` and
   `f'{chr(0)}'`: both route through it.
@@ -128,7 +128,7 @@ The limit is stated once, in one sentence, wherever it is reached.
   four here — no escape is decoded, so no NUL is named.
 
 A literal's refusal is not catchable by a `try` in the same program, because
-tokenizing finishes before the first statement runs. That is the shape
+tokenizing finishes before the first statement runs. That is the pattern
 CPython gives a `SyntaxError` too, and the message is the same sentence
 either way, so there is one thing to learn rather than two.
 
@@ -154,7 +154,7 @@ So the score does not move. What moves is that a program naming a NUL now
 stops and **says so** instead of running on with a value two bytes short of
 what it asked for. That trade goes the other way for a program that names a
 NUL it never uses: it used to run, and now it does not. None of the thirteen
-is one — but that is the shape of the cost, not an accident that cannot recur.
+is one — but that is the pattern of the cost, not an accident that cannot recur.
 
 The way out, if it is ever worth taking, is the platform's own: `PY-BYTES`
 carries a byte list, `PY-STR` becomes a wrapper over a region and a length,

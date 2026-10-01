@@ -133,7 +133,7 @@
       (%py-instantiate %py-exc-UnsupportedOperation (list (%py-str-of-x what))))))
 
 ; A stream prints as its class and nothing about its contents, which is the
-; shape every object here prints in; a file, as its name and mode too.
+; layout every object here prints in; a file, as its name and mode too.
 (set! %py-io
   (%make-type
     "PY-IO"

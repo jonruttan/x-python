@@ -205,7 +205,7 @@ not cosmetic. Integers are read in `%py-sexp-base`, a `(Base make)` child; float
 is a library type registered on whichever base loaded it, so that child has no
 float at all. The int type there accepted the `1` of `1.5` as a prefix and the
 fraction was dropped without an error — `2 * 1.5` answered `2`. These cases exist
-because that failure was silent, and a silent wrong number is the worst kind.
+because that failure was silent, and nothing is worse than a silent wrong number.
 
 ### a bare float literal
 

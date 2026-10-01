@@ -124,7 +124,7 @@ used to carry a bracket DEPTH COUNTER to know when it was inside them.
 It does not any more. python/tokens.x reads a bracketed run through the engine's
 own reader loop, so it arrives as ONE token with its contents nested inside, and
 a newline within it never reaches this pass at all. These cases are the same
-cases; what changed is that the nesting is now the shape rather than something
+cases; what changed is that the nesting is now the layout rather than something
 rediscovered by counting.
 
 ### a newline inside parens is not line structure

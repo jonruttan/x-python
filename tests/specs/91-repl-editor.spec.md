@@ -16,8 +16,8 @@ registry.
 ```python
 (%seq
   (do
-    (import python/line %py-paint-class)
-    (write (List map (fn (_ n) (%py-paint-class n)) (list "def" "True" "print" "Foo" "x"))))
+    (import python/line %py-paint-label)
+    (write (List map (fn (_ n) (%py-paint-label n)) (list "def" "True" "print" "Foo" "x"))))
   (newline))
 ```
 ---
@@ -35,7 +35,7 @@ registry.
 ---
     (('keyword . "if") ('plain . " ") ('name . "x") ('plain . ": ") ('builtin . "print") ('bracket . "(") ('string . "\"hi\"") ('bracket . ")") ('plain . " ") ('comment . "# c"))
 
-### string prefixes and triple quotes are one string; numbers keep their shape
+### string prefixes and triple quotes are one string; numbers keep their layout
 
 ```python
 (%seq
@@ -122,7 +122,7 @@ left of the cursor, so a stand-in with that method serves here as it does in
   (do
     (import python/line %py-complete)
     (def-class %spec-edit () text
-      (method before (self) (guard (_ (member (lit text))) (field (lit text)))))
+      (method before (self) (field (lit text))))
     (write (list (%py-complete (new %spec-edit text "x = pri"))
                  (%py-complete (new %spec-edit text "x = ")))))
   (newline))

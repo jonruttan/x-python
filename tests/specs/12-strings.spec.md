@@ -1,6 +1,6 @@
-String methods map onto `Str8`, which already has them. The work is the *shape*,
+String methods map onto `Str8`, which already has them. The work is the *signature*,
 not the algorithm: `Str8` takes its subject last, Python takes it first as the
-receiver, and `split`/`join` cross the list boundary so their results are tagged
+receiver, and `split`/`join` cross the list boundary so their results are labelled
 or untagged on the way through.
 
 ## strings case

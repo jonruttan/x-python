@@ -171,7 +171,7 @@ comparison looks each key up rather than walking the two entry lists in step.
 ## refusals, and bools as ints
 
 A number beside a non-number is a TypeError naming both types; the platform's
-operators would answer a word for it, raise under a tag no except clause maps,
+operators would answer a word for it, raise under a label no except clause maps,
 or crash (`1 / None`). A bool is the int it is on either side of every seam.
 
 ### a non-number beside a number is refused, in CPython's words

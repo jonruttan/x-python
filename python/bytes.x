@@ -45,12 +45,12 @@
 ; rather than a second one that agrees with the first only until a byte is
 ; zero.
 ;
-; ## SHAPE
+; ## RECURSION
 ;
 ; Every walk here accumulates and reverses rather than building on the way
 ; back out.  x has no depth limit on non-tail calls and a bytes is data --
 ; a 16K frame is an ordinary size for one and a fatal recursion depth for
-; the other shape (docs and the spec-crash signatures both say so).
+; the other (docs and the spec-crash signatures both say so).
 
 (provide python/bytes
   %pb-of-str %pb->str %pb-nul? %pb-len %pb-ref %pb-sub %pb-cat %pb-repeat

@@ -24,7 +24,7 @@ failure count, and only one of which is progress.
 ### a multi-line program arrives intact
 
 The conformance generator emits whole programs with `\n` escapes — indentation
-included, since indentation is the grammar. This is the shape it emits; if the
+included, since indentation is the grammar. This is the layout it emits; if the
 reader ever stops accepting it, 657 generated specs stop meaning anything.
 
 ```python

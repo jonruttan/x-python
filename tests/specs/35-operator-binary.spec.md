@@ -62,7 +62,7 @@ TypeError
 NotImplemented
 ```
 
-### the rest of the family
+### the rest of the operators
 
 ```python
 (python-run "class B:\n    def __or__(self, o):\n        return 'or'\n    def __rand__(self, o):\n        return 'rand'\n    def __lshift__(self, o):\n        return 'lsh'\n    def __rshift__(self, o):\n        return 'rsh'\n    def __pow__(self, o):\n        return 'pow'\n    def __mod__(self, o):\n        return 'mod'\n    def __floordiv__(self, o):\n        return 'fdiv'\n    def __truediv__(self, o):\n        return 'div'\nb = B()\nprint((b | 1, 1 & b, b << 1, b >> 1, b ** 2, b % 2, b // 2, b / 2))")

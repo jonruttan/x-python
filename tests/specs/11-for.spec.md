@@ -1,5 +1,5 @@
 `for` walks an iterable's elements, binding the target each time. Recursion in
-tail position, the same shape `while` uses and for the same reason: there is no
+tail position, the same technique `while` uses and for the same reason: there is no
 loop construct, and a non-tail call has no depth limit behind it.
 
 `range` is **eager** — it builds the whole list. Python 3's is lazy, so

@@ -6,7 +6,7 @@ string-heavy batch accumulates past the object ceiling in one process.
 
 ## string build
 
-### strip family
+### the strip methods
 
 ```python
 (python-run "print(repr(\"\".strip()), repr(\" \\t\\n\\r\\v\\f\".strip()), repr(\" T E S T\".strip()), \"abcabc\".strip(\"ce\"), \"aaa\".strip(\"b\"), \"abc  efg \".strip(\"g a\"))\nprint(repr('   spacious   '.lstrip()), 'www.example.com'.lstrip('cmowz.'), repr('   spacious   '.rstrip()), 'mississippi'.rstrip('ipz'))")

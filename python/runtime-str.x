@@ -28,7 +28,7 @@
 ; three-argument call. That costs one closure per access and buys the bound
 ; method for free.
 ;
-; MUTATION IS IN PLACE, and the tag pair is what makes it possible. A list is
+; MUTATION IS IN PLACE, and the label pair is what makes it possible. A list is
 ; (py-list . elements); %set-rest! replaces the elements on THAT pair, so every
 ; reference to the list sees the change. Rebuilding and returning a new list
 ; would make `x.append(5)` silently do nothing to x, which is the bug this
@@ -78,7 +78,7 @@
             (Err raise (lit attribute)
               (Str8 append (Str8 append "'complex' object has no attribute '" name) "'") ()))))
       ; an int's methods live on the int class
-      ((eq? (%py-num-kind (%py-boolnorm obj)) (lit int)) (%py-int-attr obj name))
+      ((eq? (%py-num-py-type (%py-boolnorm obj)) (lit int)) (%py-int-attr obj name))
       (#t
         (let ((sig (%py-sig-of obj)))
           (match
@@ -150,7 +150,7 @@
 ;
 ; The EMPTY receiver is what makes `bytes.nosuch` an AttributeError here
 ; rather than at the eventual call: every %py-*-attr raises while looking the
-; name up, so looking it up once against a value of the right kind asks the
+; name up, so looking it up once against a value of the right type asks the
 ; question without needing one of the caller's.  It is also what a `try:
 ; bytes.count / except AttributeError` guard is asking, and five conformance
 ; programs open with exactly that.
@@ -215,7 +215,7 @@
             ; property stays the descriptor, since `C.v` in Python is the
             ; property object, not a value it has no instance to compute.
             (if (%py-desc-is m)
-              (let ((f (%py-desc-fn m)) (k (%py-desc-kind m)))
+              (let ((f (%py-desc-fn m)) (k (%py-desc-py-type m)))
                 (if (eq? k (lit static))
                   f
                   (if (eq? k (lit classmethod))
@@ -258,9 +258,9 @@
 
 ; STRING METHODS MAP ONTO Str8, WHICH ALREADY HAS THEM -- upcase, downcase,
 ; trim, split, join, replace, starts?, ends?, index-of. The work here is the
-; SHAPE, not the algorithm: Str8 takes its subject LAST, Python takes it first
+; SIGNATURE, not the algorithm: Str8 takes its subject LAST, Python takes it first
 ; as the receiver, and split/join cross the list boundary so their results have
-; to be tagged or untagged on the way through.
+; to be labelled or unlabelled on the way through.
 ;
 ; find() returns -1 when absent, which is Python's contract and the reason it is
 ; not index() -- that one raises. Only find is here.
@@ -294,7 +294,7 @@
       (Err raise (lit type)
         (Str8 append who " argument must be str") ()))))
 
-; __str__ AND __repr__ ANSWER EITHER KIND OF TEXT, so the four places that take
+; __str__ AND __repr__ ANSWER EITHER TYPE OF TEXT, so the four places that take
 ; their answer need not ask which.  A user's dunder returns a str; the fallbacks
 ; beside it -- an exception's message, the default repr -- are the platform's
 ; strings, and both are text that must print as itself.  `display` of a PY-TEXT
@@ -501,7 +501,7 @@
 (def %py-fmt-char
   (fn (_ v)
     (let ((n (%py-boolnorm v)))
-      (if (if (eq? (%py-num-kind n) (lit int)) (if (< n 0) #t (> n 1114111)) #f)
+      (if (if (eq? (%py-num-py-type n) (lit int)) (if (< n 0) #t (> n 1114111)) #f)
         (Err raise (lit overflow) "%c arg not in range(0x110000)" ())
         (%py-chr v)))))
 
@@ -509,7 +509,7 @@
   (fn (_ n0)
     (def n (%py-boolnorm n0))
     (match
-      ((not (eq? (%py-num-kind n) (lit int)))
+      ((not (eq? (%py-num-py-type n) (lit int)))
         (Err raise (lit type) "an integer is required" ()))
       ((if (< n 0) #t (> n 1114111))
         (Err raise (lit value) "chr() arg not in range(0x110000)" ()))
@@ -657,7 +657,7 @@
               ; ALREADY TEXT, AND ALREADY THE PLATFORM'S.  A conversion ran
               ; ahead of this -- !r and !s in %py-fmtfield hand their answer on
               ; as a platform string -- and without this arm it falls through to
-              ; the numeric branch below, where %py-num-kind is nil and the
+              ; the numeric branch below, where %py-num-py-type is nil and the
               ; complaint is "unsupported format string passed to
               ; object.__format__" about a string.  `f'{x!r:>8}'` and
               ; `'{!r:>8}'.format(x)` both land here.
@@ -672,10 +672,10 @@
             ((if (not (= tc 0)) (not (= tc 115)) #f)
               (Err raise (lit value)
                 (Str8 append "Unknown format code '" (Str8 append type "' for object of type 'str'")) ()))
-            ((if (= tc 115) (not (null? (%py-num-kind v))) #f)
+            ((if (= tc 115) (not (null? (%py-num-py-type v))) #f)
               (Err raise (lit value)
                 (Str8 append "Unknown format code 's' for object of type '"
-                  (Str8 append (if (eq? (%py-num-kind v) (lit float)) "float" "int") "'")) ()))
+                  (Str8 append (if (eq? (%py-num-py-type v) (lit float)) "float" "int") "'")) ()))
             ((if (null? sign) #f (not (Str8 =? sign "")))
               (Err raise (lit value) "Sign not allowed in string format specifier" ()))
             ((if (not (null? align)) (Str8 =? align "=") #f)
@@ -688,13 +688,13 @@
                   (%py-spec-pad s width (if (if zero (Str8 =? fill " ") #f) "0" fill) align "<" "")))))
           (do
             (def w (if (eq? v #t) 1 (if (eq? v #f) 0 v)))
-            (def kind (%py-num-kind w))
-            (if (null? kind)
+            (def py-type (%py-num-py-type w))
+            (if (null? py-type)
               (Err raise (lit type) "unsupported format string passed to object.__format__" ())
               ())
             ; integers with an integer or empty type
             (match
-              ((if (eq? kind (lit int)) (= tc 99) #f)
+              ((if (eq? py-type (lit int)) (= tc 99) #f)
                 (if (if (null? sign) #f (not (Str8 =? sign "")))
                   (Err raise (lit value) "Sign not allowed with integer format specifier 'c'" ())
                   ; chr() answers a str and the padding below is Str8's, so the
@@ -702,7 +702,7 @@
                   ; refuses, like every other crossing into a platform string.
                   (%py-spec-pad (%ps->x (%py-str-cps (%py-fmt-char w)))
                     width fill align ">" "")))
-              ((if (eq? kind (lit int))
+              ((if (eq? py-type (lit int))
                   (match
                     ((= tc 0) #t)
                     ((= tc 100) #t)
@@ -770,14 +770,14 @@
                 (do
                   (def fv (%py-fmt-float-of w))
                   (def ex (%py-f-exact fv))
-                  (def ekind (first ex))
+                  (def elabel (first ex))
                   (def neg (Str8 =? (first (rest ex)) "-"))
                   (def upper (if (= tc 69) #t (if (= tc 70) #t (= tc 71))))
                   (def sgn (%py-fmt-sign neg (Str8 =? sign "+") (Str8 =? sign " ")))
-                  (if (not (eq? ekind (lit num)))
+                  (if (not (eq? elabel (lit num)))
                     ; inf and nan pad like any number -- '{:06e}' of inf is
                     ; 000inf (measured, not assumed)
-                    (let ((body0 (if (eq? ekind (lit inf)) "inf" "nan")))
+                    (let ((body0 (if (eq? elabel (lit inf)) "inf" "nan")))
                       (let ((body (Str8 append (if upper (Str8 upcase body0) body0) (if (= tc 37) "%" ""))))
                         (%py-spec-pad body width fill2 align2 ">" sgn)))
                     (do
@@ -820,7 +820,7 @@
                   (Str8 append "Unknown format code '"
                     (Str8 append type
                       (Str8 append "' for object of type '"
-                        (Str8 append (if (eq? kind (lit int)) "int" "float") "'")))) ())))))))))
+                        (Str8 append (if (eq? py-type (lit int)) "int" "float") "'")))) ())))))))))
 
 ; Digits grouped by k from the right with sep.
 (def %py-group-sep
@@ -887,7 +887,7 @@
     (def n (Str8 length tpl))
     (def auto (pair 0 ()))
     ; () until the first field, then auto or manual: mixing is a ValueError
-    (def mode (pair () ()))
+    (def label (pair () ()))
     (def argn (%py-length args))
     (def arg-at
       (fn (_ i)
@@ -909,16 +909,16 @@
         (def base
           (if (= he 0)
             (do
-              (if (eq? (first mode) (lit manual))
+              (if (eq? (first label) (lit manual))
                 (Err raise (lit value) "cannot switch from manual field specification to automatic field numbering" ())
-                (%set-first! mode (lit auto)))
+                (%set-first! label (lit auto)))
               (let ((i (first auto))) (%set-first! auto (+ i 1)) (arg-at i)))
             (let ((head (Str8 sub 0 he name)))
               (if (%py-fmt-digit? (%py-spec-code head 0))
                 (do
-                  (if (eq? (first mode) (lit auto))
+                  (if (eq? (first label) (lit auto))
                     (Err raise (lit value) "cannot switch from automatic field numbering to manual field specification" ())
-                    (%set-first! mode (lit manual)))
+                    (%set-first! label (lit manual)))
                   (arg-at (%py-int-of-str head)))
                 (let ((kw (%py-alist-find head kws)))
                   (if (null? kw)
