@@ -59,9 +59,9 @@
 ; platform's own rule for release strings.
 ;
 ; v0.6.0 is what carries bundle acquisition, `-l` loading and --share-dir;
-; v0.17.0 is what this bundle and its siblings are green against, and the row
+; v0.19.0 is what this bundle and its siblings are green against, and the row
 ; tracks that rather than the floor.  This bundle has no claim to anything
 ; older.
-(requires-release "v0.17.0")
+(requires-release "v0.19.0")
 
 (entry "run.x")
