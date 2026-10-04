@@ -202,6 +202,12 @@ def main():
     # completion crosses it where a chunk of short ones never will.
     CHUNK = 10
     BUDGET = 2500
+    # SOME CASES CROSS THE CEILING ALONE.  Such a case dies however small its
+    # chunk, and every case after it in the chunk reads as dead with it, so
+    # it runs in a process of its own.  builtin_pow3_intbig's pow(y, x - 1, x)
+    # on 1000-bit numbers is ~1.3B allocations of bigint arithmetic; it took
+    # builtin_print with it.
+    ALONE = {"builtin_pow3_intbig.py"}
     for (suite, group), cases in sorted(groups.items()):
       chunks = []
       cur, size = [], 0
@@ -213,7 +219,9 @@ def main():
       cap = {"gen": 1, "generator": 1, "set": 3, "frozenset": 3,
              "builtin": 5, "dict": 4, "list": 4}.get(group, CHUNK)
       for c in cases:
-          if cur and (len(cur) >= cap or size + len(c[1]) > BUDGET):
+          # A case in ALONE is a chunk of its own, and so is what follows it.
+          if cur and (c[0] in ALONE or cur[-1][0] in ALONE
+                      or len(cur) >= cap or size + len(c[1]) > BUDGET):
               chunks.append(cur)
               cur, size = [], 0
           cur.append(c)
