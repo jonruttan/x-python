@@ -407,6 +407,15 @@
 ; module's environment.  At the prompt, which is no module's, there is none.
 (def %py-ns-around
   (fn (_ env) (guard (_ ()) (eval (lit %py-ns) env))))
+
+; NAME's value in the module ENV is in, and through it the builtins, skipping
+; any def between -- a NameError when the module has none.  At the prompt it
+; is the name as ENV reads it.
+(def %py-global-read
+  (fn (_ name sym env)
+    (let ((ns (%py-ns-around env)))
+      (%py-name-live name
+        (guard (_ %py-deleted) (eval sym (if (null? ns) env (first (first ns)))))))))
 (def %py-no-namespace!
   (fn (_)
     (Err raise (lit type) "the prompt's names are not a namespace this runtime lists" ())))
