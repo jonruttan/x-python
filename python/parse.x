@@ -1967,10 +1967,18 @@
 ; one in the body's own expressions tries the class being built first, then
 ; the scope around the class, as CPython's class namespace does.
 (def %py-class-level (pair () ()))
+; A name the class binds is not read from a def around the class: before
+; the body binds it, a read of it is the module's name, as CPython's
+; LOAD_NAME is (%py-global-read).
 (def %py-name-read
   (fn (_ s)
     (if (%py-str-seen? s (first %py-class-level))
-      (list (lit %py-cread) (lit %py-crows) s (list (lit fn) (list (lit _)) (%py-name-read-outer s)))
+      (list (lit %py-cread) (lit %py-crows) s
+        (list (lit fn) (list (lit _))
+          (if (eq? (first %py-fn-depth) 0)
+            (%py-name-read-outer s)
+            (list (lit %py-global-read) s (list (lit lit) (%py-name->sym s))
+              (list (lit %py-here))))))
       (%py-name-read-outer s))))
 (def %py-name-read-outer
   (fn (_ s)
@@ -2208,6 +2216,120 @@
       ; `for x in y: a; b` -- still runs to the real newline
       (pair (if (%py-op-is? (first toks) ";") (list (lit tok-newline) (lit semi)) (first toks))
         (self (rest toks))))))
+
+; --- variable annotations ------------------------------------------------------
+; `x: int = 1` is the assignment `x = 1`, and `x: int` alone binds nothing --
+; but in a function it makes x the function's own, unbound until assigned, so
+; a read is the UnboundLocalError CPython's is.  The annotation is not kept:
+; there is no __annotations__ here.  The rewrite is on the tokens, ahead of
+; every scan that reads them, so each sees the plain assignment.  A bare
+; annotation in a function becomes (tok-kw "%local") NAME, a statement no
+; source can spell, which binds NAME as an assignment target does and
+; compiles to nothing (%py-stmt); anywhere else it becomes `pass`.  A bare
+; annotation of an attribute or a subscript does not evaluate the target,
+; where CPython's evaluates the object.
+(def %py-annotations
+  (fn (self toks in-fn)
+    (if (null? toks)
+      ()
+      (let ((st (%py-ann-stmt toks ())))
+        (%py-append (%py-ann-rewrite (%py-reverse (first st)) in-fn)
+          (self (rest st) in-fn))))))
+; (STATEMENT-REVERSED . REST): the tokens up to and with a newline, a `;` or
+; the block a header ends with
+(def %py-ann-stmt
+  (fn (self toks acc)
+    (match
+      ((null? toks) (pair acc ()))
+      ((if (eq? (%py-label (first toks)) (lit tok-newline)) #t
+         (if (%py-op-is? (first toks) ";") #t (%py-block? (first toks))))
+        (pair (pair (first toks) acc) (rest toks)))
+      (#t (self (rest toks) (pair (first toks) acc))))))
+(def %py-ann-end?
+  (fn (_ t)
+    (if (eq? (%py-label t) (lit tok-newline)) #t (%py-op-is? t ";"))))
+(def %py-ann-rewrite
+  (fn (_ st in-fn)
+    (let ((last (if (null? st) () (List ref (- (%py-length st) 1) st))))
+      (match
+        ((null? st) st)
+        ; a header: its block is a scope of its own when the header is a def
+        ; or a class, and the rest of the header is not read
+        ((%py-block? last)
+          (%py-append (%py-take (- (%py-length st) 1) st)
+            (list (list (lit tok-block)
+                    (%py-annotations (%py-block-toks last)
+                      (match
+                        ((%py-kw? (first st) "def") #t)
+                        ((if (%py-kw? (first st) "async")
+                           (%py-kw? (if (null? (rest st)) () (first (rest st))) "def") #f) #t)
+                        ((%py-kw? (first st) "class") #f)
+                        (#t in-fn)))))))
+        ; a header whose suite is on its line -- `if d: q: int = 9` -- has the
+        ; suite rewritten past the header's own colon
+        ((%py-ann-inline-header? (first st))
+          (let ((hd (%py-ann-header st 0 ())))
+            (if (null? hd)
+              st
+              (%py-append (first hd)
+                (%py-ann-rewrite (rest hd) (if (%py-kw? (first st) "def") #t in-fn))))))
+        ((not (eq? (%py-label (first st)) (lit tok-name))) st)
+        (#t
+          (let ((sp (%py-ann-split st ())))
+            (if (null? sp)
+              st
+              (let ((target (first sp)) (after (rest sp)))
+                (let ((v (%py-ann-value after)))
+                  (match
+                    ((not (null? v)) (%py-append target v))
+                    (#t
+                      (pair
+                        (if (if in-fn (null? (rest target)) #f)
+                          (list (lit tok-kw) "%local")
+                          (list (lit tok-kw) "pass"))
+                        (%py-append (if (if in-fn (null? (rest target)) #f) target ())
+                          (if (%py-ann-end? last) (list last) ()))))))))))))))
+(def %py-ann-inline-header?
+  (fn (_ t)
+    (if (not (eq? (%py-label t) (lit tok-kw)))
+      #f
+      (%py-str-seen? (%py-val t)
+        (list "if" "elif" "else" "while" "for" "with" "try" "except" "finally"
+          "def" "class")))))
+; (HEADER-WITH-ITS-COLON . SUITE): ST split at the header's colon, which is
+; the first `:` past any lambda's own; () without one.  PENDING counts the
+; lambdas whose colon is still to come.
+(def %py-ann-header
+  (fn (self st pending acc)
+    (match
+      ((null? st) ())
+      ((%py-kw? (first st) "lambda") (self (rest st) (+ pending 1) (pair (first st) acc)))
+      ((if (%py-op-is? (first st) ":") (= pending 0) #f)
+        (pair (%py-reverse (pair (first st) acc)) (rest st)))
+      ((%py-op-is? (first st) ":") (self (rest st) (- pending 1) (pair (first st) acc)))
+      (#t (self (rest st) pending (pair (first st) acc))))))
+; (TARGET . AFTER-THE-COLON) when ST is `target : ...` with a target that is a
+; name and what may follow one -- attributes, subscripts -- else ()
+(def %py-ann-split
+  (fn (self st acc)
+    (match
+      ((null? st) ())
+      ((%py-op-is? (first st) ":") (if (null? acc) () (pair (%py-reverse acc) (rest st))))
+      ((match
+         ((eq? (%py-label (first st)) (lit tok-name)) #t)
+         ((%py-op-is? (first st) ".") #t)
+         ((%py-group? (first st) "[") (not (null? acc)))
+         ((%py-group? (first st) "(") (not (null? acc)))
+         (#t #f))
+        (self (rest st) (pair (first st) acc)))
+      (#t ()))))
+; the `= VALUE...` an annotation is followed by, from its `=` on, or ()
+(def %py-ann-value
+  (fn (self toks)
+    (match
+      ((null? toks) ())
+      ((%py-op-is? (first toks) "=") toks)
+      (#t (self (rest toks))))))
 
 (set! %py-stmts
   (fn (self toks acc)
@@ -2629,6 +2751,8 @@
                 (let ((r (%py-exprlist (rest toks))))
                   (pair (list (lit %py-return) (first r)) (rest r)))))))
         ((%py-kw? t "pass") (pair () (rest toks)))
+        ; a bare annotation's name in a function (%py-annotations)
+        ((%py-kw? t "%local") (pair () (rest (rest toks))))
         ((%py-kw? t "break") (pair (list (lit %py-break) ()) (rest toks)))
         ((%py-kw? t "continue") (pair (list (lit %py-continue) ()) (rest toks)))
         ; a target list and an `=` (%py-assign-stmt): `x = v`, `a, b = v`,
@@ -3428,16 +3552,21 @@
                     (let ((r (%py-def (rest t2))))
                       (self (rest r)
                         (pair
-                          (%py-crow-form (%py-val nm)
+                          (%py-class-bind (%py-val nm)
                             (%py-wrap-decos (first ds) (first (rest (rest (first r))))))
                           acc)))))))))
         ((%py-kw? (first t) "pass") (self (rest t) acc))
+        ; a name the body declares nonlocal is the enclosing function's, and
+        ; what the body binds to it goes there (%py-class-bind); the
+        ; declaration itself compiles to nothing
+        ((%py-kw? (first t) "nonlocal")
+          (self (rest (%py-line-of (rest t) ())) acc))
         ((not (%py-kw? (first t) "def"))
           (if (if (eq? (%py-label (first t)) (lit tok-name))
                 (%py-op-is? (if (null? (rest t)) () (first (rest t))) "=")
                 #f)
             (let ((v (%py-exprlist (rest (rest t)))))
-              (self (rest v) (pair (%py-crow-form (%py-val (first t)) (first v)) acc)))
+              (self (rest v) (pair (%py-class-bind (%py-val (first t)) (first v)) acc)))
             (let ((v (%py-exprlist t)))
               (self (rest v) (pair (first v) acc)))))
         (#t
@@ -3446,10 +3575,44 @@
               (Err raise (lit syntax) "expected a method name after def" ())
               (let ((r (%py-def (rest t))))
                 (self (rest r)
-                  (pair (%py-crow-form (%py-val nm) (first (rest (rest (first r))))) acc))))))))))
+                  (pair (%py-class-bind (%py-val nm) (first (rest (rest (first r))))) acc))))))))))
 
 (def %py-crow-form
   (fn (_ name form) (list (lit %py-crow-put!) (lit %py-crows) name form)))
+
+; The names the class body being compiled declares nonlocal, as text.
+(def %py-class-nonlocals (pair () ()))
+; What a class body binds NAME to: a row of its namespace, or, for a name it
+; declares nonlocal, the enclosing function's variable.
+(def %py-class-bind
+  (fn (_ name form)
+    (if (%py-str-seen? name (first %py-class-nonlocals))
+      (list (lit set!) (%py-name->sym name) form)
+      (%py-crow-form name form))))
+; The names a class body declares nonlocal at its own level, as text.
+(def %py-class-nonlocal-names
+  (fn (self toks acc)
+    (match
+      ((null? toks) acc)
+      ((%py-kw? (first toks) "nonlocal")
+        (let ((sp (%py-line-of (rest toks) ())))
+          (self (rest sp) (%py-line-names (first sp) acc))))
+      (#t (self (rest toks) acc)))))
+; the names on a `nonlocal a, b` line, onto ACC
+(def %py-line-names
+  (fn (self toks acc)
+    (match
+      ((null? toks) acc)
+      ((eq? (%py-label (first toks)) (lit tok-name))
+        (self (rest toks) (pair (%py-val (first toks)) acc)))
+      (#t (self (rest toks) acc)))))
+; the strings of XS that are not in YS
+(def %py-strs-minus
+  (fn (self xs ys)
+    (match
+      ((null? xs) ())
+      ((%py-str-seen? (first xs) ys) (self (rest xs) ys))
+      (#t (pair (first xs) (self (rest xs) ys))))))
 
 ; The names a class body binds at its own level, as text: each `def NAME`,
 ; decorated or not, and each `NAME =`.  A def's body is its own and skipped.
@@ -3469,16 +3632,22 @@
 
 ; A class body's statements, compiled with its own names readable (%py-cread)
 ; and set back however the compile ends.  What they read of a def around them
-; is free to them (%py-own-names).
+; is free to them (%py-own-names).  A name the body declares nonlocal is not
+; one of its own.
 (def %py-class-body-of
   (fn (_ toks)
     (def outer (first %py-class-level))
-    (%set-first! %py-class-level (%py-class-level-names toks ()))
-    (def r (guard (e (%seq (%set-first! %py-class-level outer) (error e)))
+    (def outer-nl (first %py-class-nonlocals))
+    (def nl (%py-class-nonlocal-names toks ()))
+    (%set-first! %py-class-nonlocals nl)
+    (%set-first! %py-class-level (%py-strs-minus (%py-class-level-names toks ()) nl))
+    (def r (guard (e (%seq (%set-first! %py-class-level outer)
+                       (%seq (%set-first! %py-class-nonlocals outer-nl) (error e))))
              (%py-names-as () (%py-append (first %py-own-names) (first %py-free-names))
                (first %py-bound-now)
                (fn (_) (%py-class-methods-of toks ())))))
-    (%seq (%set-first! %py-class-level outer) (first r))))
+    (%seq (%set-first! %py-class-level outer)
+      (%seq (%set-first! %py-class-nonlocals outer-nl) (first r)))))
 
 (def %py-class-block
   (fn (_ toks)
@@ -4202,6 +4371,8 @@
           ((%py-for-target? toks)
             (let ((u (%py-for-names (rest toks) ())))
               (self (rest u) (%py-append (%py-reverse (first u)) acc))))
+          ((%py-kw? t "%local")
+            (self (rest (rest toks)) (pair (%py-val (first (rest toks))) acc)))
           ((%py-kw? t "as")
             (let ((n (if (null? (rest toks)) () (first (rest toks)))))
               (self (rest (rest toks))
@@ -4231,6 +4402,9 @@
           ((%py-for-target? toks)
             (let ((u (%py-for-names (rest toks) ())))
               (self (rest u) (%py-append (%py-reverse (%py-syms-of (first u) ())) acc))))
+          ((%py-kw? t "%local")
+            (self (rest (rest toks))
+              (pair (%py-name->sym (%py-val (first (rest toks)))) acc)))
           ((%py-block? t)
             (self (rest toks) (%py-append (%py-reverse (self (%py-block-toks t) ())) acc)))
           ; the names a target list binds: `a, (b, *c) = ...`, `x = y = ...`
@@ -4463,7 +4637,7 @@
     (if (%py-first-line-indented? src 0 (%py-byte-len src))
       (Err raise (lit indent) "unexpected indent" ())
       ())
-    (def %toks (python-lex src))
+    (def %toks (%py-annotations (python-lex src) #f))
     ; Brackets first: an unclosed group makes every walk below read a layout
     ; the source never had, so the structural error goes ahead of them.
     (%py-groups-ok %toks)
