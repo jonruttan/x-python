@@ -105,6 +105,19 @@ jobs:
           repository: jonruttan/x-lang
           ref: ${{ matrix.x-lang }}
           path: .x-lang
+      # Two files defining one global name differently: whichever loads last
+      # rewires every caller.  The kit's scanner reads text and needs no
+      # build, and leaves out the .x-lang checkout beside the sources.  An
+      # x-lang older than x-lang#1023 does not ship it, so the declared leg
+      # runs it once lang.xon names a release that does.
+      - name: One meaning per global name
+        run: |
+          kit="$GITHUB_WORKSPACE/.x-lang/tools/lang-kit"
+          if [ -f "$kit/dup-defs.sh" ]; then
+            BUNDLE="$GITHUB_WORKSPACE" sh "$kit/dup-defs.sh"
+          else
+            echo "x-lang ${{ matrix.x-lang }} ships no dup-defs.sh; skipped"
+          fi
       - name: Build the platform
         working-directory: .x-lang
         run: |
