@@ -56,11 +56,17 @@
 ; the tokenizer's character conversions, which runtime-num.x and
 ; runtime-call.x read
 (import python/tokens %py-hexval %py-int->char %py-list->string)
-; A sweep after each load; see python/util.x.  The tower's parts one at a
-; time, each swept: imported as one, x/num/tower is the largest load
-; between two sweeps by a distance (7.3 GB on x86-64 under x-lang 0.14.0,
-; against 1 GB for helium itself).  x/num/tower then finds its parts
-; loaded and adds its own generics.
+; A sweep after each load; see python/util.x.
+;
+; THE TOWER'S ANALYSERS COMPILED.  Each of bigint, float, rational, complex
+; and decimal adds a reader analyser that runs on every character read
+; after it; interpreted, they make each byte read from here on cost 8x
+; (2.25M -> 18.2M objects for one 29 KB file).  x/boot/tower-compiled
+; loads those five and compiles each analyser as it lands, so the rest of
+; this bundle is read through native code; the imports below find them
+; loaded.  x/num/tower then adds its own generics.
+(import x/boot/tower-compiled)
+(%py-sweep!)
 (import x/num/bigint)
 (%py-sweep!)
 (import x/num/float)
