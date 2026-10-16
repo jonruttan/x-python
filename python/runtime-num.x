@@ -262,6 +262,7 @@
             (Str8 append (%py-class-name (%py-type-of k)) "'"))
           ())))))
 
+(%py-sweep!)
 ; THE COMPLEX BRANCH OF THE FOUR SEAMS.  A complex beside a non-number is a
 ; TypeError here, not the tower's promotion error -- that one is x's
 ; teaching raise (#584) and its label is not `type`, so `except TypeError`
@@ -661,6 +662,7 @@
         (%py-powmod (%py-boolnorm a) (%py-boolnorm b) (%py-boolnorm (first m)))
         (Err raise (lit type) "pow() requires integers" ())))))
 
+(%py-sweep!)
 (def %py-pow
   (fn (_ a0 b0)
     (def a (if (eq? a0 #t) 1 (if (eq? a0 #f) 0 a0)))
@@ -1449,6 +1451,7 @@
           (%seq (%py-takes-at-most! cname 3 (%py-length args))
             (%py-bytes-source-check (first args) (first more) (first (rest more)))))))))
 
+(%py-sweep!)
 ; Checked as CPython checks them: a str, or a str subclass instance, needs an
 ; encoding and answers its encoded bytes, and any other source takes neither.
 (def %py-bytes-source-check

@@ -483,6 +483,7 @@
             (pair (pair (%py-str-of-x (first (first l))) (rest (first l))) acc)))))
     (go kws ())))
 
+(%py-sweep!)
 (def %py-tuple-ctor
   (fn (_ . a)
     (%seq (%py-at-most-one! "tuple" a)
@@ -916,6 +917,7 @@
     (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))
     (pair "__radd__"     (fn (_ self o) (%py-add (%py-native-of o) (%py-native-of self))))))
 
+(%py-sweep!)
 (def %py-cls-tuple
   (%py-class-new "tuple" %py-cls-object %py-tuple-methods "tuple"))
 (def %py-cls-type
@@ -1145,6 +1147,7 @@
     (pair "__add__"      (fn (_ self o) (%py-add (%py-native-of self) (%py-native-of o))))
     (pair "__radd__"     (fn (_ self o) (%py-add (%py-native-of o) (%py-native-of self))))))
 
+(%py-sweep!)
 (def %py-cls-bytearray
   (%py-class-new "bytearray" %py-cls-object %py-bytearray-methods "bytearray"))
 

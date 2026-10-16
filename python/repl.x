@@ -156,6 +156,7 @@
             ()))
         (self (rest forms))))))
 
+(%py-sweep!)
 ; --- block accumulation ------------------------------------------------------
 (def %py-opens-block?
   (fn (_ line)

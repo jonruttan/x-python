@@ -214,6 +214,7 @@
           (let ((r (try 1)))
             (if (null? r) (Str8 append sgn (%py-write-to-str v)) r)))))))
 
+(%py-sweep!)
 ; --- Complex -----------------------------------------------------------------
 ;
 ; THE VALUE IS THE PLATFORM'S: x/num/complex.x's instance, a (re . im) pair of
@@ -451,6 +452,7 @@
         (if (%py-hashable? (%py-native-of v)) (%py-hash (%py-native-of v)) (%py-unhashable v)))
       (#t (%py-unhashable v)))))
 
+(%py-sweep!)
 ; What an instance's hash is decided by, read down its class and bases in
 ; lookup order, to the first class that has a say: one carrying a builtin's
 ; value (native), one defining __hash__ (own, or none when it is None), or one
@@ -709,6 +711,7 @@
               (Str8 append "(" (Str8 append (Str8 join ", " (if (null? a) () (rs (%py-tuple-elems (rest a))))) ")")))))))
     "BaseException"))
 
+(%py-sweep!)
 ; Exceptions print <class 'ValueError'> in Python, not <class '__main__....'>
 ; -- the builtins live in no module the program wrote, so the qualname is the
 ; bare name.  This fixes a recorded divergence in 19-exception-classes.
@@ -907,6 +910,7 @@
 (def %py-os-name-part
   (fn (_ sep v) (if (null? v) "" (Str8 append sep (%py-repr-of v)))))
 
+(%py-sweep!)
 ; --- Classes -----------------------------------------------------------------
 ;
 ; Method lookup walks the base chain, which is the ONE piece of Python's object
@@ -1141,6 +1145,7 @@
             (Str8 append (%py-class-name cls) "'"))))
       ())))
 
+(%py-sweep!)
 (def %py-setattr
   (fn (_ obj name v)
     ; A CLASS TAKES A STORE TOO.  `C.x = 2` puts the row in the same alist the

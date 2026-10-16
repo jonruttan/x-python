@@ -179,6 +179,7 @@
           (%seq (%py-dq-set! v (%py-dq-fit v (%py-els-repeat (%py-dq-el a) n ()) #t)) v))
         (Err raise (lit type) "can't multiply sequence by non-int" ())))))
 
+(%py-sweep!)
 ; --- the surfaces ----------------------------------------------------------------------
 
 (def %py-dq-attr

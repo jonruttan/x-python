@@ -292,6 +292,7 @@
           "compile() mode must be 'exec', 'eval' or 'single'" ())))
     "compile" (list "source" "filename" "mode") 3 #f))
 
+(%py-sweep!)
 ; function(code, globals): the function CODE is of, made again with GLOBALS
 ; for its globals.  The fn CODE holds is evaluated in the environment the
 ; dict stands for -- a module's own for its namespace dict, and for a dict a

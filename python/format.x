@@ -179,6 +179,7 @@
         (self (Str8 sub 0 (- L 1) s))
         s))))
 
+(%py-sweep!)
 ; --- The conversions ---------------------------------------------------------
 ; Each returns the magnitude body; the caller adds sign and padding.
 ; Non-finite floats short-circuit before any of these.
@@ -432,6 +433,7 @@
                 body width left (if left #f zero))))))
       (#t (bad)))))
 
+(%py-sweep!)
 ; The end of the run of ordinary characters starting at j: the next percent
 ; sign, or the end of the template.  The walk below appends a run in one
 ; piece, for the reason %py-fmt-run gives in python/runtime-str.x.
