@@ -171,6 +171,7 @@
     (if (= k 0) (%py-reverse acc)
       (if (null? l) (%py-reverse acc) (self (rest l) (- k 1) (pair (first l) acc))))))
 
+(%py-sweep!)
 ; --- reading a file ---------------------------------------------------------------
 
 (def %py-io-bytes
@@ -355,6 +356,7 @@
         ())
       (%seq (%set-first! (List ref 3 (first v)) #t) ()))))
 
+(%py-sweep!)
 ; --- writing a file ---------------------------------------------------------------
 ; A write goes to the descriptor as it is made: nothing waits in a buffer, so
 ; a file that is never closed has what was written to it.
@@ -581,6 +583,7 @@
     (let ((l (%py-io-line! v)))
       (if (null? l) (%py-io-value-of v ()) l))))
 
+(%py-sweep!)
 ; --- the surfaces -----------------------------------------------------------------
 
 (def %py-io-attr
@@ -788,6 +791,7 @@
               (pair "buffer" raw)))
           text)))))
 
+(%py-sweep!)
 ; --- files --------------------------------------------------------------------------
 ; open(file, mode='r', buffering, encoding, errors, newline, closefd, opener): a
 ; file opened as the mode says -- r to read, w to write from empty, a to

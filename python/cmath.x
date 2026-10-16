@@ -170,6 +170,7 @@
 (def %py-cm-sin (fn (_ z) (%py-cm-turn-back (%py-cm-sinh (%py-cm-turn z)))))
 (def %py-cm-tan (fn (_ z) (%py-cm-turn-back (%py-cm-tanh (%py-cm-turn z)))))
 
+(%py-sweep!)
 ; --- the inverses -----------------------------------------------------------------
 ; Each from two square roots, whose cuts are the function's.
 

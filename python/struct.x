@@ -206,6 +206,7 @@
       (%py-bytes-new
         (first (%py-st-emit (List ref 2 f) (List ref 1 f) (first f) vals ()))))))
 
+(%py-sweep!)
 ; --- unpack --------------------------------------------------------------------
 
 (def %py-st-decode

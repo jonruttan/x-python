@@ -174,6 +174,7 @@
 ; is a class method call
 (def %py-arr-format (fn (_ e) (first (rest (rest (rest (rest (rest e))))))))
 
+(%py-sweep!)
 ; --- the value ---------------------------------------------------------------
 ; The elements sit behind a cell: an array is mutable, and every name bound
 ; to one has to see a store.
@@ -364,6 +365,7 @@
 (def %py-arr-buffer
   (fn (_ v) (%py-arr-bytes (%py-arr-info (%py-arr-tc v)) (%py-arr-el v) ())))
 
+(%py-sweep!)
 ; --- the surfaces ------------------------------------------------------------
 ; An array's own methods, for a value that is not an instance; the class
 ; methods below serve a subclass, which carries the value as its native.

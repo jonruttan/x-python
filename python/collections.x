@@ -196,6 +196,7 @@
 (set! %py-cls-OrderedDict
   (%py-class-new "OrderedDict" %py-cls-dict %py-od-methods "OrderedDict"))
 
+(%py-sweep!)
 ; --- the module --------------------------------------------------------------
 
 (def %py-collections-module

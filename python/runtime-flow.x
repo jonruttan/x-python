@@ -232,6 +232,7 @@
       ((same? (%py-mod-own m name) %py-mod-missing) (%py-mod-no-attr m name))
       (#t (%seq (%py-env-def! (%py-mod-env m) (%py-name->sym name) %py-deleted) ())))))
 
+(%py-sweep!)
 ; The module's names with their values, ("name" . value) rows in the order
 ; the module bound them, the deleted ones left out; the builtins module's are
 ; the builtins'.
@@ -478,6 +479,7 @@
     (fn (_ . a) (if (null? a) (%py-bare-refuse "vars") (%py-getattr (first a) "__dict__")))
     "vars" (list "object") 0 #f))
 
+(%py-sweep!)
 ; --- the math module ------------------------------------------------------
 ;
 ; Python's math is libm's surface with Python's edges: an argument may be an
@@ -717,6 +719,7 @@
         ((Float inf? r) (if (= x 0.0) (%py-mdomain) (%py-mrange-error)))
         (#t r)))))
 
+(%py-sweep!)
 ; --- the libm entries lib/x/num/float.x does not bind ---------------------------
 ; Each is one row through that file's own door, the way it binds sin and exp:
 ; the address resolves once into a cell a state image re-resolves.  Nothing here
@@ -934,6 +937,7 @@
         (pair "SimpleNamespace" %py-cls-SimpleNamespace)
         (pair "coroutine" (%py-sig! (fn (_ f) f) "coroutine" (list "func") 1 #f))))))
 
+(%py-sweep!)
 ; gc: nothing here collects on its own, so collect() is the platform's own
 ; sweep, hand-placed as every other sweep in this bundle is.  It answers 0,
 ; the count of unreachable objects Python reports.
@@ -1117,6 +1121,7 @@
       ()
       (%py-ddel (%py-modules-now) key))))
 
+(%py-sweep!)
 ; --- the import statements -------------------------------------------------
 ;
 ; AN IMPORT STATEMENT CALLS __import__, as CPython's does: whichever one the
@@ -1349,6 +1354,7 @@
     (let ((e (%py-alist-find name (first rows))))
       (if (null? e) (outer) (rest e)))))
 
+(%py-sweep!)
 (def %py-mkclass
   (fn (_ name bases methods)
     ; A BASE THAT IS NOT A CLASS IS A TypeError, not a crash.  An undefined
@@ -1521,6 +1527,7 @@
       (let ((c (%py-ctor-class (first bs))))
         (if (null? c) (self (rest bs)) c)))))
 
+(%py-sweep!)
 ; --- Tuples ------------------------------------------------------------------
 
 ; --- Generators --------------------------------------------------------------
@@ -1798,6 +1805,7 @@
                     (self (first down) (first (rest down)))))))))
         (step (lit send) ())))))
 
+(%py-sweep!)
 ; `is`: identity, with the cases Python's caching makes look like identity --
 ; None, True and False are singletons, small ints and interned strings
 ; compare equal -- stated as equality for ints and strings.
@@ -2050,6 +2058,7 @@
       (#t
         (let ((v (first (first src)))) (%set-first! src (rest (first src))) v)))))
 
+(%py-sweep!)
 (def %py-mktuple (fn (_ . elems) (%py-tuple-new elems)))
 ; A *rest parameter arrives as an x list and becomes the tuple Python hands
 ; the function; a *spread at a call site concatenates argument segments.

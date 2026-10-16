@@ -180,6 +180,7 @@
           #f))
       #f)))
 
+(%py-sweep!)
 ; --- classifying a name ------------------------------------------------------
 (def %pp-kw ())        ; Dict: keyword -> #t
 (def %pp-bi ())        ; Dict: builtin -> #t
@@ -368,6 +369,7 @@
               (if (= 0 (%pp-blen code)) (%pp-append text acc)
                 (%pp-append code (%pp-append text (%pp-append %pp-rst acc)))))))))
 
+(%py-sweep!)
 ; --- the three answers the editor asks for ----------------------------------
 
 (def %py-paint

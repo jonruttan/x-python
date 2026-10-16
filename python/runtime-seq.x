@@ -277,6 +277,7 @@
       ((%py-gt a b) #t)
       (#t (%py-eq a b)))))
 
+(%py-sweep!)
 ; --- Lists ------------------------------------------------------------------
 ;
 ; LABELLED, not a bare x list.  An empty Python list and None are different
@@ -439,6 +440,7 @@
       ((%py-mv-is v) (%py-bytes-of-codes (%py-mv-elems v) ()))
       (#t (%py-barr-bytes-of v)))))
 
+(%py-sweep!)
 ; --- del and slice assignment ------------------------------------------------
 (def %py-delindex
   (fn (_ v i)
@@ -590,6 +592,7 @@
         (fn (_ k)
           (body (fn (_ v) (%seq (%py-wind-unwind! saved) (k v)))))))))
 
+(%py-sweep!)
 ; --- Iteration ---------------------------------------------------------------
 ;
 ; The elements a `for` walks.  A list gives its own; a string gives its
@@ -838,6 +841,7 @@
       ((%py-truthy (%py-eq x v)) i)
       (#t (self x src (+ i 1))))))
 
+(%py-sweep!)
 ; Two ranges are equal when they hold the same items: the same length, then
 ; the same start past an empty one, then the same step past a single item.
 (def %py-range-eq
@@ -1078,6 +1082,7 @@
                       i))))))))
       (#t (%py-class-row-attr %py-cls-tuple t name "tuple")))))
 
+(%py-sweep!)
 ; --- Dict helpers ------------------------------------------------------------
 (def %py-ditems
   (fn (self es)

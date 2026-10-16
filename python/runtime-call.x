@@ -294,6 +294,7 @@
     (cat segs)))
 (def %py-tuple? (fn (_ v) (%py-tuple-is v)))
 
+(%py-sweep!)
 ; Unpacking is a count and a walk: `a, b = f()` is how a Python function
 ; returns two things, and Python is strict about the count.  A tuple or a list
 ; is counted whole; any other iterable is read one value past the count and no
@@ -525,6 +526,7 @@
                   (Str8 append (%py-hex2 (Num quotient c 256)) (%py-hex2 (% c 256)))))
               (#t (%pb->str (%ps-enc1 c))))))))))
 
+(%py-sweep!)
 ; <function NAME at 0xADDR>: the name is the signature's, the address is the
 ; identity every function already has for hashing.
 (def %py-fn-repr
@@ -783,6 +785,7 @@
         (self (rest as) n)
         (pair (first as) (self (rest as) n))))))
 
+(%py-sweep!)
 ; the explicit super(type, obj) form: unimplemented, and every argument
 ; signature the corpus passes is one Python itself rejects
 ; super(type, obj): the explicit form, the same record the zero-argument
@@ -1094,6 +1097,7 @@
         (%py-class-row-attr (if frozen %py-cls-frozenset %py-cls-set) s name
           (if frozen "frozenset" "set"))))))
 
+(%py-sweep!)
 (def %py-mklist-of
   (fn (_ v) (%py-list-new (%py-iter-elems v))))
 

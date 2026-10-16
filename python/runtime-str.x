@@ -223,6 +223,7 @@
                     m)))
               m)))))
 
+(%py-sweep!)
 ; What a builtin type offers beyond the methods on its class object: the
 ; whole instance surface, unbound.  A subclass reaches its builtin base's row
 ; through the base walk and answers the base's method, so `L.append` is
@@ -488,6 +489,7 @@
         (fn (_ . a) (%py-str-of-x (%py-strformat (%ps->x l) a))))
       (#t (%py-str-row-attr v name)))))
 
+(%py-sweep!)
 (def %py-s-triple
   (fn (_ t)
     (%py-tuple-new
@@ -822,6 +824,7 @@
                       (Str8 append "' for object of type '"
                         (Str8 append (if (eq? py-type (lit int)) "int" "float") "'")))) ())))))))))
 
+(%py-sweep!)
 ; Digits grouped by k from the right with sep.
 (def %py-group-sep
   (fn (_ digits k sep)
@@ -1026,6 +1029,7 @@
     (go 0 "")))
 
 
+(%py-sweep!)
 (def %py-drop-last
   (fn (self lst)
     (if (null? (rest lst)) () (pair (first lst) (self (rest lst))))))

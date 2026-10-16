@@ -859,6 +859,7 @@
           (#t "expression")))
       ())))
 
+(%py-sweep!)
 ; One complete expression from a complete token list -- anything left over is a
 ; syntax error HERE, where the bracket that bounded it is known.
 ; A GENERATOR EXPRESSION is a comprehension whose action is a yield, wrapped
@@ -1299,6 +1300,7 @@
 (def %py-plain-expr-of
   (fn (_ toks) (%seq (%py-no-walrus! toks) (%py-expr-of toks))))
 
+(%py-sweep!)
 ; Arguments up to the closing paren.  A trailing comma is legal Python and costs
 ; one branch to accept.
 
@@ -1611,6 +1613,7 @@
 (def %py-fstring-form
   (fn (_ s) (list (lit %py-fjoin) (pair (lit list) (%py-fstring-parts s)))))
 
+(%py-sweep!)
 ; A Python name becomes an x symbol, EXCEPT the builtins that have a runtime
 ; function -- `print` is the only one so far.  A name table rather than a
 ; rewrite in the parser, so the list is one place.
@@ -1806,6 +1809,7 @@
             (self (rest toks) (%py-except-as-name (rest toks) acc)))
           (#t (self (rest toks) acc)))))))
 
+(%py-sweep!)
 ; the name an except clause binds with `as`, onto acc, from the tokens after
 ; the keyword to the end of its line
 (def %py-except-as-name
@@ -2046,6 +2050,7 @@
       (Str8 sub 3 (- (Str8 length s) 3) s)
       (%look %py-builtins))))
 
+(%py-sweep!)
 ; BOTH parser doors check the brackets, because `eval` comes in through this
 ; one and never touches python-parse below.
 (def python-parse-expr
@@ -2217,6 +2222,7 @@
       (pair (if (%py-op-is? (first toks) ";") (list (lit tok-newline) (lit semi)) (first toks))
         (self (rest toks))))))
 
+(%py-sweep!)
 ; --- variable annotations ------------------------------------------------------
 ; `x: int = 1` is the assignment `x = 1`, and `x: int` alone binds nothing --
 ; but in a function it makes x the function's own, unbound until assigned, so
@@ -2800,6 +2806,7 @@
                           (list aug (first tgt) (first r)))
                         (rest r)))))))))))))
 
+(%py-sweep!)
 ; `else:` after an if.  `elif` is `else: if ...`, which is what Python's own
 ; grammar says it is, so it needs no separate layout.
 ; A store depends on the target's STRUCTURE: a name is a set!, a subscript is an
@@ -3319,6 +3326,7 @@
   (fn (self names)
     (if (null? names) () (pair (%py-name->sym (first names)) (self (rest names))))))
 
+(%py-sweep!)
 (def %py-except-clause
   (fn (_ toks)
     ; positioned just after the `except` keyword
@@ -3968,6 +3976,7 @@
       ((eq? (first tgt) (lit %py-getattr)) (pair (lit %py-delattr) (rest tgt)))
       (#t (Err raise (lit syntax) "cannot delete this target" ())))))
 
+(%py-sweep!)
 (def %py-unpack-sets
   (fn (self syms i acc)
     (if (null? syms)
@@ -4171,6 +4180,7 @@
                           (list (lit let) (%py-dflt-lets all-dflts 0) sig-form))))
                     (rest b)))))))))))
 
+(%py-sweep!)
 ; The names a body declares `global` and `nonlocal`, apart, as text:
 ; (GLOBALS . NONLOCALS).  A nested def or class declares for itself, so its
 ; block is not read; one written on its header line ends at the newline.
@@ -4433,6 +4443,7 @@
               (%py-append (%py-strs->syms (%py-walrus-names (%py-group-of t) ())) acc)))
           (#t (self (rest toks) acc)))))))
 
+(%py-sweep!)
 ; THE NAMES A SCOPE'S def AND import STATEMENTS BIND, at any depth of its
 ; blocks, as symbols: a def's name, and each name an import binds -- the head
 ; of `import a.b`, the name after `as`, each name `from m import` takes.  A
@@ -4674,6 +4685,7 @@
       ()
       (pair (list (lit %py-hoist) (first syms) (lit %py-deleted)) (self (rest syms))))))
 
+(%py-sweep!)
 ; Parameter names: any name between a def's parens.
 (def %py-param-names
   (fn (self toks acc)
