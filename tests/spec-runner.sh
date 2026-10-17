@@ -189,17 +189,6 @@ case "${SPEC_SHARD:-}" in
 		;;
 esac
 
-# NO COLLECT AT SNIPPET SEAMS.  python-run builds an isolated tokenizer base,
-# which is C-held state the collector's mark cannot see (the x-lang#283 rooting
-# gap) -- so the platform runner's per-seam collect (x-lang#568) frees it
-# LIVE, and the third eval in a process walks freed memory and segfaults.
-# x-lang#572 added this run-level door out; this suite opts out wholesale,
-# which is the right granularity because every generated conformance case
-# shares the one python-run eval path.  This restores the accumulate-then-exit
-# regime the suite was calibrated under; the alloc ceiling still bounds a
-# file's batch, as before.  A runner without the knob (v0.9.0) ignores it.
-export SPEC_SEAM_COLLECT=0
-
 # SIZE THE UNIT TIMEOUT FOR THE SLOWEST LANE.  On the pinned v0.9.0
 # platform the boot runs interpreted (its analyser burst needs a cwd only
 # a checkout has), so a spec file on CI's runners costs ~25-30s of boot
