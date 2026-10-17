@@ -750,82 +750,99 @@
 
 (%py-sweep!)
 ; --- Bitwise, exact two's complement -----------------------------------------
-; Forty-eight bits at a time.  An operand's low chunk is its floor remainder
-; by 2^48 -- for a negative operand, its two's complement low bits -- and the
-; operand then shifts down by an exact division, so a negative one settles
-; on -1 and a non-negative one on 0.  The walk stops when both have; the
-; infinite tail of ones a -1 stands for contributes -2^k when the operator
-; keeps its bit.  Two chunks combine a nibble at a time through a 256-entry
-; table built once, with fixnum arithmetic throughout; a bit at a time on
-; the bigints themselves cost some 200,000 objects per bit.
-(def %py-chunk 281474976710656)
+; Two fixnums go straight to the integer door: a machine word is already two's
+; complement, and &, | and ^ of two words is a word.  A bigint operand is cut
+; into 24-bit chunks, least significant first, beside a tail -- 0, or the
+; mask for the infinite ones a negative number stands for -- and the chunks
+; combine through the same door.  A chunk comes from the bigint's decimal
+; limbs by short division on the doors (r * base + limb stays under 2^55);
+; a negative operand is cut as its complement, -1 - v, with each chunk
+; flipped.  Only the final value is rebuilt through the tower.
+(import x/num/bigint big-limbs bigint-base)
+(def %py-bit-and (prim-ref (lit int) (lit &)))
+(def %py-bit-or (prim-ref (lit int) (lit |)))
+(def %py-bit-xor (prim-ref (lit int) (lit ^)))
+(def %py-bit-not (prim-ref (lit int) (lit ~)))
+(def %py-bit-shr (prim-ref (lit int) (lit >>)))
+(def %py-bit-mask 16777215)
+(def %py-bit-width 16777216)
 
-; The four bits of each nibble value, least significant first.
-(def %py-nib-bits
+; The chunks of a non-negative fixnum.
+(def %py-bit-fix
+  (fn (self v acc)
+    (if (= v 0) (%py-reverse acc)
+      (self (%py-bit-shr v 24) (pair (%py-bit-and v %py-bit-mask) acc)))))
+
+; Limbs, most significant first, divided by 2^24: (remainder . quotient), the
+; quotient's limbs most significant first with no leading zero.
+(def %py-bit-sdiv
+  (fn (self ls r q)
+    (if (null? ls) (pair r (%py-reverse q))
+      (let ((t (%py-fx+ (%py-fx* r bigint-base) (first ls))))
+        (let ((d (%py-bit-shr t 24)))
+          (self (rest ls) (%py-bit-and t %py-bit-mask)
+            (if (if (= d 0) (null? q) #f) q (pair d q))))))))
+(def %py-bit-limbs
+  (fn (self ls acc)
+    (if (null? ls) (%py-reverse acc)
+      (let ((s (%py-bit-sdiv ls 0 ())))
+        (self (rest s) (pair (first s) acc))))))
+
+; The chunks of a non-negative integer.
+(def %py-bit-mag
   (fn (_ v)
-    (list (= (% v 2) 1) (= (% (Num quotient v 2) 2) 1)
-          (= (% (Num quotient v 4) 2) 1) (= (% (Num quotient v 8) 2) 1))))
-(def %py-nib-bit-lists
-  (fn (self i acc) (if (< i 0) acc (self (- i 1) (pair (%py-nib-bits i) acc)))))
-(def %py-nibs (%py-nib-bit-lists 15 ()))
+    (if (eq? (%py-typeof-prim v) %py-th-big)
+      (%py-bit-limbs (%py-reverse (big-limbs v)) ())
+      (%py-bit-fix v ()))))
 
-; The 256-entry table of an operator over two nibbles, entry a*16+b.
-(def %py-nib-table
-  (fn (_ fbit)
-    (def entry
-      (fn (_ ba bb)
-        (+ (if (fbit (List ref 0 ba) (List ref 0 bb)) 1 0)
-          (+ (if (fbit (List ref 1 ba) (List ref 1 bb)) 2 0)
-            (+ (if (fbit (List ref 2 ba) (List ref 2 bb)) 4 0)
-              (if (fbit (List ref 3 ba) (List ref 3 bb)) 8 0))))))
-    (def go
-      (fn (self i acc)
-        (if (< i 0) acc
-          (self (- i 1)
-            (pair (entry (List ref (Num quotient i 16) %py-nibs) (List ref (% i 16) %py-nibs))
-              acc)))))
-    (go 255 ())))
-(def %py-nib-and (%py-nib-table (fn (_ x y) (if x y #f))))
-(def %py-nib-or  (%py-nib-table (fn (_ x y) (if x #t y))))
-(def %py-nib-xor (%py-nib-table (fn (_ x y) (if x (not y) y))))
+(def %py-bit-flip
+  (fn (self cs acc)
+    (if (null? cs) (%py-reverse acc)
+      (self (rest cs) (pair (%py-fx- %py-bit-mask (first cs)) acc)))))
 
-; Two 48-bit chunks through the table, a nibble at a time.
-(def %py-nib-combine
-  (fn (_ tbl x y)
-    (def go
-      (fn (self x y k pow acc)
-        (if (eq? k 0) acc
-          (self (Num quotient x 16) (Num quotient y 16) (- k 1) (* pow 16)
-            (+ acc (* pow (List ref (+ (* (% x 16) 16) (% y 16)) tbl)))))))
-    (go x y 12 1 0)))
-
-; The low chunk and the rest of v: (low . rest), through the truncating
-; quotient and a sign fix, so a negative v never reaches a modulo.
-(def %py-bit-split
+; (tail . chunks) of an integer.
+(def %py-bit-chunks
   (fn (_ v)
-    (let ((q (Num quotient v %py-chunk)))
-      (let ((r (- v (* q %py-chunk))))
-        (if (< r 0) (pair (+ r %py-chunk) (- q 1)) (pair r q))))))
+    (if (< v 0)
+      (pair %py-bit-mask
+        (%py-bit-flip
+          (%py-bit-mag (if (eq? (%py-typeof-prim v) %py-th-big) (- (- 0 1) v) (%py-bit-not v)))
+          ()))
+      (pair 0 (%py-bit-mag v)))))
+
+; Chunk by chunk, a list past its end standing in its tail.
+(def %py-bit-zip
+  (fn (self op as ta bs tb acc)
+    (if (if (null? as) (null? bs) #f)
+      (%py-reverse acc)
+      (self op (if (null? as) () (rest as)) ta (if (null? bs) () (rest bs)) tb
+        (pair (op (if (null? as) ta (first as)) (if (null? bs) tb (first bs))) acc)))))
+
+; The value of chunks given most significant first.
+(def %py-bit-value
+  (fn (self cs acc)
+    (if (null? cs) acc (self (rest cs) (+ (* acc %py-bit-width) (first cs))))))
+
+(def %py-bit-int
+  (fn (_ op a b)
+    (if (if (eq? (%py-typeof-prim a) %py-th-int) (eq? (%py-typeof-prim b) %py-th-int) #f)
+      (op a b)
+      (let ((ca (%py-bit-chunks a)) (cb (%py-bit-chunks b)))
+        (let ((cs (%py-bit-zip op (rest ca) (first ca) (rest cb) (first cb) ())))
+          (if (= (op (first ca) (first cb)) 0)
+            (%py-bit-value (%py-reverse cs) 0)
+            (- (- 0 1) (%py-bit-value (%py-reverse (%py-bit-flip cs ())) 0))))))))
 
 (def %py-bit2
-  (fn (_ a0 b0 opname tbl fbit)
+  (fn (_ a0 b0 opname op)
     (def a (%py-boolnorm a0))
     (def b (%py-boolnorm b0))
     (if (if (eq? (%py-num-py-type a) (lit int)) (eq? (%py-num-py-type b) (lit int)) #f)
-      (do
-        (def tail? (fn (_ v) (if (= v 0) #t (= v (- 0 1)))))
-        (def go
-          (fn (self a b pow acc)
-            (if (if (tail? a) (tail? b) #f)
-              (if (fbit (< a 0) (< b 0)) (- acc pow) acc)
-              (let ((sa (%py-bit-split a)) (sb (%py-bit-split b)))
-                (self (rest sa) (rest sb) (* pow %py-chunk)
-                  (+ acc (* pow (%py-nib-combine tbl (first sa) (first sb)))))))))
-        ; two bools answer a bool, as in Python
-        (let ((r (go a b 1 0)))
-          (if (if (if (eq? a0 #t) #t (eq? a0 #f)) (if (eq? b0 #t) #t (eq? b0 #f)) #f)
-            (= r 1)
-            r)))
+      ; two bools answer a bool, as in Python
+      (let ((r (%py-bit-int op a b)))
+        (if (if (if (eq? a0 #t) #t (eq? a0 #f)) (if (eq? b0 #t) #t (eq? b0 #f)) #f)
+          (= r 1)
+          r))
       (%py-op-refuse opname a0 b0))))
 
 (def %py-bitor
@@ -839,21 +856,21 @@
       ((if (%py-obj-is a) #t (%py-obj-is b))
         (%py-binop a b "__or__" "__ror__" "|"))
       ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-or a b))
-      (#t (%py-bit2 a b "|" %py-nib-or (fn (_ x y) (if x #t y)))))))
+      (#t (%py-bit2 a b "|" %py-bit-or)))))
 (def %py-bitxor
   (fn (_ a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (%py-binop a b "__xor__" "__rxor__" "^")
     (if (if (%py-set-is a) #t (%py-set-is b))
       (%py-set-xor a b)
-      (%py-bit2 a b "^" %py-nib-xor (fn (_ x y) (if x (not y) y)))))))
+      (%py-bit2 a b "^" %py-bit-xor)))))
 (def %py-bitand
   (fn (_ a b)
     (if (if (%py-obj-is a) #t (%py-obj-is b))
       (%py-binop a b "__and__" "__rand__" "&")
     (if (if (%py-set-is a) #t (%py-set-is b))
       (%py-set-and a b)
-      (%py-bit2 a b "&" %py-nib-and (fn (_ x y) (if x y #f)))))))
+      (%py-bit2 a b "&" %py-bit-and)))))
 
 (%py-sweep!)
 ; --- Membership --------------------------------------------------------------
