@@ -43,7 +43,8 @@
 ; passed.  A call that wants an iterable should still say `List`.
 
 (provide python/util
-  %py-reverse %py-rev-onto %py-length %py-append %py-take %py-byte-len %py-sweep!)
+  %py-reverse %py-rev-onto %py-length %py-append %py-take %py-byte-len %py-sweep!
+  %py-fx+ %py-fx- %py-fx< %py-fx*)
 
 ; A sweep after each of the loads this bundle drives.  The load is mostly
 ; garbage -- 734M objects allocated for 305K live, python/runtime's seven
@@ -76,9 +77,19 @@
 
 (def %py-reverse (fn (_ xs) (%py-rev-onto xs ())))
 
+; The integer doors, for counts and positions only: a length, an index
+; clamped to one, a byte count a read returned.  A door is 0 or 1 objects a
+; call where the platform's + is ~90 and - ~110, and it neither checks its
+; operands (nil segfaults) nor promotes past a word, so a value a program
+; supplied never reaches one.
+(def %py-fx+ (prim-ref (lit int) (lit +)))
+(def %py-fx- (prim-ref (lit int) (lit -)))
+(def %py-fx< (prim-ref (lit int) (lit <)))
+(def %py-fx* (prim-ref (lit int) (lit *)))
+
 (def %py-count-from
   (fn (self xs n)
-    (if (null? xs) n (self (rest xs) (+ n 1)))))
+    (if (null? xs) n (self (rest xs) (%py-fx+ n 1)))))
 
 (def %py-length (fn (_ xs) (%py-count-from xs 0)))
 
@@ -88,7 +99,7 @@
     (if (null? a) b (pair (first a) (self (rest a) b)))))
 (def %py-take
   (fn (self n l)
-    (if (= n 0) () (if (null? l) () (pair (first l) (self (- n 1) (rest l)))))))
+    (if (= n 0) () (if (null? l) () (pair (first l) (self (%py-fx- n 1) (rest l)))))))
 
 ; A string's length through the raw byte door, not the Str8 class: the class
 ; call is ~15,000 objects, the primitive is at the floor, and the number

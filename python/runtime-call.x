@@ -48,7 +48,7 @@
       (if (> (%py-length sig) 5) (List ref 5 sig) ())
       (if (> (%py-length sig) 6) (List ref 6 sig) ()))))
 (def %py-drop
-  (fn (self l k) (if (= k 0) l (if (null? l) () (self (rest l) (- k 1))))))
+  (fn (self l k) (if (= k 0) l (if (null? l) () (self (rest l) (%py-fx- k 1))))))
 (def %py-list-cat
   (fn (self a b) (if (null? a) b (pair (first a) (self (rest a) b)))))
 ; f() takes from NREQ to N positional arguments but M were given -- or, with

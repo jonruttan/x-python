@@ -49,6 +49,7 @@
 ; The WRITER is the one that can, because writing is the one direction where a
 ; LENGTH can travel beside the bytes.  See "the writer" below.
 
+(import python/util)
 (import python/bytes)
 ; (File write) -- the only door out of here that takes a length, and so the
 ; only one a NUL can leave through.  See "the writer".
@@ -147,30 +148,35 @@
 ; What a lead byte promises: how many continuations follow, the range the FIRST
 ; of them may be in, and the payload it carries.  The narrow first ranges are
 ; what refuse an overlong form, a surrogate and a code point past U+10FFFF;
-; nil is a byte that can start nothing.
+; nil is a byte that can start nothing.  A byte is 0..255 and a code point
+; under 2^21, so the comparisons and the arithmetic in these four are on the
+; integer doors (python/util.x).
 (def %ps-lead
   (fn (_ b)
     (match
-      ((< b 128) (list 0 0 0 b))
-      ((< b 194) ())
-      ((< b 224) (list 1 128 191 (- b 192)))
+      ((%py-fx< b 128) (list 0 0 0 b))
+      ((%py-fx< b 194) ())
+      ((%py-fx< b 224) (list 1 128 191 (%py-fx- b 192)))
       ((= b 224) (list 2 160 191 0))
       ((= b 237) (list 2 128 159 13))
-      ((< b 240) (list 2 128 191 (- b 224)))
+      ((%py-fx< b 240) (list 2 128 191 (%py-fx- b 224)))
       ((= b 240) (list 3 144 191 0))
-      ((< b 244) (list 3 128 191 (- b 240)))
+      ((%py-fx< b 244) (list 3 128 191 (%py-fx- b 240)))
       ((= b 244) (list 3 128 143 4))
       (#t ()))))
 
 ; One sequence: its code point and what follows it, or nil and the bytes past
 ; the maximal subpart -- the lead and the continuations that were still valid.
+; An ascii byte is its own code point, and most bytes of most text are one.
 (def %ps-utf8
   (fn (_ bs)
-    (let ((l (%ps-lead (first bs))))
-      (if (null? l)
-        (pair () (rest bs))
-        (%ps-utf8-tail (rest bs) (first l) (first (rest l))
-          (first (rest (rest l))) (first (rest (rest (rest l)))))))))
+    (if (%py-fx< (first bs) 128)
+      (pair (first bs) (rest bs))
+      (let ((l (%ps-lead (first bs))))
+        (if (null? l)
+          (pair () (rest bs))
+          (%ps-utf8-tail (rest bs) (first l) (first (rest l))
+            (first (rest (rest l))) (first (rest (rest (rest l))))))))))
 
 (def %ps-utf8-tail
   (fn (self bs need lo hi cp)
@@ -179,25 +185,31 @@
       (if (null? bs)
         (pair () bs)
         (let ((b (first bs)))
-          (if (if (>= b lo) (<= b hi) #f)
-            (self (rest bs) (- need 1) 128 191 (+ (* cp 64) (- b 128)))
-            (pair () bs)))))))
+          (if (%py-fx< b lo)
+            (pair () bs)
+            (if (%py-fx< hi b)
+              (pair () bs)
+              (self (rest bs) (%py-fx- need 1) 128 191
+                (%py-fx+ (%py-fx* cp 64) (%py-fx- b 128))))))))))
 
 ; ascii is the same walk over a one-byte alphabet.
 (def %ps-ascii
   (fn (_ bs)
-    (if (< (first bs) 128) (pair (first bs) (rest bs)) (pair () (rest bs)))))
+    (if (%py-fx< (first bs) 128) (pair (first bs) (rest bs)) (pair () (rest bs)))))
 
 ; The walk: a code point onto the answer, and `bad` says what a failure leaves
-; there -- nothing, a replacement, or an error.
+; there -- nothing, a replacement, or an error.  An ascii byte is the same code
+; point under both codecs, so it goes onto the answer without the step.
 (def %ps-walk
   (fn (self step bad bs acc)
     (if (null? bs)
-      (List reverse acc)
-      (let ((r (step bs)))
-        (if (null? (first r))
-          (self step bad (rest r) (bad acc bs))
-          (self step bad (rest r) (pair (first r) acc)))))))
+      (%py-reverse acc)
+      (if (%py-fx< (first bs) 128)
+        (self step bad (rest bs) (pair (first bs) acc))
+        (let ((r (step bs)))
+          (if (null? (first r))
+            (self step bad (rest r) (bad acc bs))
+            (self step bad (rest r) (pair (first r) acc))))))))
 
 (def %ps-handler!
   (fn (_ errors)
@@ -205,7 +217,7 @@
       (Str8 append "unknown error handler name '" (Str8 append errors "'")) ())))
 
 (def %ps-dec-errors
-  (fn (_ errors name n)
+  (fn (_ errors name all)
     (match
       ((Str8 =? errors "strict")
         (fn (_ acc bs)
@@ -214,7 +226,7 @@
               (Str8 append name
                 (Str8 append "' codec can't decode byte 0x"
                   (Str8 append (%py-hex2 (first bs))
-                    (Str8 append " in position " (%py-str (- n (%pb-len bs))))))))
+                    (Str8 append " in position " (%py-str (- (%pb-len all) (%pb-len bs))))))))
             ())))
       ((Str8 =? errors "ignore") (fn (_ acc bs) acc))
       ((Str8 =? errors "replace") (fn (_ acc bs) (pair %ps-repl acc)))
@@ -225,7 +237,7 @@
 (def %ps-decode-as
   (fn (_ bs name errors)
     (%ps-walk (if (eq? (%ps-codec name) (lit ascii)) %ps-ascii %ps-utf8)
-      (%ps-dec-errors errors name (%pb-len bs)) bs ())))
+      (%ps-dec-errors errors name bs) bs ())))
 
 ; The other direction, where only ascii can refuse: utf-8 takes every code
 ; point there is.  Python's replacement on the way out is a question mark.

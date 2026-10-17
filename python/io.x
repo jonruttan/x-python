@@ -169,14 +169,14 @@
 (def %py-io-take
   (fn (self l k acc)
     (if (= k 0) (%py-reverse acc)
-      (if (null? l) (%py-reverse acc) (self (rest l) (- k 1) (pair (first l) acc))))))
+      (if (null? l) (%py-reverse acc) (self (rest l) (%py-fx- k 1) (pair (first l) acc))))))
 
 (%py-sweep!)
 ; --- reading a file ---------------------------------------------------------------
 
 (def %py-io-bytes
   (fn (self s i acc)
-    (if (< i 0) acc (self s (- i 1) (pair (%py-io-code (%py-io-bref s i)) acc)))))
+    (if (%py-fx< i 0) acc (self s (%py-fx- i 1) (pair (%py-io-code (%py-io-bref s i)) acc)))))
 
 ; One read of the descriptor: its bytes, none at the end.
 (def %py-io-read-fd
@@ -936,11 +936,13 @@
     (if (null? newline) (%py-universal-go cps ()) cps)))
 (def %py-universal-go
   (fn (self cps acc)
-    (match
-      ((null? cps) (%py-reverse acc))
-      ((not (= (first cps) 13)) (self (rest cps) (pair (first cps) acc)))
-      ((if (null? (rest cps)) #f (= (first (rest cps)) 10)) (self (rest (rest cps)) (pair 10 acc)))
-      (#t (self (rest cps) (pair 10 acc))))))
+    (if (null? cps)
+      (%py-reverse acc)
+      (if (= (first cps) 13)
+        (if (if (null? (rest cps)) #f (= (first (rest cps)) 10))
+          (self (rest (rest cps)) (pair 10 acc))
+          (self (rest cps) (pair 10 acc)))
+        (self (rest cps) (pair (first cps) acc))))))
 
 (def %py-io-module
   (fn (_)
