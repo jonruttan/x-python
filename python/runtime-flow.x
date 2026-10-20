@@ -1534,7 +1534,10 @@
 ;
 ; A GENERATOR IS TWO CONTINUATIONS.  The engine's call/cc copies the C stack
 ; and restores it on invocation, so a continuation can be re-entered after
-; the frame that captured it has gone -- and that is all a generator needs:
+; the frame that captured it has gone -- and that is all a generator needs.
+; Both are captured through (Cont capture f), never bare call/cc: a waiting
+; continuation's frames hold objects the collector cannot otherwise see, and
+; a collect while a generator waited swept them (x-lang#283).  Here:
 ; `yield` captures the body's continuation (k-gen) and jumps to the
 ; caller's (k-caller) with the value; next()/send() capture the caller's
 ; continuation and jump into k-gen with what was sent.  Messages up are
@@ -1613,7 +1616,7 @@
 ; the body's side of a delegating yield: the raw message, (send v) | (throw e)
 (def %py-yield-raw
   (fn (_ g v)
-    (%py-callcc
+    (Cont capture
       (fn (_ k)
         (%py-gen-set-gk! g k)
         (%py-gen-set-status! g (lit suspended))
@@ -1633,7 +1636,7 @@
 ; The body's side: hand v up, wait for what comes down.
 (def %py-yield
   (fn (_ g v)
-    (let ((msg (%py-callcc
+    (let ((msg (Cont capture
                  (fn (_ k)
                    (%py-gen-set-gk! g k)
                    (%py-gen-set-status! g (lit suspended))
@@ -1673,7 +1676,7 @@
           ; the body's cleanup sitting on the CALLER's stack, where the
           ; caller's next escape would run it -- early, and in the wrong frame.
           (let ((winds (first %py-winds)))
-            (let ((r (%py-callcc
+            (let ((r (Cont capture
                        (fn (_ k)
                          (%py-gen-set-ck! g k)
                          (%py-gen-set-status! g (lit running))
