@@ -83,6 +83,9 @@
 (%py-sweep!)
 (import x/type/dict)
 (%py-sweep!)
+; the continuations a generator waits on, with their frames' roots marked
+(import x/sys/cont)
+(%py-sweep!)
 (import python/types)
 (%py-sweep!)
 (import python/format)
