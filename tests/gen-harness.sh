@@ -66,7 +66,7 @@ cat > "$OUT" <<EOX
 (include "$X_BASE")
 (import-path! "$BUNDLE")
 (import python/core
-  py-add py-dict-new py-list-new py-mod py-repl-install! py-sig! python-lex
+  python-add python-dict-new python-list-new python-mod python-repl-install! python-sig! python-lex
   python-parse python-parse-expr python-repl-print python-run
   python-version)
 (import python/tokens python-tokenize)

@@ -22,14 +22,14 @@
 
 (module python/sys)
 (import python/core
-  py-byte-len py-bytes-is py-bytes-list py-char-code py-cls-SimpleNamespace
-  py-dict-entries py-dict? py-exc-SystemExit py-implementation-version
-  py-instantiate py-length py-list-elems py-list-new py-list? py-module-new
-  py-modules-now py-obj-attrs py-obj-is py-obj-new py-obj-set-attrs!
-  py-path-now py-raise py-reverse py-set-elems py-set-is py-sig! py-str-cps
-  py-str-is py-str-of-x py-tuple-elems py-tuple-is)
-(import python/collections py-namedtuple-class)
-(import python/io py-io-std)
+  python-byte-len python-bytes-is python-bytes-list python-char-code python-cls-SimpleNamespace
+  python-dict-entries python-dict? python-exc-SystemExit python-implementation-version
+  python-instantiate python-length python-list-elems python-list-new python-list? python-module-new
+  python-modules-now python-obj-attrs python-obj-is python-obj-new python-obj-set-attrs!
+  python-path-now python-raise python-reverse python-set-elems python-set-is python-sig! python-str-cps
+  python-str-is python-str-of-x python-tuple-elems python-tuple-is)
+(import python/collections python-namedtuple-class)
+(import python/io python-io-std)
 
 ; --- versions -------------------------------------------------------------------
 
@@ -39,22 +39,22 @@
 (def %py-version-nums
   (fn (self s n i cur acc)
     (match
-      ((>= i n) (py-reverse (pair cur acc)))
-      ((= (py-char-code (%str-ref s i)) 46) (self s n (+ i 1) 0 (pair cur acc)))
-      (#t (self s n (+ i 1) (+ (* cur 10) (- (py-char-code (%str-ref s i)) 48)) acc)))))
+      ((>= i n) (python-reverse (pair cur acc)))
+      ((= (python-char-code (%str-ref s i)) 46) (self s n (+ i 1) 0 (pair cur acc)))
+      (#t (self s n (+ i 1) (+ (* cur 10) (- (python-char-code (%str-ref s i)) 48)) acc)))))
 
 ; A version as sys.version_info holds one: major, minor, micro, the release
 ; level and the serial -- a final release, serial 0.
 (def %py-version-info
   (fn (_ cls s)
-    (let ((ns (%py-version-nums s (py-byte-len s) 0 0 ())))
-      (py-instantiate cls
-        (list (List ref 0 ns) (List ref 1 ns) (List ref 2 ns) (py-str-of-x "final") 0)))))
+    (let ((ns (%py-version-nums s (python-byte-len s) 0 0 ())))
+      (python-instantiate cls
+        (list (List ref 0 ns) (List ref 1 ns) (List ref 2 ns) (python-str-of-x "final") 0)))))
 
 ; The same version as one int, a byte a field: 3.14.7 final is 0x030e07f0.
 (def %py-hexversion
   (fn (_ s)
-    (let ((ns (%py-version-nums s (py-byte-len s) 0 0 ())))
+    (let ((ns (%py-version-nums s (python-byte-len s) 0 0 ())))
       (+ (* (List ref 0 ns) 16777216)
          (+ (* (List ref 1 ns) 65536) (+ (* (List ref 2 ns) 256) 240))))))
 
@@ -82,15 +82,15 @@
 ; nothing here is compiled to a file a tag would name.
 (def %py-sys-implementation
   (fn (_ version)
-    (let ((o (py-obj-new py-cls-SimpleNamespace)))
+    (let ((o (python-obj-new python-cls-SimpleNamespace)))
       (%seq
-        (py-obj-set-attrs! o
+        (python-obj-set-attrs! o
           (list
-            (pair "name" (py-str-of-x "x-python"))
+            (pair "name" (python-str-of-x "x-python"))
             (pair "cache_tag" ())
             (pair "version" version)
-            (pair "hexversion" (%py-hexversion py-implementation-version))
-            (pair "_machine" (py-str-of-x x-machine))))
+            (pair "hexversion" (%py-hexversion python-implementation-version))
+            (pair "_machine" (python-str-of-x x-machine))))
         o))))
 
 ; --- getsizeof ------------------------------------------------------------------
@@ -103,13 +103,13 @@
 (def %py-sizeof-cells
   (fn (_ v)
     (match
-      ((py-obj-is v) (+ 1 (* 2 (py-length (py-obj-attrs v)))))
-      ((py-str-is v) (+ 1 (py-length (py-str-cps v))))
-      ((py-bytes-is v) (+ 1 (py-length (py-bytes-list v))))
-      ((py-dict? v) (+ 1 (* 2 (py-length (py-dict-entries v)))))
-      ((py-list? v) (+ 1 (py-length (py-list-elems v))))
-      ((py-tuple-is v) (+ 1 (py-length (py-tuple-elems v))))
-      ((py-set-is v) (+ 1 (py-length (py-set-elems v))))
+      ((python-obj-is v) (+ 1 (* 2 (python-length (python-obj-attrs v)))))
+      ((python-str-is v) (+ 1 (python-length (python-str-cps v))))
+      ((python-bytes-is v) (+ 1 (python-length (python-bytes-list v))))
+      ((python-dict? v) (+ 1 (* 2 (python-length (python-dict-entries v)))))
+      ((python-list? v) (+ 1 (python-length (python-list-elems v))))
+      ((python-tuple-is v) (+ 1 (python-length (python-tuple-elems v))))
+      ((python-set-is v) (+ 1 (python-length (python-set-elems v))))
       (#t 1))))
 
 (def %py-getsizeof
@@ -118,37 +118,37 @@
 ; --- the module -----------------------------------------------------------------
 ; Text attributes are strs.  The version_info class is made with the module,
 ; so sys.version_info and sys.implementation.version share one.
-(def py-sys-module
+(def python-sys-module
   (fn (_)
-    (let ((vi (py-namedtuple-class "version_info" "sys.version_info"
+    (let ((vi (python-namedtuple-class "version_info" "sys.version_info"
                 (list "major" "minor" "micro" "releaselevel" "serial"))))
-      (py-module-new "sys"
+      (python-module-new "sys"
         (list
-          (pair "version" (py-str-of-x %py-sys-version))
+          (pair "version" (python-str-of-x %py-sys-version))
           (pair "version_info" (%py-version-info vi %py-sys-version))
           (pair "hexversion" (%py-hexversion %py-sys-version))
           (pair "implementation"
-            (%py-sys-implementation (%py-version-info vi py-implementation-version)))
-          (pair "platform" (py-str-of-x (%py-platform-of x-machine %py-platform-names)))
+            (%py-sys-implementation (%py-version-info vi python-implementation-version)))
+          (pair "platform" (python-str-of-x (%py-platform-of x-machine %py-platform-names)))
           ; every architecture this platform builds for is little-endian; a
           ; big-endian port would have to say so here
-          (pair "byteorder" (py-str-of-x "little"))
+          (pair "byteorder" (python-str-of-x "little"))
           ; the largest int a CPython machine word holds; this runtime has
           ; bigints and no such limit, and the number is what programs test
           (pair "maxsize" 9223372036854775807)
           ; the running program's own, which the importer reads (runtime-flow.x)
-          (pair "path" (py-path-now))
-          (pair "argv" (py-list-new ()))
-          (pair "modules" (py-modules-now))
-          (pair "stdin" (py-io-std 0 "<stdin>" #f))
-          (pair "stdout" (py-io-std 1 "<stdout>" #t))
-          (pair "stderr" (py-io-std 2 "<stderr>" #t))
+          (pair "path" (python-path-now))
+          (pair "argv" (python-list-new ()))
+          (pair "modules" (python-modules-now))
+          (pair "stdin" (python-io-std 0 "<stdin>" #f))
+          (pair "stdout" (python-io-std 1 "<stdout>" #t))
+          (pair "stderr" (python-io-std 2 "<stderr>" #t))
           (pair "getsizeof"
-            (py-sig! %py-getsizeof "getsizeof" (list "object" "default") 1 #f))
+            (python-sig! %py-getsizeof "getsizeof" (list "object" "default") 1 #f))
           (pair "exit"
             (fn (_ . a)
-              (py-raise
-                (py-instantiate py-exc-SystemExit
+              (python-raise
+                (python-instantiate python-exc-SystemExit
                   (if (null? a) () (list (first a))))))))))))
 
-(provide python/sys py-implementation-version py-sys-module)
+(provide python/sys python-implementation-version python-sys-module)

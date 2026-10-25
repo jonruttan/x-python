@@ -49,7 +49,7 @@
 
 (module python/tokens)
 (import python/core
-  make-type pb->str pb-of-str ps-enc1 py-byte-len py-reverse)
+  make-type pb->str pb-of-str ps-enc1 python-byte-len python-reverse)
 
 
 ; (Base make-tok) is the isolated, type-free base -- 2024's make-token-base.
@@ -109,14 +109,14 @@
 (def %py-read-number-label
   (guard (e (fn (_ args) ())) %read-label))
 
-(def py-code-at (fn (_ s i) (%py-char->int (%str-ref s i))))
+(def python-code-at (fn (_ s i) (%py-char->int (%str-ref s i))))
 
 ; 0x 0o 0b at i, in either case
 (def %py-based-at?
   (fn (_ s i n)
     (if (< (- n i) 3) #f
-      (if (not (= (py-code-at s i) 48)) #f
-        (let ((c (py-code-at s (+ i 1))))
+      (if (not (= (python-code-at s i) 48)) #f
+        (let ((c (python-code-at s (+ i 1))))
           (match
             ((if (= c 120) #t (= c 88)) #t)
             ((if (= c 111) #t (= c 79)) #t)
@@ -127,7 +127,7 @@
 (def %py-floaty?
   (fn (self s i n)
     (if (>= i n) #f
-      (let ((c (py-code-at s i)))
+      (let ((c (python-code-at s i)))
         (if (match ((= c 46) #t) ((= c 101) #t) ((= c 69) #t) (#t #f))
           #t
           (self s (+ i 1) n))))))
@@ -137,11 +137,11 @@
 ; before float, so 2.5j is imaginary.
 (def %py-number-label-of-text
   (fn (_ s)
-    (let ((n (py-byte-len s)))
-      (let ((i (let ((c0 (py-code-at s 0))) (if (if (= c0 45) #t (= c0 43)) 1 0))))
+    (let ((n (python-byte-len s)))
+      (let ((i (let ((c0 (python-code-at s 0))) (if (if (= c0 45) #t (= c0 43)) 1 0))))
         (match
           ((%py-based-at? s i n) 4)
-          ((let ((cl (py-code-at s (- n 1)))) (if (= cl 106) #t (= cl 74))) 3)
+          ((let ((cl (python-code-at s (- n 1)))) (if (= cl 106) #t (= cl 74))) 3)
           ((%py-floaty? s i n) 2)
           (#t 1))))))
 ; The conversion door and the string type handle, fetched from the catalog
@@ -152,7 +152,7 @@
 (def %py-th-str ((prim-ref (lit type) (lit of)) ""))
 ; The list->string spelling ash arrived at: convert to the string type, with the
 ; empty list special-cased because a conversion of nothing has no type to go on.
-(def py-list->string (fn (_ l) (if (null? l) "" (%py-cvt l %py-th-str))))
+(def python-list->string (fn (_ l) (if (null? l) "" (%py-cvt l %py-th-str))))
 
 ; --- Token values ------------------------------------------------------------
 ; Plain lists, the convention ash settled on: readable in a spec without a printer.
@@ -346,12 +346,12 @@
       (fn (self acc)
         (let ((v (%py-token-read buffer)))
           (match
-            ((null? v) (mk-tok-block (py-reverse acc)))
-            ((eq? v (lit %py-dedent)) (mk-tok-block (py-reverse acc)))
+            ((null? v) (mk-tok-block (python-reverse acc)))
+            ((eq? v (lit %py-dedent)) (mk-tok-block (python-reverse acc)))
             ; a nested block may have closed more levels than its own
             ((> (first %py-owed) 0)
               (%seq (%set-first! %py-owed (- (first %py-owed) 1))
-                (mk-tok-block (py-reverse (pair v acc)))))
+                (mk-tok-block (python-reverse (pair v acc)))))
             (#t (self (pair v acc)))))))
     (go ())))
 
@@ -441,7 +441,7 @@
 ; (19,347 objects on a hit).  So the token arrives classified, (tok-kw "if"),
 ; and the parser asks the label.
 ;
-; THE TRIE IS GENERATED FROM py-keywords, once, at load: one node per
+; THE TRIE IS GENERATED FROM python-keywords, once, at load: one node per
 ; distinct prefix (121 for these 32), each a state that dispatches on the next
 ; character to a child state.  A TERMINAL accepts only when the character
 ; after the keyword is not a name character: `ifx` is a name, and the terminal
@@ -459,7 +459,7 @@
 ; True, False and None are not here: this bundle carries them as builtins, and
 ; keyword.kwlist's three extra rows are the whole difference.  The soft
 ; keywords (match, case, type, _) are names, as they are in Python.
-(def py-keywords
+(def python-keywords
   (list "if" "elif" "else" "while" "def" "return" "pass" "and" "or" "not"
         "in" "is" "for" "break" "continue" "class" "import" "from" "as"
         "try" "except" "finally" "raise" "with" "lambda" "global" "nonlocal"
@@ -500,7 +500,7 @@
      (if (null? ks) node
        (self (rest ks)
          (%py-kw-insert node (%py-kw-codes (first ks) (- (Str8 length (first ks)) 1) ())))))
-   py-keywords (pair #f ())))
+   python-keywords (pair #f ())))
 
 ; The interpreted states: one closure per node, built bottom-up, each holding
 ; its own (code . state) table.  A state receives the NEXT character: a child
@@ -608,16 +608,16 @@
 ; decimal
 (def %py-literal-refusal
   (fn (_ text)
-    (def n (py-byte-len text))
-    (def i (if (if (= (py-code-at text 0) 45) #t (= (py-code-at text 0) 43)) 1 0))
-    (def c (if (%py-based-at? text i n) (py-code-at text (+ i 1)) 0))
+    (def n (python-byte-len text))
+    (def i (if (if (= (python-code-at text 0) 45) #t (= (python-code-at text 0) 43)) 1 0))
+    (def c (if (%py-based-at? text i n) (python-code-at text (+ i 1)) 0))
     (Str8 append "invalid "
       (Str8 append
         (match
           ((if (= c 120) #t (= c 88)) "hexadecimal")
           ((if (= c 111) #t (= c 79)) "octal")
           ((if (= c 98) #t (= c 66)) "binary")
-          ((if (= (py-code-at text (- n 1)) 106) #t (= (py-code-at text (- n 1)) 74))
+          ((if (= (python-code-at text (- n 1)) 106) #t (= (python-code-at text (- n 1)) 74))
             "imaginary")
           (#t "decimal"))
         " literal"))))
@@ -793,16 +793,16 @@
       ())))
 (def %py-zero-led?
   (fn (_ s)
-    (let ((n (py-byte-len s)))
-      (let ((i (let ((c0 (py-code-at s 0))) (if (if (= c0 45) #t (= c0 43)) 1 0))))
-        (if (if (< i n) (= (py-code-at s i) 48) #f)
+    (let ((n (python-byte-len s)))
+      (let ((i (let ((c0 (python-code-at s 0))) (if (if (= c0 45) #t (= c0 43)) 1 0))))
+        (if (if (< i n) (= (python-code-at s i) 48) #f)
           (%py-nonzero-digit? s (+ i 1) n)
           #f)))))
 (def %py-nonzero-digit?
   (fn (self s i n)
     (if (>= i n)
       #f
-      (let ((c (py-code-at s i)))
+      (let ((c (python-code-at s i)))
         (if (if (>= c 49) (<= c 57) #f) #t (self s (+ i 1) n))))))
 (%py-tok-type! "PY-NUMBER" %py-t-number)
 
@@ -856,10 +856,10 @@
     (def go
       (fn (self n acc)
         (if (< n 0) acc
-          (self (- n 1) (pair (py-list->string (list (%py-int->char n))) acc)))))
+          (self (- n 1) (pair (python-list->string (list (%py-int->char n))) acc)))))
     (go 255 ())))
 (def %py-cp->str (fn (_ n) (List ref n %py-cp-strs)))
-(def py-hexval
+(def python-hexval
   (fn (_ c)
     (match
       ((if (>= c 48) (<= c 57) #f) (- c 48))
@@ -964,7 +964,7 @@
       ((= k 0) acc)
       ((>= j end) ())
       (#t
-        (let ((d (py-hexval (%py-char->int (Str8 ref j s)))))
+        (let ((d (python-hexval (%py-char->int (Str8 ref j s)))))
           (if (null? d) () (self s (+ j 1) end (- k 1) (+ (* acc 16) d))))))))
 
 ; \u or \U at i: the escape's code point and where the literal resumes, or the
@@ -1016,8 +1016,8 @@
       ((= code 102) (simple (%py-cp->str 12)))
       ((= code 118) (simple (%py-cp->str 11)))
       ((= code 120)
-        (let ((h1 (if (< (+ i 2) len) (py-hexval (at (+ i 2))) ()))
-              (h2 (if (< (+ i 3) len) (py-hexval (at (+ i 3))) ())))
+        (let ((h1 (if (< (+ i 2) len) (python-hexval (at (+ i 2))) ()))
+              (h2 (if (< (+ i 3) len) (python-hexval (at (+ i 3))) ())))
           ; fewer than two hex digits is refused, each literal type in its words
           (if (if (null? h1) #t (null? h2))
             (%py-esc-refused s i
@@ -1866,8 +1866,8 @@
               ; would report the wrong place -- and it is the parser, not the
               ; reader, that knows a closer has to MATCH.
               (match
-                ((null? v) (pair (py-reverse acc) ()))
-                ((%py-group-close? v) (pair (py-reverse acc) (%py-close-text v)))
+                ((null? v) (pair (python-reverse acc) ()))
+                ((%py-group-close? v) (pair (python-reverse acc) (%py-close-text v)))
                 ; A newline inside brackets is not line structure, it is
                 ; whitespace -- which used to need a depth counter to know.
                 ((%py-group-nl? v) (self acc))
@@ -1941,5 +1941,5 @@
   %py-jit-threshold %py-number-label! %py-read-number-label
   %py-unescape-bytes %py-unescape-cps mk-tok-block mk-tok-bytes
   mk-tok-fstring mk-tok-group mk-tok-kw mk-tok-name mk-tok-newline
-  mk-tok-number mk-tok-op mk-tok-string py-code-at py-hexval py-keywords
-  py-list->string python-tokenize)
+  mk-tok-number mk-tok-op mk-tok-string python-code-at python-hexval python-keywords
+  python-list->string python-tokenize)

@@ -1,5 +1,5 @@
 Keyword arguments and defaults (`python/parse.x`, `python/runtime.x`):
-a def registers its parameter names (py-sig!) and a keyword call arranges
+a def registers its parameter names (python-sig!) and a keyword call arranges
 its arguments into positional slots; defaults evaluate once at def time;
 print(sep=, end=), str.format(name=) and the str methods with keywords;
 try/except/else; %c, %(key)s mapping and * width under the % operator;

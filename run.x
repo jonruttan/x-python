@@ -33,17 +33,17 @@
 ; reader -- no prompt string changes what a reader is -- so python/repl.x's
 ; own loop replaces it.
 ; Which of the two is a fact of the process, so the choice is remade after
-; a state image loads; see py-repl-choose! in python/repl.x.
+; a state image loads; see python-repl-choose! in python/repl.x.
 ;
 ; All of that only when this bundle leads.  `-l` is repeatable, and named
 ; second (`x -l xe -l python`) this bundle is a library to the lang that
 ; owns the prompt: it registers "python" so (lang python) can switch to it,
 ; and touches neither the banner nor the loop.
-(import python/core python-banner py-leads? py-repl-install! py-repl-choose! py-repl-register! py-sweep!)
-(py-sweep!)
-(if (py-leads?)
+(import python/core python-banner python-leads? python-repl-install! python-repl-choose! python-repl-register! python-sweep!)
+(python-sweep!)
+(if (python-leads?)
   (do
     (set! %banner python-banner)
-    (py-repl-install!)
-    (py-repl-choose!))
-  (py-repl-register!))
+    (python-repl-install!)
+    (python-repl-choose!))
+  (python-repl-register!))

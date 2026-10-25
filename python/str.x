@@ -147,14 +147,14 @@
 (def %ps-lead
   (fn (_ b)
     (match
-      ((py-fx< b 128) (list 0 0 0 b))
-      ((py-fx< b 194) ())
-      ((py-fx< b 224) (list 1 128 191 (py-fx- b 192)))
+      ((python-fx< b 128) (list 0 0 0 b))
+      ((python-fx< b 194) ())
+      ((python-fx< b 224) (list 1 128 191 (python-fx- b 192)))
       ((= b 224) (list 2 160 191 0))
       ((= b 237) (list 2 128 159 13))
-      ((py-fx< b 240) (list 2 128 191 (py-fx- b 224)))
+      ((python-fx< b 240) (list 2 128 191 (python-fx- b 224)))
       ((= b 240) (list 3 144 191 0))
-      ((py-fx< b 244) (list 3 128 191 (py-fx- b 240)))
+      ((python-fx< b 244) (list 3 128 191 (python-fx- b 240)))
       ((= b 244) (list 3 128 143 4))
       (#t ()))))
 
@@ -163,7 +163,7 @@
 ; An ascii byte is its own code point, and most bytes of most text are one.
 (def %ps-utf8
   (fn (_ bs)
-    (if (py-fx< (first bs) 128)
+    (if (python-fx< (first bs) 128)
       (pair (first bs) (rest bs))
       (let ((l (%ps-lead (first bs))))
         (if (null? l)
@@ -178,17 +178,17 @@
       (if (null? bs)
         (pair () bs)
         (let ((b (first bs)))
-          (if (py-fx< b lo)
+          (if (python-fx< b lo)
             (pair () bs)
-            (if (py-fx< hi b)
+            (if (python-fx< hi b)
               (pair () bs)
-              (self (rest bs) (py-fx- need 1) 128 191
-                (%py-fx+ (%py-fx* cp 64) (py-fx- b 128))))))))))
+              (self (rest bs) (python-fx- need 1) 128 191
+                (%py-fx+ (%py-fx* cp 64) (python-fx- b 128))))))))))
 
 ; ascii is the same walk over a one-byte alphabet.
 (def %ps-ascii
   (fn (_ bs)
-    (if (py-fx< (first bs) 128) (pair (first bs) (rest bs)) (pair () (rest bs)))))
+    (if (python-fx< (first bs) 128) (pair (first bs) (rest bs)) (pair () (rest bs)))))
 
 ; The walk: a code point onto the answer, and `bad` says what a failure leaves
 ; there -- nothing, a replacement, or an error.  An ascii byte is the same code
@@ -196,8 +196,8 @@
 (def %ps-walk
   (fn (self step bad bs acc)
     (if (null? bs)
-      (py-reverse acc)
-      (if (py-fx< (first bs) 128)
+      (python-reverse acc)
+      (if (python-fx< (first bs) 128)
         (self step bad (rest bs) (pair (first bs) acc))
         (let ((r (step bs)))
           (if (null? (first r))
@@ -219,7 +219,7 @@
               (Str8 append name
                 (Str8 append "' codec can't decode byte 0x"
                   (Str8 append (%py-hex2 (first bs))
-                    (Str8 append " in position " (py-str (- (pb-len all) (pb-len bs))))))))
+                    (Str8 append " in position " (python-str (- (pb-len all) (pb-len bs))))))))
             ())))
       ((Str8 =? errors "ignore") (fn (_ acc bs) acc))
       ((Str8 =? errors "replace") (fn (_ acc bs) (pair %ps-repl acc)))
@@ -243,7 +243,7 @@
             (Str8 append "'"
               (Str8 append name
                 (Str8 append "' codec can't encode character in position "
-                  (Str8 append (py-str (- n (pb-len cps)))
+                  (Str8 append (python-str (- n (pb-len cps)))
                     ": ordinal not in range(128)"))))
             ())))
       ((Str8 =? errors "ignore") (fn (_ acc cps) acc))

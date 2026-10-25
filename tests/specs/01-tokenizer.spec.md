@@ -44,7 +44,7 @@ tokenizer bug and is not one.
 ## tokenizer keywords
 
 The analyser decides these per character, from a trie generated out of
-`py-keywords` (`python/tokens.x`). The list is CPython 3.14's `keyword.kwlist`
+`python-keywords` (`python/tokens.x`). The list is CPython 3.14's `keyword.kwlist`
 less `True`, `False` and `None`, which this bundle carries as builtins.
 
 ### every keyword, in the list's own order

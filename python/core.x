@@ -11,117 +11,117 @@
 (module python/core)
 (include-once "./util.x")
 (include-once "./types.x")
-(py-sweep!)
+(python-sweep!)
 (include-once "./str.x")
-(py-sweep!)
+(python-sweep!)
 (include-once "./bytes.x")
-(py-sweep!)
+(python-sweep!)
 (include-once "./format.x")
-(py-sweep!)
+(python-sweep!)
 ; The platform the runtime stands on, loaded as runtime.x loaded it, a sweep
 ; after each.
 (import x/boot/tower-compiled)
-(py-sweep!)
+(python-sweep!)
 (import x/num/bigint)
-(py-sweep!)
+(python-sweep!)
 (import x/num/float)
-(py-sweep!)
+(python-sweep!)
 (import x/num/rational)
-(py-sweep!)
+(python-sweep!)
 (import x/num/complex)
-(py-sweep!)
+(python-sweep!)
 (import x/num/decimal)
-(py-sweep!)
+(python-sweep!)
 (import x/type/generic)
-(py-sweep!)
+(python-sweep!)
 (import x/num/tower)
-(py-sweep!)
+(python-sweep!)
 (import x/type/dict)
-(py-sweep!)
+(python-sweep!)
 (import x/sys/cont)
-(py-sweep!)
+(python-sweep!)
 (include-once "./runtime-num.x")
-(py-sweep!)
+(python-sweep!)
 (include-once "./runtime-seq.x")
-(py-sweep!)
+(python-sweep!)
 (include-once "./runtime-str.x")
-(py-sweep!)
+(python-sweep!)
 (include-once "./runtime-obj.x")
-(py-sweep!)
+(python-sweep!)
 (include-once "./runtime-flow.x")
-(py-sweep!)
+(python-sweep!)
 (include-once "./runtime-call.x")
-(py-sweep!)
+(python-sweep!)
 (include-once "./runtime-py-type.x")
-(py-sweep!)
+(python-sweep!)
 (include-once "./indent.x")
-(py-sweep!)
+(python-sweep!)
 (include-once "./parse.x")
-(py-sweep!)
+(python-sweep!)
 (include-once "./base.x")
-(py-sweep!)
+(python-sweep!)
 (include-once "./repl.x")
-(py-sweep!)
+(python-sweep!)
 
 ; python-run is the seam a Python program presses on: a program file of
 ; (python-run ...) forms calls it bare, so it is the root's.
 (provide python/core
-  py-f-2p52
+  python-f-2p52
   make-instance make-type pb->str pb-len pb-of-str ps->x ps-codec
-  ps-decode-as ps-enc1 ps-encode ps-encode-as ps-write-bytes-to py-add
-  py-alist-find py-barr-is py-barr-set! py-boolnorm py-builtins py-byte-len
-  py-bytes-hex py-bytes-is py-bytes-list py-bytes-new py-bytes-of-codes
-  py-bytes-only? py-bytes-str py-char-code py-cim py-class-methods-set!
-  py-class-name py-class-new py-class-qualname py-class-row-attr
-  py-cls-SimpleNamespace py-cls-dict py-cls-object py-cls-tuple
-  py-complex-is py-cre py-desc-new py-dflt py-dict-entries py-dict-new
-  py-dict? py-div py-dq-el py-dq-is py-dq-max py-dq-new py-dq-set!
-  py-dq-set-max! py-drop py-drop-last py-dunder py-els-count py-els-drop-at
-  py-els-index py-els-insert-at py-els-repeat py-els-set-at py-eq
-  py-exc-FileExistsError py-exc-FileNotFoundError py-exc-IsADirectoryError
-  py-exc-OSError py-exc-PermissionError py-exc-SystemExit py-exc-ValueError
-  py-f-2p64 py-f-pow py-fasinh py-fcopysign py-fcosh py-float-of-str
-  py-flog1p py-floordiv py-fsinh py-ftanh py-fx- py-fx< py-ge py-gt
-  py-implementation-version py-in py-in-walk py-init-receiver!
-  py-instantiate py-int-encode py-int-invert py-int-join py-iter-elems
-  py-lang py-le py-leads? py-length py-list-cat py-list-clamp py-list-elems
-  py-list-new py-list? py-lt py-mdomain py-mfloat py-mod py-module-new
-  py-modules-now py-mrange-error py-mul py-native-of py-num-py-type py-num?
-  py-obj-attrs py-obj-class py-obj-is py-obj-native py-obj-native!
-  py-obj-new py-obj-set-attrs! py-opt py-path-now py-raise py-raise-stop
-  py-repl-choose! py-repl-install! py-repl-line py-repl-register!
-  py-repr-of py-rev-onto py-reverse py-set-elems py-set-is py-set-nth
-  py-sig! py-slice-span py-str py-str-cps py-str-display py-str-is
-  py-str-new py-str-of-x py-sub py-subclass? py-sweep! py-take
-  py-takes-at-most! py-text->x py-th-float py-tuple-elems py-tuple-is
-  py-tuple-new py-tuple-of-list py-type-of python-banner python-lex
+  ps-decode-as ps-enc1 ps-encode ps-encode-as ps-write-bytes-to python-add
+  python-alist-find python-barr-is python-barr-set! python-boolnorm python-builtins python-byte-len
+  python-bytes-hex python-bytes-is python-bytes-list python-bytes-new python-bytes-of-codes
+  python-bytes-only? python-bytes-str python-char-code python-cim python-class-methods-set!
+  python-class-name python-class-new python-class-qualname python-class-row-attr
+  python-cls-SimpleNamespace python-cls-dict python-cls-object python-cls-tuple
+  python-complex-is python-cre python-desc-new python-dflt python-dict-entries python-dict-new
+  python-dict? python-div python-dq-el python-dq-is python-dq-max python-dq-new python-dq-set!
+  python-dq-set-max! python-drop python-drop-last python-dunder python-els-count python-els-drop-at
+  python-els-index python-els-insert-at python-els-repeat python-els-set-at python-eq
+  python-exc-FileExistsError python-exc-FileNotFoundError python-exc-IsADirectoryError
+  python-exc-OSError python-exc-PermissionError python-exc-SystemExit python-exc-ValueError
+  python-f-2p64 python-f-pow python-fasinh python-fcopysign python-fcosh python-float-of-str
+  python-flog1p python-floordiv python-fsinh python-ftanh python-fx- python-fx< python-ge python-gt
+  python-implementation-version python-in python-in-walk python-init-receiver!
+  python-instantiate python-int-encode python-int-invert python-int-join python-iter-elems
+  py-lang python-le python-leads? python-length python-list-cat python-list-clamp python-list-elems
+  python-list-new python-list? python-lt python-mdomain python-mfloat python-mod python-module-new
+  python-modules-now python-mrange-error python-mul python-native-of python-num-py-type python-num?
+  python-obj-attrs python-obj-class python-obj-is python-obj-native python-obj-native!
+  python-obj-new python-obj-set-attrs! python-opt python-path-now python-raise python-raise-stop
+  python-repl-choose! python-repl-install! python-repl-line python-repl-register!
+  python-repr-of python-rev-onto python-reverse python-set-elems python-set-is python-set-nth
+  python-sig! python-slice-span python-str python-str-cps python-str-display python-str-is
+  python-str-new python-str-of-x python-sub python-subclass? python-sweep! python-take
+  python-takes-at-most! python-text->x python-th-float python-tuple-elems python-tuple-is
+  python-tuple-new python-tuple-of-list python-type-of python-banner python-lex
   python-parse python-parse-expr python-parse-single python-repl-print
   (global python-run) python-version type?)
 
 (import python/tokens
-  %py-int->char mk-tok-number mk-tok-op py-code-at py-hexval
-  py-list->string python-tokenize)
+  %py-int->char mk-tok-number mk-tok-op python-code-at python-hexval
+  python-list->string python-tokenize)
 (import python/array
-  py-arr-at py-arr-attr py-arr-buffer py-arr-cat py-arr-el py-arr-is
-  py-arr-put! py-array-module py-cls-array py-ieee-2p63 py-ieee-raw
-  py-take-n)
+  python-arr-at python-arr-attr python-arr-buffer python-arr-cat python-arr-el python-arr-is
+  python-arr-put! python-array-module python-cls-array python-ieee-2p63 python-ieee-raw
+  python-take-n)
 (import python/cmath
-  py-cmath-module)
+  python-cmath-module)
 (import python/collections
-  py-collections-module)
+  python-collections-module)
 (import python/deque
-  py-cls-deque py-dq-at py-dq-attr py-dq-cat py-dq-del! py-dq-eq
-  py-dq-extend! py-dq-put! py-dq-repeat py-dq-repr)
+  python-cls-deque python-dq-at python-dq-attr python-dq-cat python-dq-del! python-dq-eq
+  python-dq-extend! python-dq-put! python-dq-repeat python-dq-repr)
 (import python/io
-  py-io-attr py-io-class py-io-drain! py-io-is py-io-line! py-io-module
-  py-open)
+  python-io-attr python-io-class python-io-drain! python-io-is python-io-line! python-io-module
+  python-open)
 (import python/memoryview
-  py-buffer-bytes py-buffer-text py-buffer? py-cls-memoryview py-mv-at
-  py-mv-attr py-mv-elems py-mv-in py-mv-is py-mv-len py-mv-put!
-  py-mv-setslice! py-mv-slice)
+  python-buffer-bytes python-buffer-text python-buffer? python-cls-memoryview python-mv-at
+  python-mv-attr python-mv-elems python-mv-in python-mv-is python-mv-len python-mv-put!
+  python-mv-setslice! python-mv-slice)
 (import python/struct
-  py-struct-module)
+  python-struct-module)
 (import python/sys
-  py-sys-module)
+  python-sys-module)
 (import python/line
-  py-complete py-marks py-paint py-read py-session-name!)
+  python-complete python-marks python-paint python-read python-session-name!)

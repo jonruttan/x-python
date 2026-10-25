@@ -23,7 +23,7 @@
 ; rendering as ':', %.12e of 1e-r rendering as 0.999...e-r) structurally
 ; impossible here instead of carefully avoided.
 ;
-; ONE NAMESPACE NOTE: this file leans on runtime.x's globals (py-str,
+; ONE NAMESPACE NOTE: this file leans on runtime.x's globals (python-str,
 ; %py-f-round, %py-f-exact ...) resolved at CALL time, so it loads before
 ; them without ceremony; nothing here runs until a program formats.
 
@@ -33,7 +33,7 @@
 ; rather than mis-consume arguments.
 
 (module python/core)
-(def %py-fmt-code (fn (_ s i) (py-char-code (%str-ref s i))))
+(def %py-fmt-code (fn (_ s i) (python-char-code (%str-ref s i))))
 (def %py-fmt-digit? (fn (_ c) (if (>= c 48) (<= c 57) #f)))
 
 (def %py-fmt-zeros
@@ -80,7 +80,7 @@
       ; toward zero as int() takes it, so %d of -0.5 is 0 and not -0
       ((%py-float-is v) (%py-fmt-int-mag (%py-mwhole v (lit trunc))))
       (#t
-        (let ((s (py-str v)))
+        (let ((s (python-str v)))
           (if (Str8 =? (Str8 sub 0 1 s) "-")
             (pair #t (Str8 sub 1 (- (Str8 length s) 1) s))
             (pair #f s)))))))
@@ -103,7 +103,7 @@
 (def %py-fmt-chunk-16 (%py-fmt-chunk-of 16))
 (def %py-fmt-base
   (fn (_ v0 base upper)
-    (def v (py-boolnorm v0))
+    (def v (python-boolnorm v0))
     (def ck
       (match
         ((= base 2) %py-fmt-chunk-2)
@@ -178,7 +178,7 @@
         (self (Str8 sub 0 (- L 1) s))
         s))))
 
-(py-sweep!)
+(python-sweep!)
 ; --- The conversions ---------------------------------------------------------
 ; Each returns the magnitude body; the caller adds sign and padding.
 ; Non-finite floats short-circuit before any of these.
@@ -234,27 +234,27 @@
 ; %d on an object asks __int__, as int() would
 (def %py-fmt-int-of
   (fn (_ v)
-    (if (py-obj-is v)
-      (let ((m (py-dunder v "__int__")))
-        (let ((r (if (null? m) () (py-boolnorm (m)))))
+    (if (python-obj-is v)
+      (let ((m (python-dunder v "__int__")))
+        (let ((r (if (null? m) () (python-boolnorm (m)))))
           ; the answer must be an int; CPython names the object's class
           ; either way
-          (if (eq? (py-num-py-type r) (lit int))
+          (if (eq? (python-num-py-type r) (lit int))
             r
             (Err raise (lit type)
               (Str8 append "%d format: a real number is required, not "
-                (py-class-name (py-type-of v)))
+                (python-class-name (python-type-of v)))
               ()))))
       v)))
 (def %py-fmt-float-of
   (fn (_ v)
     (match
       ((%py-float-is v) v)
-      ((py-obj-is v) (%py-obj-float v))
-      ((py-num? v) (* 1.0 (py-boolnorm v)))
+      ((python-obj-is v) (%py-obj-float v))
+      ((python-num? v) (* 1.0 (python-boolnorm v)))
       (#t
         (Err raise (lit type)
-          (Str8 append "must be real number, not " (py-class-name (py-type-of v)))
+          (Str8 append "must be real number, not " (python-class-name (python-type-of v)))
           ())))))
 
 ; --- The operator ------------------------------------------------------------
@@ -277,36 +277,36 @@
     (match
       ((if (= conv 114) #t (= conv 97)) (%py-ascii-of v))
       ((= conv 99) (%py-fmt-bytes-char v))
-      ((py-buffer? v) (pb->str (py-buffer-bytes v)))
+      ((python-buffer? v) (pb->str (python-buffer-bytes v)))
       (#t
-        (let ((m (if (py-obj-is v) (py-dunder v "__bytes__") ())))
+        (let ((m (if (python-obj-is v) (python-dunder v "__bytes__") ())))
           (if (null? m)
             (Err raise (lit type)
               (Str8 append
                 "%b requires a bytes-like object, or an object that implements __bytes__, not '"
-                (Str8 append (py-class-name (py-type-of v)) "'")) ())
-            (pb->str (py-bytes-list (m)))))))))
+                (Str8 append (python-class-name (python-type-of v)) "'")) ())
+            (pb->str (python-bytes-list (m)))))))))
 
 (def %py-fmt-bytes-char
   (fn (_ v)
     (match
-      ((if (py-bytes-is v) (= (pb-len (py-bytes-list v)) 1) #f)
-        (pb->str (py-bytes-list v)))
-      ((eq? (py-num-py-type (py-boolnorm v)) (lit int))
+      ((if (python-bytes-is v) (= (pb-len (python-bytes-list v)) 1) #f)
+        (pb->str (python-bytes-list v)))
+      ((eq? (python-num-py-type (python-boolnorm v)) (lit int))
         (if (if (< v 0) #t (> v 255))
           (Err raise (lit overflow) "%c arg not in range(256)" ())
           (pb->str (list v))))
       (#t
         (Err raise (lit type)
           (Str8 append "%c requires an integer in range(256) or a single byte, not "
-            (if (py-bytes-is v)
-              (Str8 append "a bytes object of length " (py-str (pb-len (py-bytes-list v))))
-              (py-class-name (py-type-of v)))) ())))))
+            (if (python-bytes-is v)
+              (Str8 append "a bytes object of length " (python-str (pb-len (python-bytes-list v))))
+              (python-class-name (python-type-of v)))) ())))))
 
 ; ascii(v): the repr, with each character past ASCII written as the escape
 ; Python's repr would use for an unprintable one -- \xhh, \uhhhh or \Uhhhhhhhh.
 (def %py-ascii-of
-  (fn (_ v) (ps->x (%py-ascii-cps (%ps-of-x (py-repr-of v)) ()))))
+  (fn (_ v) (ps->x (%py-ascii-cps (%ps-of-x (python-repr-of v)) ()))))
 (def %py-ascii-cps
   (fn (self cps acc)
     (if (null? cps)
@@ -355,7 +355,7 @@
           ; EVERYTHING HERE IS A PLATFORM STRING: this engine pads and measures
           ; with Str8, so each branch hands back one of those rather than a str.
           ; `str?` asks about the PLATFORM's strings, which a Python str is not
-          ; any more, so the test is py-str-is and the value crosses over.
+          ; any more, so the test is python-str-is and the value crosses over.
           ;
           ; %c OF A ZERO therefore raises rather than answering "\x00": the
           ; crossing refuses, because the rest of this pipeline is a C string.
@@ -364,11 +364,11 @@
             (match
               (bytes? (%py-fmt-bytes-text conv v))
               ((= conv 99)
-                (if (py-str-is v)
-                  (if (= (%py-len v) 1) (ps->x (py-str-cps v))
+                (if (python-str-is v)
+                  (if (= (%py-len v) 1) (ps->x (python-str-cps v))
                     (Err raise (lit type) "%c requires an int or a unicode char, not a string of length other than 1" ()))
-                  (ps->x (py-str-cps (%py-fmt-char v)))))
-              (#t (if (= conv 115) (py-str v) (py-repr-of v)))))
+                  (ps->x (python-str-cps (%py-fmt-char v)))))
+              (#t (if (= conv 115) (python-str v) (python-repr-of v)))))
           (def s (if (if (>= prec 0) (> (Str8 length s0) prec) #f)
             (Str8 sub 0 prec s0) s0))
           (%py-fmt-pad "" s width left #f)))
@@ -432,7 +432,7 @@
                 body width left (if left #f zero))))))
       (#t (bad)))))
 
-(py-sweep!)
+(python-sweep!)
 ; The end of the run of ordinary characters starting at j: the next percent
 ; sign, or the end of the template.  The walk below appends a run in one
 ; piece, for the reason %py-fmt-run gives in python/runtime-str.x.
@@ -442,7 +442,7 @@
   (fn (self fmt n j)
     (if (>= j n)
       j
-      (if (= (py-char-code (%str-ref fmt j)) 37) j (self fmt n (+ j 1))))))
+      (if (= (python-char-code (%str-ref fmt j)) 37) j (self fmt n (+ j 1))))))
 
 ; A BYTES TEMPLATE IS THE SAME ENGINE with one flag, given as a third argument:
 ; its text arrives as the platform string of its bytes and leaves as one, so
@@ -453,8 +453,8 @@
     ; a tuple SUBCLASS spreads too: "%d %d" % namedtuple_instance takes its
     ; fields as the arguments, which is what makes a namedtuple a tuple here
     (def args
-      (let ((n (py-native-of arg)))
-        (if (py-tuple-is n) (py-tuple-elems n) (list arg))))
+      (let ((n (python-native-of arg)))
+        (if (python-tuple-is n) (python-tuple-elems n) (list arg))))
     (def cell (pair args ()))
     ; A DICT IS A MAPPING: %(key)s looks the key up, and the looked-up value
     ; becomes the ONE positional argument left (CPython's own rule -- a %s
@@ -466,7 +466,7 @@
     (def star!
       (fn (_)
         (let ((v (%py-fmt-take! cell)))
-          (if (eq? (py-num-py-type v) (lit int)) v
+          (if (eq? (python-num-py-type v) (lit int)) v
             (Err raise (lit type) "* wants int" ())))))
     (def spec-err
       (fn (_ i)
@@ -513,8 +513,8 @@
               (list
                 (%py-dget mapping
                   (if bytes?
-                    (py-bytes-new (pb-of-str (rest keyed)))
-                    (py-str-of-x (rest keyed))))))))
+                    (python-bytes-new (pb-of-str (rest keyed)))
+                    (python-str-of-x (rest keyed))))))))
         (def fl (flags (if (null? keyed) j0 (first keyed)) #f #f #f #f #f))
         (def j1 (first fl))
         (def left (first (rest fl)))

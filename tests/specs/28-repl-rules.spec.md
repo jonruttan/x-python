@@ -38,7 +38,7 @@ must echo.
   (do
     (import python/repl)
     (write (list
-      (%py-stmt-form? (lit (py-add 1 2)))
+      (%py-stmt-form? (lit (python-add 1 2)))
       (%py-stmt-form? (lit py-x))
       (%py-stmt-form? (lit (let ((%py-acc (pair () ()))) (%seq a b))))
       (%py-stmt-form? (lit (let ((%py-lhs 1)) (if (%py-truthy %py-lhs) 2 %py-lhs))))
