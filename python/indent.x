@@ -25,9 +25,6 @@
 ; comment-only line is refused by an analyser that can see the character after
 ; the indentation.  What is left is a name.
 
-(import python/tokens python-tokenize)
-
-(provide python/indent python-lex)
-
 ; The reader has already done it.
+(module python/core)
 (def python-lex (fn (_ src) (python-tokenize src)))

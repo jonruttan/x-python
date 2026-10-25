@@ -41,10 +41,10 @@
 ; A module of its own: its names are its own, and only what the provide list
 ; at the end names leaves it, for an importer to take by name.
 (module python/line)
+(import python/core
+  py-builtins py-repl-line py-sweep!)
+(import python/tokens py-keywords)
 
-(import python/util)
-(import python/tokens %py-keywords)
-(import python/parse)
 (import x/type/dict)
 (import x/type/str)
 (import x/type/list)
@@ -61,11 +61,11 @@
 (def %py-editor?
   (fn (_) (guard (_ #f) (Line available?))))
 
-(def %py-read
+(def py-read
   (fn (_ prompt)
     (if (%py-editor?)
       (Line read prompt)
-      (do (display prompt) (%py-repl-line)))))
+      (do (display prompt) (py-repl-line)))))
 
 ; --- cached prims ------------------------------------------------------------
 (def %pp-bref   (prim-ref (lit str)  (lit byte-ref)))
@@ -180,7 +180,7 @@
           #f))
       #f)))
 
-(%py-sweep!)
+(py-sweep!)
 ; --- classifying a name ------------------------------------------------------
 (def %pp-kw ())        ; Dict: keyword -> #t
 (def %pp-bi ())        ; Dict: builtin -> #t
@@ -369,10 +369,10 @@
               (if (= 0 (%pp-blen code)) (%pp-append text acc)
                 (%pp-append code (%pp-append text (%pp-append %pp-rst acc)))))))))
 
-(%py-sweep!)
+(py-sweep!)
 ; --- the three answers the editor asks for ----------------------------------
 
-(def %py-paint
+(def py-paint
   (fn (_ s . marks)
     (if (not (Ansi enabled?)) s
       (let ((ms (if (null? marks) () (first marks))))
@@ -384,7 +384,7 @@
             (set! %pp-last-out out)
             out))))))
 
-(def %py-marks (fn (_ s at) (%pp-depths s at)))
+(def py-marks (fn (_ s at) (%pp-depths s at)))
 
 ; The scan's tokens as (class . text), brackets marked with no cursor -- what
 ; a spec checks, colour or no colour.
@@ -400,10 +400,10 @@
 
 ; Names defined at the prompt, so that a function defined on one line
 ; completes on the next.  The loop records each as it lifts the definition,
-; through %py-session-name!: the list is this module's, and an importer that
+; through py-session-name!: the list is this module's, and an importer that
 ; set! the name would bind its own copy.
 (def %py-session-names ())
-(def %py-session-name!
+(def py-session-name!
   (fn (_ s) (set! %py-session-names (pair s %py-session-names))))
 ; The keywords and the builtins, built once by the install below.
 (def %pp-names ())
@@ -421,7 +421,7 @@
           (let ((start (go n)))
             (%pp-bsub text start (- n start))))))))
 
-(def %py-complete
+(def py-complete
   (fn (_ ed)
     (let ((word (%py-word-at ed)))
       (pair word
@@ -441,15 +441,15 @@
 (def %py-line-install!
   (fn (_)
     (set! %pp-kw (Dict make))
-    (List for-each (fn (_ k) (%pp-kw set! k #t)) %py-keywords)
+    (List for-each (fn (_ k) (%pp-kw set! k #t)) py-keywords)
     (set! %pp-bi (Dict make))
-    (List for-each (fn (_ row) (%pp-bi set! (first row) #t)) %py-builtins)
+    (List for-each (fn (_ row) (%pp-bi set! (first row) #t)) py-builtins)
     (set! %pp-memo (Dict make))
     (set! %pp-kw-get (method-ref %pp-kw get-or))
     (set! %pp-bi-get (method-ref %pp-bi get-or))
     (set! %pp-memo-get (method-ref %pp-memo get-or))
     (set! %pp-memo-set (method-ref %pp-memo set!))
-    (set! %pp-names (List append %py-keywords (List map (fn (_ row) (first row)) %py-builtins)))
+    (set! %pp-names (List append py-keywords (List map (fn (_ row) (first row)) py-builtins)))
     (set! %pp-rst (Ansi reset))
     (set! %pp-pal
       (list (%pp-append (Ansi bold) (Ansi magenta)) ; keyword, as x's constructs
@@ -469,14 +469,14 @@
     (set! %pp-last-in ())
     (set! %pp-last-out ())
     (set! %pp-last-marks ())
-    (guard (_ ()) (set! %repl-paint %py-paint))
-    (guard (_ ()) (set! %repl-marks %py-marks))
-    (guard (_ ()) (Line completer %py-complete))
+    (guard (_ ()) (set! %repl-paint py-paint))
+    (guard (_ ()) (set! %repl-marks py-marks))
+    (guard (_ ()) (Line completer py-complete))
     ()))
 
 (%py-line-install!)
 (set! %image-recache-hooks (pair (fn (_) (%py-line-install!)) %image-recache-hooks))
 
 (provide python/line
-  %py-read %py-paint %py-marks %py-paint-tokens %py-paint-label
-  %py-complete %py-word-at %py-session-name!)
+  %py-paint-label %py-paint-tokens %py-word-at py-complete py-marks
+  py-paint py-read py-session-name!)

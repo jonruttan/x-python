@@ -4,7 +4,7 @@
 With a terminal, the platform's line editor reads the line and asks the
 session's lang what it means, how it is coloured and what Tab offers.
 `python/line.x` answers the last three for Python and `python/repl.x` the
-first; `%py-repl-install!` registers the four as the lang `"python"` in the
+first; `py-repl-install!` registers the four as the lang `"python"` in the
 platform's registry, `x/repl/lang`. Without a terminal the session keeps the
 byte loop. The cases below check the bundle's own answers, and one touches the
 registry.
@@ -64,8 +64,8 @@ registry.
 ```python
 (%seq
   (do
-    (import python/line %py-paint)
-    (write (if (Ansi enabled?) #t (Str8 =? (%py-paint "def f(): pass") "def f(): pass"))))
+    (import python/line py-paint)
+    (write (if (Ansi enabled?) #t (Str8 =? (py-paint "def f(): pass") "def f(): pass"))))
   (newline))
 ```
 ---
@@ -78,8 +78,8 @@ registry.
 ```python
 (%seq
   (do
-    (import python/line %py-marks)
-    (write (%py-marks "f([1, {2}])" 1)))
+    (import python/line py-marks)
+    (write (py-marks "f([1, {2}])" 1)))
   (newline))
 ```
 ---
@@ -90,8 +90,8 @@ registry.
 ```python
 (%seq
   (do
-    (import python/line %py-marks)
-    (write (%py-marks "f(x))" 5)))
+    (import python/line py-marks)
+    (write (py-marks "f(x))" 5)))
   (newline))
 ```
 ---
@@ -102,8 +102,8 @@ registry.
 ```python
 (%seq
   (do
-    (import python/line %py-marks)
-    (write (%py-marks "f(\")\") # )" 0)))
+    (import python/line py-marks)
+    (write (py-marks "f(\")\") # )" 0)))
   (newline))
 ```
 ---
@@ -120,11 +120,11 @@ left of the cursor, so a stand-in with that method serves here as it does in
 ```python
 (%seq
   (do
-    (import python/line %py-complete)
+    (import python/line py-complete)
     (def-class %spec-edit () text
       (method before (self) (field (lit text))))
-    (write (list (%py-complete (new %spec-edit text "x = pri"))
-                 (%py-complete (new %spec-edit text "x = ")))))
+    (write (list (py-complete (new %spec-edit text "x = pri"))
+                 (py-complete (new %spec-edit text "x = ")))))
   (newline))
 ```
 ---
@@ -197,11 +197,11 @@ still here
 (%seq
   (do
     (import python/repl)
-    (%py-repl-install!)
+    (py-repl-install!)
     (write (let ((r (list (Lang current) (Assoc get '%repl-prompt (Lang get "python"))
                           (same? (Assoc get '%repl-eval-line (Lang get "python")) %py-eval-line))))
              (Lang use! "x")
-             (set! %repl-print %python-repl-print)
+             (set! %repl-print python-repl-print)
              r)))
   (newline))
 ```

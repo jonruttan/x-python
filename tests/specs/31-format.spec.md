@@ -1,5 +1,5 @@
 Percent formatting (`python/format.x`) — str.__mod__, dispatched from
-`%py-mod` when the left operand is a string. Rendering goes through the
+`py-mod` when the left operand is a string. Rendering goes through the
 float repr's EXACT DIGIT machinery (%py-f-exact): %.5e, %.40f and %.0g are
 all "keep k digits of a fully known expansion, round half to even against a
 fully known tail", so the MicroPython corpus's classic failures (a digit

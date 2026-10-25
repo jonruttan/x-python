@@ -22,13 +22,7 @@
 ; launcher when no -f was given.  So `import python/base` resolves against the
 ; bundle wherever it happens to sit.  That is the whole of the arrangement,
 ; and it is the part the 2024 generation did not have.
-(import python/base)
 ; A sweep after each load; see python/util.x.
-(%py-sweep!)
-(import python/repl)
-(%py-sweep!)
-(import python/line)
-(%py-sweep!)
 
 ; The launcher runs (%banner) then (repl).  The banner is replaced.  The loop
 ; is kept where there is a terminal: the platform's line editor reads the
@@ -39,15 +33,17 @@
 ; reader -- no prompt string changes what a reader is -- so python/repl.x's
 ; own loop replaces it.
 ; Which of the two is a fact of the process, so the choice is remade after
-; a state image loads; see %py-repl-choose! in python/repl.x.
+; a state image loads; see py-repl-choose! in python/repl.x.
 ;
 ; All of that only when this bundle leads.  `-l` is repeatable, and named
 ; second (`x -l xe -l python`) this bundle is a library to the lang that
 ; owns the prompt: it registers "python" so (lang python) can switch to it,
 ; and touches neither the banner nor the loop.
-(if (%py-leads?)
+(import python/core python-banner py-leads? py-repl-install! py-repl-choose! py-repl-register! py-sweep!)
+(py-sweep!)
+(if (py-leads?)
   (do
-    (set! %banner %python-banner)
-    (%py-repl-install!)
-    (%py-repl-choose!))
-  (%py-repl-register!))
+    (set! %banner python-banner)
+    (py-repl-install!)
+    (py-repl-choose!))
+  (py-repl-register!))

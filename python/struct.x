@@ -24,8 +24,15 @@
 ; python/array.x, at the same width in both sizings.
 
 (module python/struct)
-(import python/array %py-ieee-bits %py-ieee-double %py-ieee-half %py-ieee-one
-  %py-ieee-sign %py-ieee-single %py-ieee-top %py-ieee-value %py-take-n)
+(import python/core
+  ps->x py-barr-is py-barr-set! py-boolnorm py-byte-len py-bytes-is
+  py-bytes-list py-bytes-new py-char-code py-drop py-dunder py-int-encode
+  py-int-invert py-int-join py-length py-list-cat py-mfloat py-module-new
+  py-num? py-obj-is py-opt py-reverse py-str-cps py-str-is py-sweep!
+  py-tuple-of-list)
+(import python/array
+  py-ieee-bits py-ieee-double py-ieee-half py-ieee-one py-ieee-sign
+  py-ieee-single py-ieee-top py-ieee-value py-take-n)
 
 ; (typecode standard-size native-size signed?), where a float code's last field
 ; is its IEEE format rather than a sign
@@ -36,8 +43,8 @@
     (list "i" 4 4 #t) (list "I" 4 4 #f)
     (list "l" 4 8 #t) (list "L" 4 8 #f)
     (list "q" 8 8 #t) (list "Q" 8 8 #f)
-    (list "e" 2 2 %py-ieee-half) (list "f" 4 4 %py-ieee-single)
-    (list "d" 8 8 %py-ieee-double)))
+    (list "e" 2 2 py-ieee-half) (list "f" 4 4 py-ieee-single)
+    (list "d" 8 8 py-ieee-double)))
 
 (def %py-st-find
   (fn (self tc rows)
@@ -54,7 +61,7 @@
 ; --- the format ---------------------------------------------------------------
 
 (def %py-st-digit? (fn (_ c) (if (>= c 48) (<= c 57) #f)))
-(def %py-st-at (fn (_ s i) (%py-char-code (%str-ref s i))))
+(def %py-st-at (fn (_ s i) (py-char-code (%str-ref s i))))
 
 ; (order align? first-index) -- the byte order a code is written in, whether
 ; fields are padded to their width, and where the codes start.
@@ -82,7 +89,7 @@
 (def %py-st-items
   (fn (self s n i acc)
     (if (>= i n)
-      (%py-reverse acc)
+      (py-reverse acc)
       (if (%py-st-digit? (%py-st-at s i))
         (let ((r (%py-st-count s n i 0)))
           (if (>= (rest r) n)
@@ -95,14 +102,14 @@
 (def %py-st-fmt
   (fn (_ fmt)
     (match
-      ((%py-str-is fmt) (%ps->x (%py-str-cps fmt)))
+      ((py-str-is fmt) (ps->x (py-str-cps fmt)))
       ((str? fmt) fmt)
       (#t (Err raise (lit type) "struct format must be a str" ())))))
 
 (def %py-st-read
   (fn (_ fmt)
     (let ((s (%py-st-fmt fmt)))
-      (let ((n (%py-byte-len s)))
+      (let ((n (py-byte-len s)))
         (let ((m (%py-st-order s n)))
           (list (first m) (List ref 1 m) (%py-st-items s n (List ref 2 m) ())))))))
 
@@ -140,21 +147,21 @@
 ; Exactly k bytes of a bytes-like value: cut long, NUL-filled short.
 (def %py-st-sbytes
   (fn (_ v k)
-    (let ((bs (if (%py-bytes-is v) (%py-bytes-list v) (%py-st-bad! "argument for 's' must be bytes"))))
-      (let ((have (%py-length bs)))
+    (let ((bs (if (py-bytes-is v) (py-bytes-list v) (%py-st-bad! "argument for 's' must be bytes"))))
+      (let ((have (py-length bs)))
         (if (>= have k)
-          (%py-take-n bs k ())
-          (%py-list-cat bs (%py-st-zeros (- k have) ())))))))
+          (py-take-n bs k ())
+          (py-list-cat bs (%py-st-zeros (- k have) ())))))))
 
 ; A float code's value is a real number, and a finite one too large for e or f
 ; is Python's OverflowError rather than the infinity's bits.
 (def %py-st-float-bits
   (fn (_ v f tc)
-    (let ((x (if (if (%py-num? v) #t (if (%py-obj-is v) (not (null? (%py-dunder v "__float__"))) #f))
-               (%py-mfloat v)
+    (let ((x (if (if (py-num? v) #t (if (py-obj-is v) (not (null? (py-dunder v "__float__"))) #f))
+               (py-mfloat v)
                (%py-st-bad! "required argument is not a float"))))
-      (let ((n (%py-ieee-bits x f)) (inf (* (%py-ieee-top f) (%py-ieee-one f))))
-        (if (if (Float finite? x) (= (if (< n (%py-ieee-sign f)) n (- n (%py-ieee-sign f))) inf) #f)
+      (let ((n (py-ieee-bits x f)) (inf (* (py-ieee-top f) (py-ieee-one f))))
+        (if (if (Float finite? x) (= (if (< n (py-ieee-sign f)) n (- n (py-ieee-sign f))) inf) #f)
           (Err raise (lit overflow)
             (Str8 append "float too large to pack with " (Str8 append tc " format")) ())
           n)))))
@@ -167,12 +174,12 @@
       (if (null? vals)
         (%py-st-bad! "not enough arguments for the format")
         (self e (- cnt 1) order (rest vals)
-          (%py-list-cat acc
+          (py-list-cat acc
             (let ((label (first (rest (rest e)))))
               (if (pair? label)
-                (%py-int-encode (%py-st-float-bits (first vals) label (first e))
+                (py-int-encode (%py-st-float-bits (first vals) label (first e))
                   (List ref 1 e) order #f)
-                (%py-int-encode (%py-boolnorm (first vals)) (List ref 1 e) order label)))))))))
+                (py-int-encode (py-boolnorm (first vals)) (List ref 1 e) order label)))))))))
 
 ; (bytes . unused-values)
 (def %py-st-emit
@@ -182,12 +189,12 @@
       (let ((cnt (first (first items))) (tc (rest (first items))))
         (match
           ((Str8 =? tc "x")
-            (self (rest items) align order vals (%py-list-cat acc (%py-st-zeros cnt ()))))
+            (self (rest items) align order vals (py-list-cat acc (%py-st-zeros cnt ()))))
           ((Str8 =? tc "s")
             (if (null? vals)
               (%py-st-bad! "not enough arguments for the format")
               (self (rest items) align order (rest vals)
-                (%py-list-cat acc (%py-st-sbytes (first vals) cnt)))))
+                (py-list-cat acc (%py-st-sbytes (first vals) cnt)))))
           (#t
             (let ((e0 (%py-st-code tc)))
               (if (null? e0)
@@ -195,7 +202,7 @@
                 (let ((w (%py-st-width e0 align)))
                   (let ((padded
                           (if align
-                            (%py-list-cat acc (%py-st-zeros (%py-st-pad (%py-length acc) w) ()))
+                            (py-list-cat acc (%py-st-zeros (%py-st-pad (py-length acc) w) ()))
                             acc)))
                     (let ((r (%py-st-ints (list tc w (%py-st-signed? e0)) cnt order vals padded)))
                       (self (rest items) align order (first r) (rest r)))))))))))))
@@ -203,116 +210,116 @@
 (def %py-st-pack
   (fn (_ fmt . vals)
     (let ((f (%py-st-read fmt)))
-      (%py-bytes-new
+      (py-bytes-new
         (first (%py-st-emit (List ref 2 f) (List ref 1 f) (first f) vals ()))))))
 
-(%py-sweep!)
+(py-sweep!)
 ; --- unpack --------------------------------------------------------------------
 
 (def %py-st-decode
   (fn (_ bs w signed order)
     (let ((big (if (Str8 =? order "little") (List reverse bs) bs)))
       (match
-        ((pair? signed) (%py-ieee-value (%py-int-join big) signed))
+        ((pair? signed) (py-ieee-value (py-int-join big) signed))
         ((if signed (>= (first big) 128) #f)
-          (- (- 0 (%py-int-join (%py-int-invert big ()))) 1))
-        (#t (%py-int-join big))))))
+          (- (- 0 (py-int-join (py-int-invert big ()))) 1))
+        (#t (py-int-join big))))))
 
 (def %py-st-take
   (fn (self e cnt order bs acc)
     (if (= cnt 0)
       (pair bs acc)
       (let ((w (List ref 1 e)))
-        (if (< (%py-length bs) w)
+        (if (< (py-length bs) w)
           (%py-st-bad! "buffer too small for the format")
-          (self e (- cnt 1) order (%py-drop bs w)
-            (pair (%py-st-decode (%py-take-n bs w ()) w (List ref 2 e) order) acc)))))))
+          (self e (- cnt 1) order (py-drop bs w)
+            (pair (%py-st-decode (py-take-n bs w ()) w (List ref 2 e) order) acc)))))))
 
 (def %py-st-read-items
   (fn (self items align order bs off acc)
     (if (null? items)
-      (%py-reverse acc)
+      (py-reverse acc)
       (let ((cnt (first (first items))) (tc (rest (first items))))
         (match
           ((Str8 =? tc "x")
-            (if (< (%py-length bs) cnt)
+            (if (< (py-length bs) cnt)
               (%py-st-bad! "buffer too small for the format")
-              (self (rest items) align order (%py-drop bs cnt) (+ off cnt) acc)))
+              (self (rest items) align order (py-drop bs cnt) (+ off cnt) acc)))
           ((Str8 =? tc "s")
-            (if (< (%py-length bs) cnt)
+            (if (< (py-length bs) cnt)
               (%py-st-bad! "buffer too small for the format")
-              (self (rest items) align order (%py-drop bs cnt) (+ off cnt)
-                (pair (%py-bytes-new (%py-take-n bs cnt ())) acc))))
+              (self (rest items) align order (py-drop bs cnt) (+ off cnt)
+                (pair (py-bytes-new (py-take-n bs cnt ())) acc))))
           (#t
             (let ((e0 (%py-st-code tc)))
               (if (null? e0)
                 (%py-st-bad! "bad char in struct format")
                 (let ((w (%py-st-width e0 align)))
                   (let ((skip (if align (%py-st-pad off w) 0)))
-                    (if (< (%py-length bs) skip)
+                    (if (< (py-length bs) skip)
                       (%py-st-bad! "buffer too small for the format")
                       (let ((r (%py-st-take (list tc w (%py-st-signed? e0)) cnt order
-                                 (%py-drop bs skip) acc)))
+                                 (py-drop bs skip) acc)))
                         (self (rest items) align order (first r)
                           (+ (+ off skip) (* cnt w)) (rest r))))))))))))))
 
 (def %py-st-bytes-of
   (fn (_ v)
-    (if (%py-bytes-is v) (%py-bytes-list v) (%py-st-bad! "a buffer is required"))))
+    (if (py-bytes-is v) (py-bytes-list v) (%py-st-bad! "a buffer is required"))))
 
 (def %py-st-unpack
   (fn (_ fmt buf)
     (let ((f (%py-st-read fmt)) (bs (%py-st-bytes-of buf)))
       (let ((want (%py-st-size (List ref 2 f) (List ref 1 f) 0)))
-        (if (not (= (%py-length bs) want))
+        (if (not (= (py-length bs) want))
           (%py-st-bad! "buffer size does not match the format")
-          (%py-tuple-of-list
+          (py-tuple-of-list
             (%py-st-read-items (List ref 2 f) (List ref 1 f) (first f) bs 0 ())))))))
 
 ; A negative offset counts from the end, as Python's does.
 (def %py-st-offset
   (fn (_ off n)
-    (let ((k (if (< (%py-boolnorm off) 0) (+ n (%py-boolnorm off)) (%py-boolnorm off))))
+    (let ((k (if (< (py-boolnorm off) 0) (+ n (py-boolnorm off)) (py-boolnorm off))))
       (if (if (< k 0) #t (> k n)) (%py-st-bad! "offset out of range") k))))
 
 (def %py-st-unpack-from
   (fn (_ fmt buf . more)
     (let ((f (%py-st-read fmt)) (bs (%py-st-bytes-of buf)))
-      (let ((k (%py-st-offset (%py-opt more 0 0) (%py-length bs))))
+      (let ((k (%py-st-offset (py-opt more 0 0) (py-length bs))))
         (let ((want (%py-st-size (List ref 2 f) (List ref 1 f) 0)))
-          (let ((tail (%py-drop bs k)))
-            (if (< (%py-length tail) want)
+          (let ((tail (py-drop bs k)))
+            (if (< (py-length tail) want)
               (%py-st-bad! "buffer too small for the format")
-              (%py-tuple-of-list
+              (py-tuple-of-list
                 (%py-st-read-items (List ref 2 f) (List ref 1 f) (first f)
-                  (%py-take-n tail want ()) 0 ())))))))))
+                  (py-take-n tail want ()) 0 ())))))))))
 
 ; pack_into writes THROUGH the bytearray, which is the point of it.
 (def %py-st-splice
   (fn (self bs k new acc)
     (match
-      ((null? bs) (%py-reverse acc))
+      ((null? bs) (py-reverse acc))
       ((> k 0) (self (rest bs) (- k 1) new (pair (first bs) acc)))
       ((null? new) (self (rest bs) 0 () (pair (first bs) acc)))
       (#t (self (rest bs) 0 (rest new) (pair (first new) acc))))))
 
 (def %py-st-pack-into
   (fn (_ fmt buf off . vals)
-    (if (not (%py-barr-is buf))
+    (if (not (py-barr-is buf))
       (%py-st-bad! "pack_into() wants a bytearray")
-      (let ((bs (%py-bytes-list buf)))
-        (let ((k (%py-st-offset off (%py-length bs)))
+      (let ((bs (py-bytes-list buf)))
+        (let ((k (%py-st-offset off (py-length bs)))
               (f (%py-st-read fmt)))
           (let ((body (first (%py-st-emit (List ref 2 f) (List ref 1 f) (first f) vals ()))))
-            (if (> (+ k (%py-length body)) (%py-length bs))
+            (if (> (+ k (py-length body)) (py-length bs))
               (%py-st-bad! "buffer too small for the format")
-              (%seq (%py-barr-set! buf (%py-st-splice bs k body ())) ()))))))))
+              (%seq (py-barr-set! buf (%py-st-splice bs k body ())) ()))))))))
 
 ; --- the module ------------------------------------------------------------------
 
-(def %py-struct-module
+(def py-struct-module
   (fn (_)
-    (%py-module-new "struct"
+    (py-module-new "struct"
       (list
         (pair "calcsize" %py-st-calcsize)
         (pair "pack" %py-st-pack)
@@ -320,4 +327,4 @@
         (pair "pack_into" %py-st-pack-into)
         (pair "unpack_from" %py-st-unpack-from)))))
 
-(provide python/struct %py-struct-module)
+(provide python/struct py-struct-module)

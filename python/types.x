@@ -43,35 +43,9 @@
 ; cell.  Every reference to the list holds the same instance, the instance
 ; holds the same cell, so every reference sees the store.
 
-(import python/util)
-
-(provide python/types
-  %py-text %py-str-new %py-str-is %py-str-cps %py-str-of-x
-  %py-bound %py-bound-new %py-bound-is %py-bound-fn %py-bound-self
-  %py-bytes %py-bytes-new %py-bytes-of-str %py-bytes-is %py-bytes-str
-  %py-bytes-list %py-bytes-only?
-  %py-barr %py-barr-new %py-barr-of-str %py-barr-is %py-barr-set!
-  %py-dq %py-dq-new %py-dq-is %py-dq-max %py-dq-el %py-dq-set!
-  %py-gen %py-gen-new %py-gen-is %py-gen-state
-  %py-it %py-it-new %py-it-is %py-it-step %py-it-class
-  %py-rng %py-range-new %py-range-is %py-range-start %py-range-stop %py-range-step
-  %py-set %py-set-new %py-set-is %py-set-elems %py-set-set! %py-set-frozen?
-  %py-view %py-view-new %py-view-is %py-view-py-type %py-view-elems
-  %py-list %py-list-new %py-list-is %py-list-elems %py-list-set!
-  %py-dict %py-dict-new %py-dict-is %py-dict-entries %py-dict-set! %py-dict-get
-  %py-repr %py-equal %py-repeat
-  %py-tuple %py-tuple-new %py-tuple-is %py-tuple-elems
-  %py-class %py-class-new %py-class-is %py-class-name %py-class-base %py-class-bases
-  %py-class-methods %py-class-methods-set! %py-class-qualname %py-instantiate
-  %py-obj-write %py-obj-call
-  %py-obj %py-obj-new %py-obj-is %py-obj-class %py-obj-attrs %py-obj-set-attrs!
-  %py-obj-native %py-obj-native! %py-native-of
-  %py-super-t %py-super-new %py-super-is %py-super-from %py-super-self
-  %py-desc %py-desc-new %py-desc-is %py-desc-py-type %py-desc-fn
-  %py-prop-new %py-desc-fset %py-desc-fdel %py-desc-doc)
-
 ; Fetch the type prims from the catalog (ns `type` is de-registered, R5).
-(def %make-type (prim-ref (lit type) (lit make)))
+(module python/core)
+(def make-type (prim-ref (lit type) (lit make)))
 (def %type-by-atom (prim-ref (lit type) (lit by-atom)))
 (def %type-push-op (prim-ref (lit type) (lit push-op)))
 (def %i-make (prim-ref (lit iter) (lit make)))
@@ -89,8 +63,8 @@
 ; list; only the yielded value differs.
 (def %py-dict-step
   (fn (_ st) (if (null? st) () (pair (first (first st)) (rest st)))))
-(def %make-instance (prim-ref (lit type) (lit make-instance)))
-(def %type? (prim-ref (lit type) (lit ?)))
+(def make-instance (prim-ref (lit type) (lit make-instance)))
+(def type? (prim-ref (lit type) (lit ?)))
 
 ; Forward declaration, the way x/num/rational.x forward-declares its reader.
 ; runtime.x owns Python's repr -- a string prints as 'a' inside a list and as a
@@ -108,15 +82,15 @@
 (def %py-t-th-float (%py-t-typeof 1.5))
 (def %py-t-float? (fn (_ v) (eq? (%py-t-typeof v) %py-t-th-float)))
 
-(def %py-list-elems (fn (_ v) (rest (first (%py-native-of v)))))
-(def %py-list-set! (fn (_ v new) (%seq (%set-rest! (first (%py-native-of v)) new) ())))
-(def %py-list-new (fn (_ elems) (%make-instance %py-list (pair () elems))))
-(def %py-list-is (fn (_ v) (%type? v %py-list)))
+(def py-list-elems (fn (_ v) (rest (first (py-native-of v)))))
+(def %py-list-set! (fn (_ v new) (%seq (%set-rest! (first (py-native-of v)) new) ())))
+(def py-list-new (fn (_ elems) (make-instance %py-list (pair () elems))))
+(def %py-list-is (fn (_ v) (type? v %py-list)))
 
 ; --- PY-LIST -----------------------------------------------------------------
 
 (set! %py-list
-  (%make-type
+  (make-type
     "PY-LIST"
     (list
       ; repr, and str() of a list is its repr in Python -- so `display` is not
@@ -137,7 +111,7 @@
       ; len() reaches this through the runtime's %py-len, which still dispatches
       ; across str and dict; registering it here is what makes the type honest
       ; to anything else that asks.
-      (pair (lit length) (fn (_ self) (%py-length (rest (first self)))))
+      (pair (lit length) (fn (_ self) (py-length (rest (first self)))))
       ; SUBSCRIPTING IS A CALL.  x dispatches `(v i)` through a type's `call`
       ; handler, so `lst[0]` needs no runtime function at all -- and negative
       ; indices and IndexError, which are Python and not x, are stated here
@@ -146,7 +120,7 @@
         (lit call)
         (fn (_ self . args)
           (def l (rest (first self)))
-          (def n (%py-length l))
+          (def n (py-length l))
           (def i (first args))
           ; `x[1.0]` is a TypeError in Python, not an index -- and without
           ; this check the float silently truncates to a working index, the
@@ -186,18 +160,18 @@
 ; order is its hash table's, which for the small non-negative ints the corpus
 ; uses IS ascending -- and `set(range(N))` then pops 0, 1, 2 ... in order.
 ; Insertion order reproduces that, and every other case in the corpus sorts
-; before printing.  Membership uses Python's equality (%py-eq in runtime.x),
+; before printing.  Membership uses Python's equality (py-eq in runtime.x),
 ; which is why construction lives there: `{False, 0}` is one element.
 (def %py-set ())
 (def %py-set-frozen? (fn (_ v) (first (first v))))
-(def %py-set-elems (fn (_ v) (rest (first v))))
+(def py-set-elems (fn (_ v) (rest (first v))))
 (def %py-set-set! (fn (_ v new) (%seq (%set-rest! (first v) new) ())))
-(def %py-set-new (fn (_ frozen elems) (%make-instance %py-set (pair frozen elems))))
-(def %py-set-is (fn (_ v) (%type? v %py-set)))
+(def %py-set-new (fn (_ frozen elems) (make-instance %py-set (pair frozen elems))))
+(def py-set-is (fn (_ v) (type? v %py-set)))
 (def %py-set-step (fn (_ st) (if (null? st) () (pair (first st) (rest st)))))
 
 (set! %py-set
-  (%make-type
+  (make-type
     "PY-SET"
     (list
       ; an empty one has no braces to print: set() and frozenset()
@@ -219,7 +193,7 @@
                       (recur (rest l) #t)))))
               (go es #f)
               (display (if frozen "})" "}"))))))
-      (pair (lit length) (fn (_ self) (%py-length (rest (first self)))))
+      (pair (lit length) (fn (_ self) (py-length (rest (first self)))))
       (pair (lit iter) (fn (_ self) (%i-make %py-set-step (rest (first self))))))))
 
 ; --- PY-VIEW -----------------------------------------------------------------
@@ -230,11 +204,11 @@
 (def %py-view ())
 (def %py-view-py-type (fn (_ v) (first (first v))))
 (def %py-view-elems (fn (_ v) (rest (first v))))
-(def %py-view-new (fn (_ py-type elems) (%make-instance %py-view (pair py-type elems))))
-(def %py-view-is (fn (_ v) (%type? v %py-view)))
+(def %py-view-new (fn (_ py-type elems) (make-instance %py-view (pair py-type elems))))
+(def %py-view-is (fn (_ v) (type? v %py-view)))
 (def %py-view-step (fn (_ st) (if (null? st) () (pair (first st) (rest st)))))
 (set! %py-view
-  (%make-type
+  (make-type
     "PY-VIEW"
     (list
       (pair (lit write)
@@ -249,7 +223,7 @@
                   (recur (rest l) #t)))))
           (go (rest (first self)) #f)
           (display "])")))
-      (pair (lit length) (fn (_ self) (%py-length (rest (first self)))))
+      (pair (lit length) (fn (_ self) (py-length (rest (first self)))))
       (pair (lit iter) (fn (_ self) (%i-make %py-view-step (rest (first self))))))))
 
 (def %py-dict ())
@@ -264,7 +238,7 @@
 ; which: () for every dict a program makes, the module's environment for the
 ; one globals() and __dict__ answer, whose entries are the environment's names,
 ; read there and written there (python/runtime-flow.x, %py-ns-entries).
-(def %py-dict-entries
+(def py-dict-entries
   (fn (_ v)
     (let ((ns (first (first v))))
       (if (null? ns) (rest (first v)) (%py-ns-entries ns)))))
@@ -272,11 +246,11 @@
   (fn (_ v new)
     (let ((ns (first (first v))))
       (if (null? ns) (%seq (%set-rest! (first v) new) ()) (%py-ns-assign! ns new)))))
-(def %py-dict-new (fn (_ entries) (%make-instance %py-dict (pair () entries))))
-(def %py-dict-is (fn (_ v) (%type? v %py-dict)))
+(def py-dict-new (fn (_ entries) (make-instance %py-dict (pair () entries))))
+(def %py-dict-is (fn (_ v) (type? v %py-dict)))
 
 (set! %py-dict
-  (%make-type
+  (make-type
     "PY-DICT"
     (list
       (pair
@@ -292,15 +266,15 @@
                   (display ": ")
                   (%py-repr (rest (first es)))
                   (recur (rest es) #t)))))
-          (go (%py-dict-entries self) #f)
+          (go (py-dict-entries self) #f)
           (display "}")))
-      (pair (lit length) (fn (_ self) (%py-length (%py-dict-entries self))))
+      (pair (lit length) (fn (_ self) (py-length (py-dict-entries self))))
       (pair
         (lit call)
         (fn (_ self . args) (%py-dict-get self (first args))))
       (pair
         (lit iter)
-        (fn (_ self) (%i-make %py-dict-step (%py-dict-entries self)))))))
+        (fn (_ self) (%i-make %py-dict-step (py-dict-entries self)))))))
 
 ; --- Operators ---------------------------------------------------------------
 ;
@@ -317,7 +291,7 @@
 ; was identity.  A silent wrong number is the failure mode this bundle keeps
 ; finding, and it is the reason each of these has a spec.
 
-; Set to %py-eq by runtime.x: Python's equality is Python's rule, and the
+; Set to py-eq by runtime.x: Python's equality is Python's rule, and the
 ; elementwise compares below have to use it so that nested containers, and
 ; `1 == 1.0`, come out right.
 (def %py-equal ())
@@ -360,7 +334,7 @@
 (%type-push-op %py-list-type (lit +)
   (fn (_ a b)
     (if (if (%py-list-is a) (%py-list-is b) #f)
-      (%py-list-new (%py-concat (rest (first a)) (rest (first b))))
+      (py-list-new (%py-concat (rest (first a)) (rest (first b))))
       (Err raise (lit type) "can only concatenate list to list" ()))))
 
 (%type-push-op %py-list-type (lit *)
@@ -369,7 +343,7 @@
           (n (if (%py-list-is a) b a)))
       (if (%py-not-a-count n)
         (Err raise (lit type) "can't multiply sequence by non-int" ())
-        (%py-list-new (%py-repeat (rest (first l)) n))))))
+        (py-list-new (%py-repeat (rest (first l)) n))))))
 
 ; A list is equal only to a list -- never an error, because Python answers False
 ; for `[1] == 1` rather than raising.
@@ -414,7 +388,7 @@
   (fn (_ a b)
     (if (if (%py-dict-is a) (%py-dict-is b) #f)
       (let ((as (rest (first a))) (bs (rest (first b))))
-        (if (= (%py-length as) (%py-length bs)) (%py-entries-eq as bs) #f))
+        (if (= (py-length as) (py-length bs)) (%py-entries-eq as bs) #f))
       #f)))
 
 ; --- PY-CLASS and PY-OBJ -----------------------------------------------------
@@ -438,7 +412,7 @@
 ; Set by runtime.x: constructing an instance means running __init__, and what
 ; that means -- bind the object, pass the arguments, ignore the result -- is
 ; Python's rule, so it lives with the other Python rules.
-(def %py-instantiate ())
+(def py-instantiate ())
 
 ; Set by runtime.x: how an instance renders depends on whether it is an
 ; exception, which is a Python rule and not a property of the type.
@@ -452,7 +426,7 @@
 ; <class '__main__.Foo'> and a builtin prints <class 'int'>, and that prefix is
 ; a fact about where the class came from -- the constructor's caller knows it,
 ; the class itself cannot compute it, so it travels as a slot.
-(def %py-class-new
+(def py-class-new
   ; THE BASES ARE A LIST, because `class Sub(A, B)` is ordinary Python and the
   ; corpus tests it.  The argument is NORMALIZED rather than changed at every
   ; call site: a single class becomes a one-element list, () stays empty, and a
@@ -464,12 +438,12 @@
   ; must see it.  The slot holds the cell, the cell's rest holds the rows, and
   ; a store replaces that rest -- so nothing has to find every holder.
   (fn (_ name base methods qualname)
-    (%make-instance %py-class
+    (make-instance %py-class
       (list name
         (if (null? base) () (if (%py-class-is base) (list base) base))
         (pair () methods) qualname))))
-(def %py-class-is (fn (_ v) (%type? v %py-class)))
-(def %py-class-name (fn (_ c) (first (first c))))
+(def %py-class-is (fn (_ v) (type? v %py-class)))
+(def py-class-name (fn (_ c) (first (first c))))
 (def %py-class-bases (fn (_ c) (first (rest (first c)))))
 ; The FIRST base, for the places that walk one chain -- super() reaches the
 ; next class along, which for single inheritance is the same answer Python's
@@ -477,18 +451,18 @@
 (def %py-class-base
   (fn (_ c) (let ((bs (first (rest (first c))))) (if (null? bs) () (first bs)))))
 (def %py-class-methods (fn (_ c) (rest (first (rest (rest (first c)))))))
-(def %py-class-methods-set!
+(def py-class-methods-set!
   (fn (_ c rows) (%seq (%set-rest! (first (rest (rest (first c)))) rows) ())))
-(def %py-class-qualname (fn (_ c) (List ref 3 (first c))))
+(def py-class-qualname (fn (_ c) (List ref 3 (first c))))
 
 ; An instance is a cell: first is its class, rest is its attribute alist.  The
 ; attributes change -- `self.x = 1` is how Python objects get their fields at
 ; all -- so the alist hangs off a cell that every reference shares.
-(def %py-obj-new (fn (_ cls) (%make-instance %py-obj (pair cls ()))))
-(def %py-obj-is (fn (_ v) (%type? v %py-obj)))
-(def %py-obj-class (fn (_ o) (first (first o))))
-(def %py-obj-attrs (fn (_ o) (rest (first o))))
-(def %py-obj-set-attrs! (fn (_ o a) (%seq (%set-rest! (first o) a) ())))
+(def py-obj-new (fn (_ cls) (make-instance %py-obj (pair cls ()))))
+(def py-obj-is (fn (_ v) (type? v %py-obj)))
+(def py-obj-class (fn (_ o) (first (first o))))
+(def py-obj-attrs (fn (_ o) (rest (first o))))
+(def py-obj-set-attrs! (fn (_ o a) (%seq (%set-rest! (first o) a) ())))
 
 ; SUBCLASSING A BUILTIN: the instance keeps the native value it is a subclass
 ; OF -- a PY-LIST for `class mylist(list)` -- and every list operation reads it
@@ -496,8 +470,8 @@
 ; Python identifier can spell (a name comes from tok-name, and % is not a name
 ; character), so the instance record itself does not change and the attributes
 ; a program writes sit beside it undisturbed.
-(def %py-obj-native
-  ; its own row walk rather than runtime.x's %py-alist-find: this module is
+(def py-obj-native
+  ; its own row walk rather than runtime.x's py-alist-find: this module is
   ; loaded first and must not reach forward into the one that imports it.
   (fn (_ o)
     ((fn (go rows)
@@ -507,24 +481,24 @@
            (rest (first rows))
            (go (rest rows)))))
      (rest (first o)))))
-(def %py-obj-native!
-  (fn (_ o v) (%py-obj-set-attrs! o (pair (pair "%native" v) (rest (first o))))))
+(def py-obj-native!
+  (fn (_ o v) (py-obj-set-attrs! o (pair (pair "%native" v) (rest (first o))))))
 ; The value an operation should work on: an ordinary value is itself, and a
 ; subclass instance is what it wraps.
-(def %py-native-of
-  (fn (_ v) (if (%type? v %py-obj) (%py-obj-native v) v)))
+(def py-native-of
+  (fn (_ v) (if (type? v %py-obj) (py-obj-native v) v)))
 
 (set! %py-class
-  (%make-type
+  (make-type
     "PY-CLASS"
     (list
       (pair (lit write)
-        (fn (_ self) (display "<class '" (%py-class-qualname self) "'>")))
+        (fn (_ self) (display "<class '" (py-class-qualname self) "'>")))
       (pair (lit call)
-        (fn (_ self . args) (%py-instantiate self args))))))
+        (fn (_ self . args) (py-instantiate self args))))))
 
 (set! %py-obj
-  (%make-type
+  (make-type
     "PY-OBJ"
     (list
       ; DIVERGENCE, STATED: Python prints `<__main__.Foo object at 0x7f...>`.
@@ -536,7 +510,7 @@
       (pair (lit write)
         (fn (_ self)
           (if (null? %py-obj-write)
-            (display "<" (%py-class-qualname (first (first self))) " object>")
+            (display "<" (py-class-qualname (first (first self))) " object>")
             (%py-obj-write self))))
       (pair (lit call)
         (fn (_ self . args)
@@ -562,7 +536,7 @@
 ; the bytes methods wait until a conformance case asks for them.
 ; THE PAYLOAD IS A BYTE LIST, not a string, and python/bytes.x is the whole
 ; argument for that: a string here ends at its first NUL and a bytes must not.
-; %py-bytes-new takes the list; %py-bytes-of-str is for the callers that
+; py-bytes-new takes the list; %py-bytes-of-str is for the callers that
 ; start from source text (a literal, a decoded name) and cannot contain one.
 ; --- PY-STR ------------------------------------------------------------------
 ; A Python str is a sequence of CODE POINTS, and this carries one: a list of
@@ -572,22 +546,22 @@
 ;
 ; The payload is the list.  There is no cell: a str is immutable, so unlike
 ; bytearray nothing here has to be visible through a second name.
-; THE TYPE IS %py-text, NOT %py-str, and the name is load-bearing: %py-str is
+; THE TYPE IS %py-text, NOT py-str, and the name is load-bearing: py-str is
 ; already the str() builtin in python/runtime.x, which loads after this file
 ; and would quietly re-def the type out from under every instance -- which it
 ; did, until the predicate started answering #f for a value made two lines
 ; earlier.
 (def %py-text ())
-(def %py-str-new (fn (_ cps) (%make-instance %py-text cps)))
-(def %py-str-is (fn (_ v) (%type? v %py-text)))
-(def %py-str-cps (fn (_ v) (first v)))
-(def %py-str-of-x (fn (_ s) (%make-instance %py-text (%ps-of-x s))))
+(def py-str-new (fn (_ cps) (make-instance %py-text cps)))
+(def py-str-is (fn (_ v) (type? v %py-text)))
+(def py-str-cps (fn (_ v) (first v)))
+(def py-str-of-x (fn (_ s) (make-instance %py-text (%ps-of-x s))))
 (set! %py-text
-  (%make-type
+  (make-type
     "PY-STR"
     (list
       (pair (lit write)
-        (fn (_ self) (%py-str-display (first self))))
+        (fn (_ self) (py-str-display (first self))))
       (pair (lit length) (fn (_ self) (List length (first self)))))))
 
 ; --- PY-BOUND ----------------------------------------------------------------
@@ -601,12 +575,12 @@
 ; that path is taken on every operator and its result is never a value the
 ; program holds.
 (def %py-bound ())
-(def %py-bound-new (fn (_ m obj) (%make-instance %py-bound (pair m obj))))
-(def %py-bound-is (fn (_ v) (%type? v %py-bound)))
+(def %py-bound-new (fn (_ m obj) (make-instance %py-bound (pair m obj))))
+(def %py-bound-is (fn (_ v) (type? v %py-bound)))
 (def %py-bound-fn (fn (_ v) (first (first v))))
 (def %py-bound-self (fn (_ v) (rest (first v))))
 (set! %py-bound
-  (%make-type
+  (make-type
     "PY-BOUND"
     (list
       (pair (lit call)
@@ -615,8 +589,8 @@
         (fn (_ self) (display (%py-bound-repr self)))))))
 
 (def %py-bytes ())
-(def %py-bytes-new (fn (_ l) (%make-instance %py-bytes l)))
-(def %py-bytes-of-str (fn (_ s) (%make-instance %py-bytes (%pb-of-str s))))
+(def py-bytes-new (fn (_ l) (make-instance %py-bytes l)))
+(def %py-bytes-of-str (fn (_ s) (make-instance %py-bytes (pb-of-str s))))
 
 ; --- PY-BYTEARRAY ------------------------------------------------------------
 ; bytes' MUTABLE twin, over the SAME payload -- a byte string -- so every
@@ -628,12 +602,12 @@
 ; outlives its contents, so `ba.append(b)` has to be visible through every
 ; name bound to it; bytes has no such need and pays nothing for this.
 (def %py-barr ())
-(def %py-barr-new (fn (_ l) (%make-instance %py-barr (list l))))
-(def %py-barr-of-str (fn (_ s) (%make-instance %py-barr (list (%pb-of-str s)))))
-(def %py-barr-is (fn (_ v) (%type? v %py-barr)))
-(def %py-barr-set! (fn (_ v s) (%set-first! (first v) s)))
+(def %py-barr-new (fn (_ l) (make-instance %py-barr (list l))))
+(def %py-barr-of-str (fn (_ s) (make-instance %py-barr (list (pb-of-str s)))))
+(def py-barr-is (fn (_ v) (type? v %py-barr)))
+(def py-barr-set! (fn (_ v s) (%set-first! (first v) s)))
 (set! %py-barr
-  (%make-type
+  (make-type
     "PY-BYTEARRAY"
     (list
       (pair (lit write)
@@ -646,40 +620,40 @@
 ; dispatchers test for, so no door asks for one before the test exists;
 ; python/deque.x holds the operations.
 (def %py-dq ())
-(def %py-dq-new (fn (_ maxlen elems) (%make-instance %py-dq (list maxlen elems))))
-(def %py-dq-is (fn (_ v) (%type? v %py-dq)))
-(def %py-dq-max (fn (_ v) (first (first v))))
-(def %py-dq-el (fn (_ v) (first (rest (first v)))))
-(def %py-dq-set! (fn (_ v l) (%seq (%set-first! (rest (first v)) l) ())))
-(def %py-dq-set-max! (fn (_ v m) (%seq (%set-first! (first v) m) ())))
+(def py-dq-new (fn (_ maxlen elems) (make-instance %py-dq (list maxlen elems))))
+(def py-dq-is (fn (_ v) (type? v %py-dq)))
+(def py-dq-max (fn (_ v) (first (first v))))
+(def py-dq-el (fn (_ v) (first (rest (first v)))))
+(def py-dq-set! (fn (_ v l) (%seq (%set-first! (rest (first v)) l) ())))
+(def py-dq-set-max! (fn (_ v m) (%seq (%set-first! (first v) m) ())))
 (set! %py-dq
-  (%make-type
+  (make-type
     "PY-DEQUE"
     (list
-      (pair (lit write) (fn (_ self) (display (%py-dq-repr self))))
-      (pair (lit length) (fn (_ self) (%py-length (%py-dq-el self)))))))
+      (pair (lit write) (fn (_ self) (display (py-dq-repr self))))
+      (pair (lit length) (fn (_ self) (py-length (py-dq-el self)))))))
 
-; %py-bytes-is IS THE BYTES-LIKE TEST, and answers for a bytearray too.  That
+; py-bytes-is IS THE BYTES-LIKE TEST, and answers for a bytearray too.  That
 ; is not a shortcut: at every seam it guards -- concatenation, comparison,
 ; `in`, len, indexing, slicing, iteration, and the argument of a bytes method
 ; -- Python's rule is about the BUFFER and not about which of the two types
 ; is holding it.  `b"123" == bytearray(b"123")` is True for exactly this
-; reason.  The few places that must tell them apart ask %py-bytes-only?: the
+; reason.  The few places that must tell them apart ask py-bytes-only?: the
 ; bytes() constructor, which has to answer bytes whatever it was given, and
 ; the arms that decide a RESULT's type.
-(def %py-bytes-is
-  (fn (_ v) (if (%type? v %py-bytes) #t (%type? v %py-barr))))
-(def %py-bytes-only? (fn (_ v) (%type? v %py-bytes)))
+(def py-bytes-is
+  (fn (_ v) (if (type? v %py-bytes) #t (type? v %py-barr))))
+(def py-bytes-only? (fn (_ v) (type? v %py-bytes)))
 ; THE PAYLOAD.  Every byte operation goes through this one.
-(def %py-bytes-list
-  (fn (_ v) (if (%type? v %py-barr) (first (first v)) (first v))))
+(def py-bytes-list
+  (fn (_ v) (if (type? v %py-barr) (first (first v)) (first v))))
 ; AND THE STRING, for the callers that genuinely need one -- decode, a float
 ; to read.  It RAISES on a NUL rather than truncating, which is where the
 ; limit now lives: in the str layer, said at the seam, instead of in every
 ; constructor that could name a zero byte.
-(def %py-bytes-str (fn (_ v) (%pb->str (%py-bytes-list v))))
+(def py-bytes-str (fn (_ v) (pb->str (py-bytes-list v))))
 (set! %py-bytes
-  (%make-type
+  (make-type
     "PY-BYTES"
     (list
       ; runtime.x owns the escape rules (b'\n', \xhh for anything outside
@@ -697,11 +671,11 @@
 ; The state is a mutable list: (body name k-gen k-caller status winds).
 (def %py-gen ())
 (def %py-gen-new
-  (fn (_ body name) (%make-instance %py-gen (list body name () () (lit created) ()))))
-(def %py-gen-is (fn (_ v) (%type? v %py-gen)))
+  (fn (_ body name) (make-instance %py-gen (list body name () () (lit created) ()))))
+(def %py-gen-is (fn (_ v) (type? v %py-gen)))
 (def %py-gen-state (fn (_ g) (first g)))
 (set! %py-gen
-  (%make-type
+  (make-type
     "PY-GEN"
     (list
       (pair (lit write)
@@ -713,29 +687,29 @@
 ; raises the StopIteration a source ended with (%py-iter-next); reading one
 ; is a call, where a generator's step switches continuations.
 (def %py-it ())
-(def %py-it-new (fn (_ step cls) (%make-instance %py-it (list step cls))))
-(def %py-it-is (fn (_ v) (%type? v %py-it)))
+(def %py-it-new (fn (_ step cls) (make-instance %py-it (list step cls))))
+(def %py-it-is (fn (_ v) (type? v %py-it)))
 (def %py-it-step (fn (_ v) (first (first v))))
 (def %py-it-class (fn (_ v) (first (rest (first v)))))
 (set! %py-it
-  (%make-type
+  (make-type
     "PY-ITER"
     (list
       (pair (lit write)
-        (fn (_ self) (display "<" (%py-class-name (%py-it-class self)) " object>"))))))
+        (fn (_ self) (display "<" (py-class-name (%py-it-class self)) " object>"))))))
 
 ; --- PY-RANGE ----------------------------------------------------------------
 ; range(start, stop, step) as its three ints: the length, the items and
 ; membership are arithmetic on them, and it is read a step at a time.
 (def %py-rng ())
 (def %py-range-new
-  (fn (_ start stop step) (%make-instance %py-rng (list start stop step))))
-(def %py-range-is (fn (_ v) (%type? v %py-rng)))
+  (fn (_ start stop step) (make-instance %py-rng (list start stop step))))
+(def %py-range-is (fn (_ v) (type? v %py-rng)))
 (def %py-range-start (fn (_ v) (first (first v))))
 (def %py-range-stop (fn (_ v) (first (rest (first v)))))
 (def %py-range-step (fn (_ v) (first (rest (rest (first v))))))
 (set! %py-rng
-  (%make-type
+  (make-type
     "PY-RANGE"
     (list
       (pair (lit write)
@@ -744,15 +718,15 @@
           (if (= (%py-range-step self) 1) () (display ", " (%py-range-step self)))
           (display ")"))))))
 
-(def %py-tuple-new (fn (_ elems) (%make-instance %py-tuple elems)))
-(def %py-tuple-is (fn (_ v) (%type? v %py-tuple)))
-(def %py-tuple-elems (fn (_ v) (first v)))
+(def py-tuple-new (fn (_ elems) (make-instance %py-tuple elems)))
+(def py-tuple-is (fn (_ v) (type? v %py-tuple)))
+(def py-tuple-elems (fn (_ v) (first v)))
 
 (def %py-tuple-step
   (fn (_ st) (if (null? st) () (pair (first st) (rest st)))))
 
 (set! %py-tuple
-  (%make-type
+  (make-type
     "PY-TUPLE"
     (list
       ; A ONE-ELEMENT TUPLE PRINTS ITS TRAILING COMMA.  `(1,)` is not
@@ -779,12 +753,12 @@
             ()
             (if (null? (rest (first self))) (display ",") ()))
           (display ")")))
-      (pair (lit length) (fn (_ self) (%py-length (first self))))
+      (pair (lit length) (fn (_ self) (py-length (first self))))
       (pair
         (lit call)
         (fn (_ self . args)
           (def l (first self))
-          (def n (%py-length l))
+          (def n (py-length l))
           (def i (first args))
           (def k (if (< i 0) (+ n i) i))
           (if (if (< k 0) #t (>= k n))
@@ -796,35 +770,35 @@
 
 (%type-push-op %py-tuple-type (lit +)
   (fn (_ a b)
-    (if (if (%py-tuple-is a) (%py-tuple-is b) #f)
-      (%py-tuple-new (%py-concat (first a) (first b)))
+    (if (if (py-tuple-is a) (py-tuple-is b) #f)
+      (py-tuple-new (%py-concat (first a) (first b)))
       (Err raise (lit type) "can only concatenate tuple to tuple" ()))))
 
 (%type-push-op %py-tuple-type (lit *)
   (fn (_ a b)
-    (let ((t (if (%py-tuple-is a) a b))
-          (n (if (%py-tuple-is a) b a)))
+    (let ((t (if (py-tuple-is a) a b))
+          (n (if (py-tuple-is a) b a)))
       (if (%py-not-a-count n)
         (Err raise (lit type) "can't multiply sequence by non-int" ())
-        (%py-tuple-new (%py-repeat (first t) n))))))
+        (py-tuple-new (%py-repeat (first t) n))))))
 
 ; A tuple is equal only to a tuple.  `(1, 2) == [1, 2]` is False in Python --
 ; the sequences are the same and the types are not.
 (%type-push-op %py-tuple-type (lit =)
   (fn (_ a b)
-    (if (if (%py-tuple-is a) (%py-tuple-is b) #f)
+    (if (if (py-tuple-is a) (py-tuple-is b) #f)
       (%py-seq-eq (first a) (first b))
       #f)))
 
 (%type-push-op %py-tuple-type (lit <)
   (fn (_ a b)
-    (if (if (%py-tuple-is a) (%py-tuple-is b) #f)
+    (if (if (py-tuple-is a) (py-tuple-is b) #f)
       (%py-seq-lt (first a) (first b))
       (Err raise (lit type) "unorderable types" ()))))
 
 (%type-push-op %py-tuple-type (lit >)
   (fn (_ a b)
-    (if (if (%py-tuple-is a) (%py-tuple-is b) #f)
+    (if (if (py-tuple-is a) (py-tuple-is b) #f)
       (%py-seq-lt (first b) (first a))
       (Err raise (lit type) "unorderable types" ()))))
 
@@ -849,17 +823,17 @@
 ; getter; the last three are a property's setter, deleter and doc, nil
 ; where it has none.
 (def %py-desc ())
-(def %py-desc-new (fn (_ py-type f) (%make-instance %py-desc (list py-type f () () ()))))
+(def py-desc-new (fn (_ py-type f) (make-instance %py-desc (list py-type f () () ()))))
 (def %py-prop-new
-  (fn (_ fget fset fdel doc) (%make-instance %py-desc (list (lit property) fget fset fdel doc))))
-(def %py-desc-is (fn (_ v) (%type? v %py-desc)))
+  (fn (_ fget fset fdel doc) (make-instance %py-desc (list (lit property) fget fset fdel doc))))
+(def %py-desc-is (fn (_ v) (type? v %py-desc)))
 (def %py-desc-py-type (fn (_ d) (first (first d))))
 (def %py-desc-fn (fn (_ d) (first (rest (first d)))))
 (def %py-desc-fset (fn (_ d) (first (rest (rest (first d))))))
 (def %py-desc-fdel (fn (_ d) (first (rest (rest (rest (first d)))))))
 (def %py-desc-doc (fn (_ d) (first (rest (rest (rest (rest (first d))))))))
 (set! %py-desc
-  (%make-type
+  (make-type
     "PY-DESC"
     (list
       (pair (lit write)
@@ -868,13 +842,13 @@
 (def %py-super-t ())
 
 (def %py-super-new
-  (fn (_ from obj) (%make-instance %py-super-t (pair from obj))))
-(def %py-super-is (fn (_ v) (%type? v %py-super-t)))
+  (fn (_ from obj) (make-instance %py-super-t (pair from obj))))
+(def %py-super-is (fn (_ v) (type? v %py-super-t)))
 (def %py-super-from (fn (_ v) (first (first v))))
 (def %py-super-self (fn (_ v) (rest (first v))))
 
 (set! %py-super-t
-  (%make-type
+  (make-type
     "PY-SUPER"
     (list
       ; Python prints the class the walk starts BELOW and the object it is
@@ -883,5 +857,5 @@
       ; not merely informative.
       (pair (lit write)
         (fn (_ self)
-          (display "<super: <class '" (%py-class-name (%py-super-from self)) "'>, <"
-            (%py-class-name (%py-obj-class (%py-super-self self))) " object>>"))))))
+          (display "<super: <class '" (py-class-name (%py-super-from self)) "'>, <"
+            (py-class-name (py-obj-class (%py-super-self self))) " object>>"))))))

@@ -40,9 +40,7 @@
 ; ending with `:` switches to "... " prompts and accumulates until an empty
 ; line closes the entry.
 
-(import python/util)
-(import python/base)
-(import python/line %py-read %py-paint %py-marks %py-complete %py-session-name!)
+(module python/core)
 (import x/sys/posix)
 ; Catalog fetches, once at load.
 (def %py-repl-cvt (prim-ref (lit convert) (lit to)))
@@ -50,8 +48,8 @@
 (def %py-repl-str-t ((prim-ref (lit type) (lit of)) "s"))
 
 ; --- one line from stdin, or 'eof --------------------------------------------
-(def %py-repl-line ())
-(set! %py-repl-line
+(def py-repl-line ())
+(set! py-repl-line
   (fn (_)
     ; Chars accumulate as CHARS and convert to a string in ONE cvt at the end
     ; -- the list-to-string conversion python/tokens.x already relies on.  A
@@ -59,7 +57,7 @@
     ; as empty: two prompts per line and nothing evaluated, ever.
     (def %line-of
       (fn (_ acc)
-        (if (null? acc) "" (%py-repl-cvt (%py-reverse acc) %py-repl-str-t))))
+        (if (null? acc) "" (%py-repl-cvt (py-reverse acc) %py-repl-str-t))))
     (def go
       (fn (self acc)
         (let ((c (Io read-char)))
@@ -83,7 +81,7 @@
 (def %py-repl-global
   (fn (_ form) (guard (%py-e ()) (eval! form))))
 
-(def %python-banner
+(def python-banner
   (fn (_)
     (display "Python v" python-version " on x-lang")
     (let ((rel (%py-repl-global (lit %platform-release))))
@@ -152,11 +150,11 @@
       (%seq
         (let ((f (first forms)))
           (if (if (pair? f) (match ((eq? (first f) (lit set!)) #t) (#t (eq? (first f) (lit def)))) #f)
-            (guard (_ ()) (%py-session-name! (symbol->str (first (rest f)))))
+            (guard (_ ()) (py-session-name! (symbol->str (first (rest f)))))
             ()))
         (self (rest forms))))))
 
-(%py-sweep!)
+(py-sweep!)
 ; --- block accumulation ------------------------------------------------------
 (def %py-opens-block?
   (fn (_ line)
@@ -176,8 +174,8 @@
           (match
             ; ctrl-c mid-block abandons the whole entry.
             ((eq? line (lit cancel)) (lit cancel))
-            ((eq? line (lit eof)) (%py-reverse acc))
-            ((= (Str8 length line) 0) (%py-reverse acc))
+            ((eq? line (lit eof)) (py-reverse acc))
+            ((= (Str8 length line) 0) (py-reverse acc))
             (#t (self (pair line acc)))))))
     (if (%py-opens-block? first-line)
       (let ((lines (go (list first-line))))
@@ -187,7 +185,7 @@
 ; The loop's own way to the next line: the editor when there is a terminal,
 ; the byte reader otherwise (python/line.x), the prompt drawn either way.
 (def %py-more-from-loop
-  (fn (_) (%py-read "... ")))
+  (fn (_) (py-read "... ")))
 
 ; --- the loop ----------------------------------------------------------------
 (def %python-repl ())
@@ -206,7 +204,7 @@
   (fn (_)
     ; Through the line editor when there is a terminal (python/line.x),
     ; which draws the prompt itself; through the byte reader otherwise.
-    (let ((line (%py-read ">>> ")))
+    (let ((line (py-read ">>> ")))
       (match
         ((eq? line (lit eof)) (%seq (newline) (Sys exit 0)))
         ; ctrl-c abandons the line being typed.
@@ -257,27 +255,27 @@
 ; Python str, code points, and Lang wants bytes.
 (def py-lang
   (fn (_ name)
-    (Lang use! (if (%py-str-is name) (%ps->x (%py-str-cps name)) name))
+    (Lang use! (if (py-str-is name) (ps->x (py-str-cps name)) name))
     ()))
 
 ; Register "python": what the line means, how it is coloured, what Tab
 ; offers.  Registration is the whole of what the editor needs to switch to
 ; it; the seams themselves are set by use!, and nothing reads them in a batch.
-(def %py-repl-register!
+(def py-repl-register!
   (fn (_)
     (Lang register! "python"
       (list (pair (lit %repl-prompt) ">>> ")
             (pair (lit %repl-prompt-more) "... ")
-            (pair (lit %repl-print) %python-repl-print)
-            (pair (lit %repl-paint) %py-paint)
-            (pair (lit %repl-marks) %py-marks)
-            (pair (lit %repl-complete) %py-complete)
+            (pair (lit %repl-print) python-repl-print)
+            (pair (lit %repl-paint) py-paint)
+            (pair (lit %repl-marks) py-marks)
+            (pair (lit %repl-complete) py-complete)
             (pair (lit %repl-eval-line) %py-eval-line)))))
 
 ; Register, and make it the session's lang.
-(def %py-repl-install!
+(def py-repl-install!
   (fn (_)
-    (%py-repl-register!)
+    (py-repl-register!)
     (Lang use! "python")))
 
 ; Whether this bundle owns the prompt.  `-l` is repeatable, and a bundle
@@ -285,7 +283,7 @@
 ; emits %lang-lead, the first name, and a bundle whose name it is not
 ; registers itself and leaves the prompt alone.  A wrapper older than the
 ; seam binds nothing, and then this bundle leads, as it always did.
-(def %py-leads?
+(def py-leads?
   (fn (_) (guard (_ #t) (str=? %lang-lead "python"))))
 
 ; Which loop the session gets is a fact of the process -- whether there is a
@@ -297,13 +295,11 @@
 ; the platform loop in place, the loaded session decides for itself.  The
 ; terminal is on fd 3 while the boot stream occupies fd 0, which is why both
 ; are asked; the editor's own install asks the same two.
-(def %py-repl-choose!
+(def py-repl-choose!
   (fn (_)
-    (when (%py-leads?)
+    (when (py-leads?)
       (unless (guard (_ #f) %image-writing)
         (unless (if (Sys isatty 0) #t (Sys isatty 3))
           (set! repl %python-repl))))))
-(set! %image-recache-hooks (pair (fn (_) (%py-repl-choose!)) %image-recache-hooks))
+(set! %image-recache-hooks (pair (fn (_) (py-repl-choose!)) %image-recache-hooks))
 
-(provide python/repl %python-repl %python-banner %py-eval-line
-  %py-repl-register! %py-repl-install! %py-repl-choose! %py-leads?)

@@ -34,6 +34,7 @@
 ; returns 123 prints 123.  __eq__ reflects onto __eq__ and falls back to
 ; identity; the default __ne__ is __eq__ inverted unless that answered
 ; NotImplemented; < > <= >= reflect onto their mirrors and then refuse.
+(module python/core)
 (def %py-cmp2
   (fn (_ a b name rname)
     (let ((r1 (%py-side a b name)))
@@ -43,44 +44,44 @@
 
 (def %py-ne-side
   (fn (_ x y)
-    (if (%py-obj-is x)
-      (let ((m (%py-dunder x "__ne__")))
+    (if (py-obj-is x)
+      (let ((m (py-dunder x "__ne__")))
         (if (not (null? m))
           (m y)
-          (let ((e (%py-dunder x "__eq__")))
+          (let ((e (py-dunder x "__eq__")))
             (if (null? e)
               %py-NotImplemented
               (let ((r (e y)))
                 (if (eq? r %py-NotImplemented) r (not (%py-truthy r))))))))
       %py-NotImplemented)))
 
-(def %py-eq
+(def py-eq
   (fn (_ a b)
     (match
-      ((if (%py-obj-is a) #t (%py-obj-is b))
+      ((if (py-obj-is a) #t (py-obj-is b))
         (let ((r (%py-cmp2 a b "__eq__" "__eq__")))
           (if (eq? r %py-NotImplemented) (eq? a b) r)))
-      ((if (%py-arr-is a) #t (%py-arr-is b))
-        (if (if (%py-arr-is a) (%py-arr-is b) #f)
-          (%py-eq (%py-list-new (%py-arr-el a)) (%py-list-new (%py-arr-el b)))
+      ((if (py-arr-is a) #t (py-arr-is b))
+        (if (if (py-arr-is a) (py-arr-is b) #f)
+          (py-eq (py-list-new (py-arr-el a)) (py-list-new (py-arr-el b)))
           #f))
       ; a memoryview compares by its elements against any buffer, and equals
       ; nothing else
-      ((if (%py-mv-is a) #t (%py-mv-is b))
-        (if (if (%py-buffer? a) (%py-buffer? b) #f)
-          (%py-eq (%py-list-new (%py-mv-in a)) (%py-list-new (%py-mv-in b)))
+      ((if (py-mv-is a) #t (py-mv-is b))
+        (if (if (py-buffer? a) (py-buffer? b) #f)
+          (py-eq (py-list-new (py-mv-in a)) (py-list-new (py-mv-in b)))
           #f))
       ; two slices are equal when their three parts are, and equal nothing else
       ((%py-sl-is a) (%py-sl-eq a b))
       ((%py-sl-is b) #f)
       ((%py-range-is a) (%py-range-eq a b))
       ((%py-range-is b) #f)
-      ((if (%py-dq-is a) #t (%py-dq-is b)) (%py-dq-eq a b))
-      ((%py-str-is a) (if (%py-str-is b) (%pb-eq? (%py-str-cps a) (%py-str-cps b)) #f))
-      ((%py-str-is b) #f)
-      ((%py-bytes-is a)
-        (if (%py-bytes-is b) (%pb-eq? (%py-bytes-list a) (%py-bytes-list b)) #f))
-      ((%py-bytes-is b) #f)
+      ((if (py-dq-is a) #t (py-dq-is b)) (py-dq-eq a b))
+      ((py-str-is a) (if (py-str-is b) (%pb-eq? (py-str-cps a) (py-str-cps b)) #f))
+      ((py-str-is b) #f)
+      ((py-bytes-is a)
+        (if (py-bytes-is b) (%pb-eq? (py-bytes-list a) (py-bytes-list b)) #f))
+      ((py-bytes-is b) #f)
       ((if (%py-fn-is a) #t (%py-fn-is b)) (same? a b))
       ; a module equals itself and nothing else
       ((if (%py-mod-is a) #t (%py-mod-is b)) (same? a b))
@@ -89,16 +90,16 @@
       ((%py-bound-is a)
         (if (%py-bound-is b)
           (if (same? (%py-bound-fn a) (%py-bound-fn b))
-            (%py-truthy (%py-eq (%py-bound-self a) (%py-bound-self b)))
+            (%py-truthy (py-eq (%py-bound-self a) (%py-bound-self b)))
             #f)
           #f))
       ((%py-bound-is b) #f)
-      ((%py-dict? a)
-        (if (%py-dict? b) (%py-dict-eq? (%py-dict-entries a) (%py-dict-entries b)) #f))
-      ((%py-dict? b) #f)
-      ((%py-set-is a)
-        (if (%py-set-is b) (%py-set-eq? (%py-set-elems a) (%py-set-elems b)) #f))
-      ((%py-set-is b) #f)
+      ((py-dict? a)
+        (if (py-dict? b) (%py-dict-eq? (py-dict-entries a) (py-dict-entries b)) #f))
+      ((py-dict? b) #f)
+      ((py-set-is a)
+        (if (py-set-is b) (%py-set-eq? (py-set-elems a) (py-set-elems b)) #f))
+      ((py-set-is b) #f)
       ((%py-class-is a) (eq? a b))
       ((%py-class-is b) #f)
       ; a BOOL, always: the tower's `=` answers nil for an unequal complex,
@@ -109,13 +110,13 @@
       (#t #f))))
 (def %py-ne
   (fn (_ a b)
-    (if (if (%py-obj-is a) #t (%py-obj-is b))
+    (if (if (py-obj-is a) #t (py-obj-is b))
       (let ((r1 (%py-ne-side a b)))
         (if (not (eq? r1 %py-NotImplemented))
           r1
           (let ((r2 (%py-ne-side b a)))
             (if (not (eq? r2 %py-NotImplemented)) r2 (not (eq? a b))))))
-      (not (%py-eq a b)))))
+      (not (py-eq a b)))))
 
 (def %py-ord-refuse
   (fn (_ op a b)
@@ -133,8 +134,8 @@
       (if (>= i (Str8 length b)) 0 (- 0 1))
       (if (>= i (Str8 length b))
         1
-        (let ((ca (%py-char-code (%str-ref a i)))
-              (cb (%py-char-code (%str-ref b i))))
+        (let ((ca (py-char-code (%str-ref a i)))
+              (cb (py-char-code (%str-ref b i))))
           (if (< ca cb) (- 0 1) (if (> ca cb) 1 (self a b (+ i 1)))))))))
 
 ; Complex has no ordering, and the tower's `<` answers #f for it without a
@@ -156,30 +157,30 @@
 (def %py-seq-of
   (fn (_ v)
     (match
-      ((%py-list? v) (%py-list-elems v))
-      ((%py-tuple-is v) (%py-tuple-elems v))
-      ((%py-arr-is v) (%py-arr-el v))
-      ((%py-dq-is v) (%py-dq-el v))
+      ((py-list? v) (py-list-elems v))
+      ((py-tuple-is v) (py-tuple-elems v))
+      ((py-arr-is v) (py-arr-el v))
+      ((py-dq-is v) (py-dq-el v))
       (#t ()))))
 ; only two of the same Python type: a list beside a tuple does not order, as in Python
 (def %py-same-seq?
   (fn (_ a b)
     (match
-      ((%py-list? a) (%py-list? b))
-      ((%py-tuple-is a) (%py-tuple-is b))
-      ((%py-arr-is a) (%py-arr-is b))
-      ((%py-dq-is a) (%py-dq-is b))
+      ((py-list? a) (py-list? b))
+      ((py-tuple-is a) (py-tuple-is b))
+      ((py-arr-is a) (py-arr-is b))
+      ((py-dq-is a) (py-dq-is b))
       (#t #f))))
 (def %py-seq-cmp
   (fn (self a b)
     (match
       ((null? a) (if (null? b) 0 (- 0 1)))
       ((null? b) 1)
-      ((%py-truthy (%py-eq (first a) (first b))) (self (rest a) (rest b)))
-      ((%py-truthy (%py-lt (first a) (first b))) (- 0 1))
+      ((%py-truthy (py-eq (first a) (first b))) (self (rest a) (rest b)))
+      ((%py-truthy (py-lt (first a) (first b))) (- 0 1))
       (#t 1))))
 
-(def %py-lt
+(def py-lt
   (fn (_ a b)
     (match
       ((%py-plain-nums? a b) (< a b))
@@ -190,26 +191,26 @@
       ; here to the numeric one and was answered by whatever comparing two
       ; instances does -- which agreed with Python while both sides were
       ; PY-BYTES, and stopped agreeing the moment one was a bytearray.
-      ((if (%py-bytes-is a) (%py-bytes-is b) #f)
-        (< (%pb-cmp (%py-bytes-list a) (%py-bytes-list b)) 0))
-      ((if (%py-obj-is a) #t (%py-obj-is b))
+      ((if (py-bytes-is a) (py-bytes-is b) #f)
+        (< (%pb-cmp (py-bytes-list a) (py-bytes-list b)) 0))
+      ((if (py-obj-is a) #t (py-obj-is b))
         (let ((r (%py-cmp2 a b "__lt__" "__gt__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse "<" a b) r)))
       ; after the instance arm, so a set subclass instance beside a set is
       ; asked through its class
-      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b "<"))
+      ((if (py-set-is a) #t (py-set-is b)) (%py-set-cmp a b "<"))
       (#t (%py-lt-num a b)))))
 (def %py-lt-num
   (fn (_ a b)
     (%py-cmp-refuse a b "<")
     (match
-      ((if (%py-str-is a) (%py-str-is b) #f)
-        (< (%pb-cmp (%py-str-cps a) (%py-str-cps b)) 0))
+      ((if (py-str-is a) (py-str-is b) #f)
+        (< (%pb-cmp (py-str-cps a) (py-str-cps b)) 0))
       ((%py-nums? a b)
         (< (if (eq? a #t) 1 (if (eq? a #f) 0 a))
            (if (eq? b #t) 1 (if (eq? b #f) 0 b))))
       (#t (%py-ord-refuse "<" a b)))))
-(def %py-gt
+(def py-gt
   (fn (_ a b)
     (match
       ((%py-plain-nums? a b) (> a b))
@@ -220,25 +221,25 @@
       ; here to the numeric one and was answered by whatever comparing two
       ; instances does -- which agreed with Python while both sides were
       ; PY-BYTES, and stopped agreeing the moment one was a bytearray.
-      ((if (%py-bytes-is a) (%py-bytes-is b) #f)
-        (> (%pb-cmp (%py-bytes-list a) (%py-bytes-list b)) 0))
-      ((if (%py-obj-is a) #t (%py-obj-is b))
+      ((if (py-bytes-is a) (py-bytes-is b) #f)
+        (> (%pb-cmp (py-bytes-list a) (py-bytes-list b)) 0))
+      ((if (py-obj-is a) #t (py-obj-is b))
         (let ((r (%py-cmp2 a b "__gt__" "__lt__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse ">" a b) r)))
-      ; after the instance arm, as in %py-lt
-      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b ">"))
+      ; after the instance arm, as in py-lt
+      ((if (py-set-is a) #t (py-set-is b)) (%py-set-cmp a b ">"))
       (#t (%py-gt-num a b)))))
 (def %py-gt-num
   (fn (_ a b)
     (%py-cmp-refuse a b ">")
     (match
-      ((if (%py-str-is a) (%py-str-is b) #f)
-        (> (%pb-cmp (%py-str-cps a) (%py-str-cps b)) 0))
+      ((if (py-str-is a) (py-str-is b) #f)
+        (> (%pb-cmp (py-str-cps a) (py-str-cps b)) 0))
       ((%py-nums? a b)
         (> (if (eq? a #t) 1 (if (eq? a #f) 0 a))
            (if (eq? b #t) 1 (if (eq? b #f) 0 b))))
       (#t (%py-ord-refuse ">" a b)))))
-(def %py-le
+(def py-le
   (fn (_ a b)
     (match
       ((%py-plain-nums? a b) (<= a b))
@@ -247,17 +248,17 @@
       ; here to the numeric one and was answered by whatever comparing two
       ; instances does -- which agreed with Python while both sides were
       ; PY-BYTES, and stopped agreeing the moment one was a bytearray.
-      ((if (%py-bytes-is a) (%py-bytes-is b) #f)
-        (<= (%pb-cmp (%py-bytes-list a) (%py-bytes-list b)) 0))
-      ((if (%py-obj-is a) #t (%py-obj-is b))
+      ((if (py-bytes-is a) (py-bytes-is b) #f)
+        (<= (%pb-cmp (py-bytes-list a) (py-bytes-list b)) 0))
+      ((if (py-obj-is a) #t (py-obj-is b))
         (let ((r (%py-cmp2 a b "__le__" "__ge__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse "<=" a b) r)))
-      ; after the instance arm, as in %py-lt
-      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b "<="))
-      ((if (%py-str-is a) (%py-str-is b) #f) (<= (%pb-cmp (%py-str-cps a) (%py-str-cps b)) 0))
-      ((%py-lt a b) #t)
-      (#t (%py-eq a b)))))
-(def %py-ge
+      ; after the instance arm, as in py-lt
+      ((if (py-set-is a) #t (py-set-is b)) (%py-set-cmp a b "<="))
+      ((if (py-str-is a) (py-str-is b) #f) (<= (%pb-cmp (py-str-cps a) (py-str-cps b)) 0))
+      ((py-lt a b) #t)
+      (#t (py-eq a b)))))
+(def py-ge
   (fn (_ a b)
     (match
       ((%py-plain-nums? a b) (>= a b))
@@ -266,60 +267,60 @@
       ; here to the numeric one and was answered by whatever comparing two
       ; instances does -- which agreed with Python while both sides were
       ; PY-BYTES, and stopped agreeing the moment one was a bytearray.
-      ((if (%py-bytes-is a) (%py-bytes-is b) #f)
-        (>= (%pb-cmp (%py-bytes-list a) (%py-bytes-list b)) 0))
-      ((if (%py-obj-is a) #t (%py-obj-is b))
+      ((if (py-bytes-is a) (py-bytes-is b) #f)
+        (>= (%pb-cmp (py-bytes-list a) (py-bytes-list b)) 0))
+      ((if (py-obj-is a) #t (py-obj-is b))
         (let ((r (%py-cmp2 a b "__ge__" "__le__")))
           (if (eq? r %py-NotImplemented) (%py-ord-refuse ">=" a b) r)))
-      ; after the instance arm, as in %py-lt
-      ((if (%py-set-is a) #t (%py-set-is b)) (%py-set-cmp a b ">="))
-      ((if (%py-str-is a) (%py-str-is b) #f) (>= (%pb-cmp (%py-str-cps a) (%py-str-cps b)) 0))
-      ((%py-gt a b) #t)
-      (#t (%py-eq a b)))))
+      ; after the instance arm, as in py-lt
+      ((if (py-set-is a) #t (py-set-is b)) (%py-set-cmp a b ">="))
+      ((if (py-str-is a) (py-str-is b) #f) (>= (%pb-cmp (py-str-cps a) (py-str-cps b)) 0))
+      ((py-gt a b) #t)
+      (#t (py-eq a b)))))
 
-(%py-sweep!)
+(py-sweep!)
 ; --- Lists ------------------------------------------------------------------
 ;
 ; LABELLED, not a bare x list.  An empty Python list and None are different
 ; values, and a bare x list would make both of them nil -- so `print([])` would
 ; print None.  A list is (py-list . elements): the label distinguishes it
 ; from every other value this runtime produces, and from nil.
-(def %py-mklist (fn (_ . elems) (%py-list-new elems)))
+(def %py-mklist (fn (_ . elems) (py-list-new elems)))
 
 ; A SUBCLASS OF list IS A list wherever the runtime asks.  The question every
 ; list operation asks is this one, so teaching it about the wrapper is what
 ; makes `class mylist(list)` index, slice, grow, compare and print -- the
 ; accessors in types.x read through to the value the instance carries.
-(def %py-list?
+(def py-list?
   (fn (_ v)
     (if (%py-list-is v)
       #t
-      (if (%py-obj-is v) (%py-list-is (%py-obj-native v)) #f))))
+      (if (py-obj-is v) (%py-list-is (py-obj-native v)) #f))))
 
 ; object of type 'zip' has no len()
 (def %py-no-len
   (fn (_ v)
     (Err raise (lit type)
       (Str8 append "object of type '"
-        (Str8 append (%py-class-name (%py-type-of v)) "' has no len()"))
+        (Str8 append (py-class-name (py-type-of v)) "' has no len()"))
       ())))
 (def %py-len
   (fn (_ v)
     (match
-      ((%py-obj-is v)
-        (let ((m (%py-dunder v "__len__")))
+      ((py-obj-is v)
+        (let ((m (py-dunder v "__len__")))
           (if (null? m) (%py-no-len v) (m))))
-      ((%py-arr-is v) (%py-length (%py-arr-el v)))
-      ((%py-mv-is v) (%py-mv-len v))
-      ((%py-dq-is v) (%py-length (%py-dq-el v)))
+      ((py-arr-is v) (py-length (py-arr-el v)))
+      ((py-mv-is v) (py-mv-len v))
+      ((py-dq-is v) (py-length (py-dq-el v)))
       ((%py-range-is v) (%py-range-len v))
-      ((%py-dict? v) (%py-length (%py-dict-entries v)))
-      ((%py-tuple-is v) (%py-length (%py-tuple-elems v)))
-      ((%py-list? v) (%py-length (%py-list-elems v)))
-      ((%py-set-is v) (%py-length (%py-set-elems v)))
-      ((%py-view-is v) (%py-length (%py-view-elems v)))
-      ((%py-str-is v) (%pb-len (%py-str-cps v)))
-      ((%py-bytes-is v) (%pb-len (%py-bytes-list v)))
+      ((py-dict? v) (py-length (py-dict-entries v)))
+      ((py-tuple-is v) (py-length (py-tuple-elems v)))
+      ((py-list? v) (py-length (py-list-elems v)))
+      ((py-set-is v) (py-length (py-set-elems v)))
+      ((%py-view-is v) (py-length (%py-view-elems v)))
+      ((py-str-is v) (pb-len (py-str-cps v)))
+      ((py-bytes-is v) (pb-len (py-bytes-list v)))
       (#t (%py-no-len v)))))
 
 ; NEGATIVE INDICES COUNT FROM THE END, which is Python and not x.  -1 is the
@@ -331,11 +332,11 @@
 ; "string indices" for a str and "byte indices" for bytes, and names the rest.
 (def %py-seq-index
   (fn (_ i what)
-    (let ((k (%py-boolnorm i)))
-      (if (eq? (%py-num-py-type k) (lit int))
+    (let ((k (py-boolnorm i)))
+      (if (eq? (py-num-py-type k) (lit int))
         k
         (Err raise (lit type)
-          (%py-seq-index-refusal what (%py-class-name (%py-type-of i))) ())))))
+          (%py-seq-index-refusal what (py-class-name (py-type-of i))) ())))))
 (def %py-seq-index-refusal
   (fn (_ what t)
     (match
@@ -348,36 +349,36 @@
 (def %py-index
   (fn (_ v i)
     (match
-      ((%py-obj-is v)
-        (let ((m (%py-dunder v "__getitem__")))
+      ((py-obj-is v)
+        (let ((m (py-dunder v "__getitem__")))
           (if (null? m) (Err raise (lit type) "object is not subscriptable" ()) (m i))))
       ; a slice object indexes as the subscript it stands for, s[slice(1, 2)]
       ; as s[1:2]
       ((%py-sl-is i) (%py-slice v (%py-sl-start i) (%py-sl-stop i) (%py-sl-step i)))
       ((%py-range-is v) (%py-range-at v i))
-      ((%py-arr-is v) (%py-arr-at v i))
-      ((%py-mv-is v) (%py-mv-at v i))
-      ((%py-dq-is v) (%py-dq-at v i))
-      ((%py-str-is v)
-        (let ((l (%py-str-cps v)) (j (%py-seq-index i "str")))
-          (let ((n (%pb-len l)))
+      ((py-arr-is v) (py-arr-at v i))
+      ((py-mv-is v) (py-mv-at v i))
+      ((py-dq-is v) (py-dq-at v i))
+      ((py-str-is v)
+        (let ((l (py-str-cps v)) (j (%py-seq-index i "str")))
+          (let ((n (pb-len l)))
             (let ((k (if (< j 0) (+ n j) j)))
               (if (if (< k 0) #t (>= k n))
                 (Err raise (lit index) "string index out of range" ())
-                (%py-str-new (list (%pb-ref l k))))))))
+                (py-str-new (list (%pb-ref l k))))))))
       ; a bytes index is the byte's value, an int
-      ((%py-bytes-is v)
-        (let ((l (%py-bytes-list v))
-              (j (%py-seq-index i (if (%py-barr-is v) "bytearray" "bytes"))))
-          (let ((n (%pb-len l)))
+      ((py-bytes-is v)
+        (let ((l (py-bytes-list v))
+              (j (%py-seq-index i (if (py-barr-is v) "bytearray" "bytes"))))
+          (let ((n (pb-len l)))
             (let ((k (if (< j 0) (+ n j) j)))
               (if (if (< k 0) #t (>= k n))
                 (Err raise (lit index) "index out of range" ())
                 (%pb-ref l k))))))
       ; Subscripting a tuple and a dict are calls too -- see the list branch.
-      ((%py-tuple-is v) (v (%py-seq-index i "tuple")))
-      ((%py-dict? v) (v i))
-      ((not (%py-list? v))
+      ((py-tuple-is v) (v (%py-seq-index i "tuple")))
+      ((py-dict? v) (v i))
+      ((not (py-list? v))
         (Err raise (lit type) "object is not subscriptable" ()))
       ; SUBSCRIPTING A LIST IS A CALL.  x dispatches `(v i)` through the type's
       ; `call` handler, so negative indices and IndexError are stated once in
@@ -387,7 +388,7 @@
 ; Store into a list at an index.  Rebuilds the element list and hangs it back on
 ; the SAME label pair, so every reference sees the store -- the identity argument
 ; that made append work.
-(def %py-set-nth
+(def py-set-nth
   (fn (self lst k v)
     (if (= k 0)
       (pair v (rest lst))
@@ -402,14 +403,14 @@
 ; as it was.
 (def %py-barr-splice!
   (fn (_ b lo hi with)
-    (let ((l (%py-bytes-list b)))
-      (%seq (%py-barr-set! b (%pb-cat (%pb-take lo l ()) (%pb-cat with (%pb-drop hi l))))
+    (let ((l (py-bytes-list b)))
+      (%seq (py-barr-set! b (%pb-cat (%pb-take lo l ()) (%pb-cat with (%pb-drop hi l))))
             ()))))
 
 ; the position an index names, counted from the end when negative
 (def %py-barr-slot
   (fn (_ b i)
-    (let ((n (%pb-len (%py-bytes-list b))) (k (%py-boolnorm i)))
+    (let ((n (pb-len (py-bytes-list b))) (k (py-boolnorm i)))
       (let ((j (if (< k 0) (+ n k) k)))
         (if (if (< j 0) #t (>= j n))
           (Err raise (lit index) "bytearray index out of range" ())
@@ -417,7 +418,7 @@
 
 (def %py-barr-put!
   (fn (_ b i v)
-    (let ((c (%py-bytes-of-codes (list v) ())))
+    (let ((c (py-bytes-of-codes (list v) ())))
       (let ((j (%py-barr-slot b i)))
         (%py-barr-splice! b j (+ j 1) c)))))
 
@@ -433,14 +434,14 @@
     (match
       ((null? v)
         (Err raise (lit type) "cannot convert 'NoneType' object to bytearray" ()))
-      ((if (%py-str-is v) #t (not (null? (%py-num-py-type (%py-boolnorm v)))))
+      ((if (py-str-is v) #t (not (null? (py-num-py-type (py-boolnorm v)))))
         (Err raise (lit type)
           "can assign only bytes, buffers, or iterables of ints in range(0, 256)" ()))
       ; a memoryview is a buffer, and its elements are what it assigns
-      ((%py-mv-is v) (%py-bytes-of-codes (%py-mv-elems v) ()))
+      ((py-mv-is v) (py-bytes-of-codes (py-mv-elems v) ()))
       (#t (%py-barr-bytes-of v)))))
 
-(%py-sweep!)
+(py-sweep!)
 ; --- del and slice assignment ------------------------------------------------
 (def %py-delindex
   (fn (_ v i)
@@ -448,81 +449,81 @@
     ; __getitem__ and __setitem__ were already here, so `del c[k]` on a class
     ; that defines it raised as though the class had said nothing.
     (match
-      ((%py-obj-is v)
-        (let ((m (%py-dunder v "__delitem__")))
+      ((py-obj-is v)
+        (let ((m (py-dunder v "__delitem__")))
           (if (null? m)
             (Err raise (lit type) "object does not support item deletion" ())
             (m i))))
-      ((%py-barr-is v) (%py-barr-del! v (%py-seq-index i "bytearray")))
-      ((%py-dict? v) (%py-ddel v i))
-      ((%py-list? v) ((%py-list-attr v "__delitem__") (%py-seq-index i "list")))
-      ((%py-dq-is v) (%py-dq-del! v i))
+      ((py-barr-is v) (%py-barr-del! v (%py-seq-index i "bytearray")))
+      ((py-dict? v) (%py-ddel v i))
+      ((py-list? v) ((%py-list-attr v "__delitem__") (%py-seq-index i "list")))
+      ((py-dq-is v) (py-dq-del! v i))
       (#t (Err raise (lit type) "object does not support item deletion" ())))))
 ; the indices a slice selects, as (lo . hi) on a step of 1; a stop before the
 ; start selects nothing, at the start
-(def %py-slice-span
+(def py-slice-span
   (fn (_ n start stop step)
-    (if (if (null? step) #f (not (= (%py-boolnorm step) 1)))
+    (if (if (null? step) #f (not (= (py-boolnorm step) 1)))
       (Err raise (lit value) "only a step of 1 is supported here" ())
-      (let ((lo (%py-list-clamp n start 0)))
-        (let ((hi (%py-list-clamp n stop n)))
+      (let ((lo (py-list-clamp n start 0)))
+        (let ((hi (py-list-clamp n stop n)))
           (pair lo (if (< hi lo) lo hi)))))))
 (def %py-setslice
   (fn (_ v start stop step new)
     (match
       ; a class takes the slice itself, as it does on the way in
-      ((if (%py-obj-is v)
-         (%py-user-fn? (%py-method-find (%py-obj-class v) "__setitem__"))
+      ((if (py-obj-is v)
+         (%py-user-fn? (%py-method-find (py-obj-class v) "__setitem__"))
          #f)
-        ((%py-dunder v "__setitem__") (%py-sl-new start stop step) new))
+        ((py-dunder v "__setitem__") (%py-sl-new start stop step) new))
       ; a builtin's subclass stores into the value it carries, as it reads from
       ; it, unless its class writes a __setitem__ of its own
-      ((if (%py-obj-is v) (not (null? (%py-obj-native v))) #f)
-        (%py-setslice (%py-obj-native v) start stop step new))
-      ((%py-mv-is v) (%py-mv-setslice! v start stop step new))
+      ((if (py-obj-is v) (not (null? (py-obj-native v))) #f)
+        (%py-setslice (py-obj-native v) start stop step new))
+      ((py-mv-is v) (py-mv-setslice! v start stop step new))
       ; a dict's subscript is a key, and a slice is one
-      ((%py-dict? v) (%py-dset v (%py-sl-new start stop step) new))
-      ((%py-barr-is v)
-        (let ((sp (%py-slice-span (%pb-len (%py-bytes-list v)) start stop step)))
+      ((py-dict? v) (%py-dset v (%py-sl-new start stop step) new))
+      ((py-barr-is v)
+        (let ((sp (py-slice-span (pb-len (py-bytes-list v)) start stop step)))
           (%py-barr-splice! v (first sp) (rest sp) (%py-barr-bytes-in new))))
-      ((not (%py-list? v))
+      ((not (py-list? v))
         (Err raise (lit type) "object does not support slice assignment" ()))
       (#t
-        (let ((els (%py-list-elems v)))
-          (let ((sp (%py-slice-span (%py-length els) start stop step)))
+        (let ((els (py-list-elems v)))
+          (let ((sp (py-slice-span (py-length els) start stop step)))
             (%py-list-set! v
-              (%py-list-cat (%py-take (first sp) els)
-                (%py-list-cat (%py-iter-elems new) (%py-drop els (rest sp)))))))))))
+              (py-list-cat (py-take (first sp) els)
+                (py-list-cat (py-iter-elems new) (py-drop els (rest sp)))))))))))
 ; `del a[1:2]` is __delitem__ on a class and an empty splice on a sequence.
 (def %py-delslice
   (fn (_ v start stop step)
-    (if (if (%py-obj-is v)
-          (%py-user-fn? (%py-method-find (%py-obj-class v) "__delitem__"))
+    (if (if (py-obj-is v)
+          (%py-user-fn? (%py-method-find (py-obj-class v) "__delitem__"))
           #f)
-      ((%py-dunder v "__delitem__") (%py-sl-new start stop step))
-      (%py-setslice v start stop step (%py-list-new ())))))
+      ((py-dunder v "__delitem__") (%py-sl-new start stop step))
+      (%py-setslice v start stop step (py-list-new ())))))
 
 (def %py-setindex
   (fn (_ obj i v)
     (match
-      ((%py-obj-is obj)
-        (let ((m (%py-dunder obj "__setitem__")))
+      ((py-obj-is obj)
+        (let ((m (py-dunder obj "__setitem__")))
           (if (null? m)
             (Err raise (lit type) "object does not support item assignment" ())
             (m i v))))
-      ((%py-barr-is obj) (%py-barr-put! obj (%py-seq-index i "bytearray") v))
-      ((%py-arr-is obj) (%py-arr-put! obj i v))
-      ((%py-mv-is obj) (%py-mv-put! obj i v))
-      ((%py-dq-is obj) (%py-dq-put! obj i v))
-      ((%py-dict? obj) (%py-dset obj i v))
-      ((not (%py-list? obj))
+      ((py-barr-is obj) (%py-barr-put! obj (%py-seq-index i "bytearray") v))
+      ((py-arr-is obj) (py-arr-put! obj i v))
+      ((py-mv-is obj) (py-mv-put! obj i v))
+      ((py-dq-is obj) (py-dq-put! obj i v))
+      ((py-dict? obj) (%py-dset obj i v))
+      ((not (py-list? obj))
         (Err raise (lit type) "object does not support item assignment" ()))
       (#t
-        (let ((n (%py-length (%py-list-elems obj))) (j (%py-seq-index i "list")))
+        (let ((n (py-length (py-list-elems obj))) (j (%py-seq-index i "list")))
           (let ((k (if (< j 0) (+ n j) j)))
             (if (if (< k 0) #t (>= k n))
               (Err raise (lit index) "list assignment index out of range" ())
-              (%py-list-set! obj (%py-set-nth (%py-list-elems obj) k v)))))))))
+              (%py-list-set! obj (py-set-nth (py-list-elems obj) k v)))))))))
 
 ; The escape continuation a `return` invokes.  Fetched rather than assumed
 ; global, the way every other prim in this bundle is reached.
@@ -592,7 +593,7 @@
         (fn (_ k)
           (body (fn (_ v) (%seq (%py-wind-unwind! saved) (k v)))))))))
 
-(%py-sweep!)
+(py-sweep!)
 ; --- Iteration ---------------------------------------------------------------
 ;
 ; The elements a `for` walks.  A list gives its own; a string gives its
@@ -609,9 +610,9 @@
 ; second read, and for any object is a side effect the program wrote once.
 (def %py-iter-answer
   (fn (_ it)
-    (if (%py-obj-is it)
+    (if (py-obj-is it)
       (Err raise (lit type) "iter() returned non-iterator" ())
-      (%py-iter-elems it))))
+      (py-iter-elems it))))
 
 ; THE OLD SEQUENCE PROTOCOL: an object with __getitem__ and no __iter__ is read
 ; at 0, 1, 2, ... and ends where __getitem__ raises IndexError or StopIteration.
@@ -630,25 +631,25 @@
 (def %py-steps-drain
   (fn (self nx acc)
     (let ((v (nx)))
-      (if (same? v %py-gen-done) (%py-reverse acc) (self nx (pair v acc))))))
+      (if (same? v %py-gen-done) (py-reverse acc) (self nx (pair v acc))))))
 ; 'int' object is not iterable
 (def %py-not-iterable
   (fn (_ v)
     (Str8 append "'"
-      (Str8 append (%py-class-name (%py-type-of v)) "' object is not iterable"))))
+      (Str8 append (py-class-name (py-type-of v)) "' object is not iterable"))))
 
 ; AN OBJECT ITERATES BY ITS PROTOCOL: __iter__ hands back an iterator whose
 ; __next__ is called until it raises StopIteration -- materialized here into
 ; the element list every consumer already walks.  Without __iter__, the old
 ; sequence protocol (%py-getitem-steps).
-; `who` is %py-iter-elems' door, carried one hop further: an object with
+; `who` is py-iter-elems' door, carried one hop further: an object with
 ; neither dunder refuses in the caller's words too.
 (def %py-obj-elems
   (fn (_ v . who)
-    (let ((it-m (%py-dunder v "__iter__")))
+    (let ((it-m (py-dunder v "__iter__")))
       (if (not (null? it-m))
         (let ((it (it-m)))
-          (let ((nx (if (%py-obj-is it) (%py-dunder it "__next__") ())))
+          (let ((nx (if (py-obj-is it) (py-dunder it "__next__") ())))
             (if (null? nx)
               (%py-iter-answer it)
               (do
@@ -659,34 +660,34 @@
                                             (error e)))
                                 (nx))))
                       (if (eq? r %py-NotImplemented)
-                        (%py-reverse acc)
+                        (py-reverse acc)
                         (self (pair r acc))))))
                 (go ())))))
-        (let ((gi (%py-dunder v "__getitem__")))
+        (let ((gi (py-dunder v "__getitem__")))
           (if (null? gi)
             (Err raise (lit type) (if (null? who) (%py-not-iterable v) (first who)) ())
             (%py-steps-drain (%py-getitem-steps gi) ())))))))
 
-(def %py-iter-elems
+(def py-iter-elems
   (fn (_ v . who)
     (match
-      ((%py-obj-is v)
+      ((py-obj-is v)
         (if (null? who) (%py-obj-elems v) (%py-obj-elems v (first who))))
-      ((%py-io-is v) (%py-io-drain! v))
-      ((%py-arr-is v) (%py-arr-el v))
-      ((%py-mv-is v) (%py-mv-elems v))
-      ((%py-dq-is v) (%py-dq-el v))
+      ((py-io-is v) (py-io-drain! v))
+      ((py-arr-is v) (py-arr-el v))
+      ((py-mv-is v) (py-mv-elems v))
+      ((py-dq-is v) (py-dq-el v))
       ((%py-range-is v) (%py-range-elems v))
       ; Iterating a dict yields its KEYS, as in Python.
-      ((%py-dict? v) (%py-dkeys (%py-dict-entries v)))
-      ((%py-tuple-is v) (%py-tuple-elems v))
-      ((%py-list? v) (%py-list-elems v))
-      ((%py-set-is v) (%py-set-elems v))
+      ((py-dict? v) (%py-dkeys (py-dict-entries v)))
+      ((py-tuple-is v) (py-tuple-elems v))
+      ((py-list? v) (py-list-elems v))
+      ((py-set-is v) (py-set-elems v))
       ((%py-view-is v) (%py-view-elems v))
-      ((%py-str-is v) (%py-str-chars-of (%py-str-cps v) ()))
+      ((py-str-is v) (%py-str-chars-of (py-str-cps v) ()))
       ; iterating bytes yields ints
-      ((%py-bytes-is v)
-        (%py-bytes-list v))
+      ((py-bytes-is v)
+        (py-bytes-list v))
       ; a generator runs to its end; every consumer here wants the whole list
       ((%py-gen-is v) (%py-gen-drain v ()))
       ((%py-it-is v) (%py-steps-drain (fn (_) (%py-iter-pull! v)) ()))
@@ -707,19 +708,19 @@
 (def %py-range-build
   (fn (self i stop step acc)
     (if (if (> step 0) (>= i stop) (<= i stop))
-      (%py-reverse acc)
+      (py-reverse acc)
       (self (+ i step) stop step (pair i acc)))))
 
 ; A range argument is an int -- a bool as the int it is, a subclass of int as
 ; the int it carries -- and anything else is refused in CPython's words.
 (def %py-range-int
   (fn (_ v)
-    (let ((n (%py-boolnorm v)))
-      (let ((k (if (%py-obj-is n) (%py-obj-native n) n)))
-        (if (if (null? k) #f (eq? (%py-num-py-type k) (lit int)))
+    (let ((n (py-boolnorm v)))
+      (let ((k (if (py-obj-is n) (py-obj-native n) n)))
+        (if (if (null? k) #f (eq? (py-num-py-type k) (lit int)))
           k
           (Err raise (lit type)
-            (Str8 append (Str8 append "'" (%py-class-name (%py-type-of v)))
+            (Str8 append (Str8 append "'" (py-class-name (py-type-of v)))
               "' object cannot be interpreted as an integer")
             ()))))))
 (def %py-range-ints
@@ -727,7 +728,7 @@
 (def %py-range
   (fn (_ . args0)
     (def args (%py-range-ints args0))
-    (def n (%py-length args))
+    (def n (py-length args))
     (match
       ((= n 0) (Err raise (lit type) "range expected at least 1 argument, got 0" ()))
       ((> n 3)
@@ -805,16 +806,16 @@
 ; anything else is compared with each item in turn
 (def %py-range-has?
   (fn (_ r x)
-    (def k (%py-boolnorm x))
-    (if (eq? (%py-num-py-type k) (lit int))
+    (def k (py-boolnorm x))
+    (if (eq? (py-num-py-type k) (lit int))
       (%py-range-holds? r k)
       (%py-in-pull x (%py-range-iter r)))))
 
 ; r.count(x) and r.index(x), placed the same way
 (def %py-range-count
   (fn (_ r x)
-    (def k (%py-boolnorm x))
-    (if (eq? (%py-num-py-type k) (lit int))
+    (def k (py-boolnorm x))
+    (if (eq? (py-num-py-type k) (lit int))
       (if (%py-range-holds? r k) 1 0)
       (%py-range-tally x (%py-range-iter r) 0))))
 (def %py-range-tally
@@ -822,13 +823,13 @@
     (def v (%py-iter-pull! src))
     (match
       ((same? v %py-gen-done) n)
-      ((%py-truthy (%py-eq x v)) (self x src (+ n 1)))
+      ((%py-truthy (py-eq x v)) (self x src (+ n 1)))
       (#t (self x src n)))))
 (def %py-range-index
   (fn (_ r x)
-    (def k (%py-boolnorm x))
+    (def k (py-boolnorm x))
     (match
-      ((not (eq? (%py-num-py-type k) (lit int))) (%py-range-find x (%py-range-iter r) 0))
+      ((not (eq? (py-num-py-type k) (lit int))) (%py-range-find x (%py-range-iter r) 0))
       ((%py-range-holds? r k)
         (Num quotient (- k (%py-range-start r)) (%py-range-step r)))
       (#t (Err raise (lit value) "range.index(x): x not in range" ())))))
@@ -838,10 +839,10 @@
     (match
       ((same? v %py-gen-done)
         (Err raise (lit value) "sequence.index(x): x not in sequence" ()))
-      ((%py-truthy (%py-eq x v)) i)
+      ((%py-truthy (py-eq x v)) i)
       (#t (self x src (+ i 1))))))
 
-(%py-sweep!)
+(py-sweep!)
 ; Two ranges are equal when they hold the same items: the same length, then
 ; the same start past an empty one, then the same step past a single item.
 (def %py-range-eq
@@ -862,7 +863,7 @@
   (fn (_ r)
     (def n (%py-range-length r))
     (%py-hash
-      (%py-tuple-new
+      (py-tuple-new
         (match
           ((= n 0) (list 0 () ()))
           ((= n 1) (list 1 (%py-range-start r) ()))
@@ -903,7 +904,7 @@
       ((Str8 =? name "start") (%py-range-start r))
       ((Str8 =? name "stop") (%py-range-stop r))
       ((Str8 =? name "step") (%py-range-step r))
-      (#t (%py-class-row-attr %py-cls-range r name "range")))))
+      (#t (py-class-row-attr %py-cls-range r name "range")))))
 
 ; --- Dicts -------------------------------------------------------------------
 ;
@@ -915,7 +916,7 @@
 ;
 ; The representation is python/types.x's PY-DICT; what is here is what the
 ; parser calls and what Python's rules say.
-(def %py-dict? (fn (_ v) (%py-dict-is v)))
+(def py-dict? (fn (_ v) (%py-dict-is v)))
 
 (def %py-mkdict
   (fn (_ . entries)
@@ -925,22 +926,22 @@
           ()
           (%seq (%py-check-hashable! (first (first es)) "a dict key") (self (rest es))))))
     (check entries)
-    (%py-dict-new entries)))
+    (py-dict-new entries)))
 
 (def %py-dfind
   (fn (self k entries)
     (if (null? entries)
       ()
-      (if (%py-eq k (first (first entries)))
+      (if (py-eq k (first (first entries)))
         (first entries)
         (self k (rest entries))))))
 
 (def %py-dget
   (fn (_ d k)
-    (let ((e (%py-dfind k (%py-dict-entries d))))
+    (let ((e (%py-dfind k (py-dict-entries d))))
       (if (null? e)
         ; a real instance, so `except KeyError as e: e.args` works
-        (error (%py-instantiate %py-exc-KeyError (list k)))
+        (error (py-instantiate %py-exc-KeyError (list k)))
         (rest e)))))
 
 (def %py-dappend
@@ -952,10 +953,10 @@
 (def %py-dset
   (fn (_ d k v)
     (if (null? (first (first d)))
-      (let ((e (%py-dfind k (%py-dict-entries d))))
+      (let ((e (%py-dfind k (py-dict-entries d))))
         (if (null? e)
           ; A new key goes on the END: insertion order is the printed order.
-          (%py-dict-set! d (%py-dappend (%py-dict-entries d) (pair k v)))
+          (%py-dict-set! d (%py-dappend (py-dict-entries d) (pair k v)))
           (%seq (%set-rest! e v) ())))
       (%py-ns-put! (first (first d)) k v))))
 
@@ -963,82 +964,82 @@
 (def %py-dvals (fn (self entries) (if (null? entries) () (pair (rest (first entries)) (self (rest entries))))))
 
 ; --- The list method surface -------------------------------------------------
-(def %py-els-repeat
-  (fn (self l k acc) (if (<= k 0) acc (self l (- k 1) (%py-list-cat acc l)))))
-(def %py-els-drop-at
+(def py-els-repeat
+  (fn (self l k acc) (if (<= k 0) acc (self l (- k 1) (py-list-cat acc l)))))
+(def py-els-drop-at
   (fn (self l i) (if (null? l) () (if (= i 0) (rest l) (pair (first l) (self (rest l) (- i 1)))))))
-(def %py-els-insert-at
+(def py-els-insert-at
   (fn (self l i v) (if (= i 0) (pair v l) (if (null? l) (list v) (pair (first l) (self (rest l) (- i 1) v))))))
-(def %py-els-set-at
+(def py-els-set-at
   (fn (self l i v) (if (null? l) () (if (= i 0) (pair v (rest l)) (pair (first l) (self (rest l) (- i 1) v))))))
-(def %py-els-index
+(def py-els-index
   (fn (self l i stop v)
     (match
       ((null? l) (- 0 1))
       ((>= i stop) (- 0 1))
-      ((%py-truthy (%py-eq v (first l))) i)
+      ((%py-truthy (py-eq v (first l))) i)
       (#t (self (rest l) (+ i 1) stop v)))))
-(def %py-els-count
+(def py-els-count
   (fn (self l v acc)
-    (if (null? l) acc (self (rest l) v (if (%py-truthy (%py-eq v (first l))) (+ acc 1) acc)))))
+    (if (null? l) acc (self (rest l) v (if (%py-truthy (py-eq v (first l))) (+ acc 1) acc)))))
 (def %py-list-kw-names
   (fn (_ name) (if (Str8 =? name "sort") (list "key" "reverse") ())))
 (def %py-list-norm-i
-  (fn (_ n i) (let ((k (%py-boolnorm i))) (if (< k 0) (+ n k) k))))
-(def %py-list-clamp
+  (fn (_ n i) (let ((k (py-boolnorm i))) (if (< k 0) (+ n k) k))))
+(def py-list-clamp
   (fn (_ n v dflt)
-    (let ((x (if (null? v) dflt (%py-boolnorm v))))
+    (let ((x (if (null? v) dflt (py-boolnorm v))))
       (if (< x 0) (let ((w (+ n x))) (if (< w 0) 0 w)) (if (> x n) n x)))))
 
 (def %py-list-attr
   (fn (_ obj name)
-    (let ((els (%py-list-elems obj)))
-      (let ((n (%py-length els)))
+    (let ((els (py-list-elems obj)))
+      (let ((n (py-length els)))
         (match
           ((Str8 =? name "append")
             (fn (_ . a)
-              (if (not (= (%py-length a) 1))
+              (if (not (= (py-length a) 1))
                 (Err raise (lit type)
                   (Str8 append "list.append() takes exactly one argument ("
-                    (Str8 append (%py-str (%py-length a)) " given)")) ())
-                (%py-list-set! obj (%py-append-elem (%py-list-elems obj) (first a))))))
+                    (Str8 append (py-str (py-length a)) " given)")) ())
+                (%py-list-set! obj (%py-append-elem (py-list-elems obj) (first a))))))
           ((Str8 =? name "extend")
-            (fn (_ it) (%py-list-set! obj (%py-list-cat (%py-list-elems obj) (%py-iter-elems it)))))
+            (fn (_ it) (%py-list-set! obj (py-list-cat (py-list-elems obj) (py-iter-elems it)))))
           ((Str8 =? name "insert")
-            (fn (_ i v) (%py-list-set! obj (%py-els-insert-at (%py-list-elems obj) (%py-list-clamp n i 0) v))))
+            (fn (_ i v) (%py-list-set! obj (py-els-insert-at (py-list-elems obj) (py-list-clamp n i 0) v))))
           ; The keyword door hands sort exactly two slots (key, reverse); a
           ; call that arrives with any other count gave positional arguments,
           ; which sort does not take.
           ((Str8 =? name "sort")
             (fn (_ . a)
-              (if (if (null? a) #f (not (= (%py-length a) 2)))
+              (if (if (null? a) #f (not (= (py-length a) 2)))
                 (Err raise (lit type) "sort() takes no positional arguments" ())
                 ())
-              (let ((key (%py-opt a 0 ())))
-                (let ((rev (%py-opt a 1 #f)))
-                  (let ((l (%py-msort-by (%py-list-elems obj) (if (null? key) %py-ident key))))
-                    (%py-list-set! obj (if (%py-truthy rev) (%py-reverse l) l)))))))
+              (let ((key (py-opt a 0 ())))
+                (let ((rev (py-opt a 1 #f)))
+                  (let ((l (%py-msort-by (py-list-elems obj) (if (null? key) %py-ident key))))
+                    (%py-list-set! obj (if (%py-truthy rev) (py-reverse l) l)))))))
           ((Str8 =? name "reverse")
-            (fn (_) (%py-list-set! obj (%py-reverse (%py-list-elems obj)))))
+            (fn (_) (%py-list-set! obj (py-reverse (py-list-elems obj)))))
           ((Str8 =? name "clear") (fn (_) (%py-list-set! obj ())))
           ((Str8 =? name "copy")
-            (fn (_) (%py-list-new (%py-list-elems obj))))
+            (fn (_) (py-list-new (py-list-elems obj))))
           ((Str8 =? name "count")
-            (fn (_ v) (%py-els-count (%py-list-elems obj) v 0)))
+            (fn (_ v) (py-els-count (py-list-elems obj) v 0)))
           ((Str8 =? name "index")
             (fn (_ v . a)
-              (let ((lo (%py-list-clamp n (%py-s-arg a 0) 0)))
-                (let ((hi (%py-list-clamp n (%py-s-arg a 1) n)))
-                  (let ((i (%py-els-index (%py-drop els lo) lo hi v)))
+              (let ((lo (py-list-clamp n (%py-s-arg a 0) 0)))
+                (let ((hi (py-list-clamp n (%py-s-arg a 1) n)))
+                  (let ((i (py-els-index (py-drop els lo) lo hi v)))
                     (if (< i 0)
-                      (error (%py-instantiate %py-exc-ValueError (list (Str8 append (%py-repr-of v) " is not in list"))))
+                      (error (py-instantiate py-exc-ValueError (list (Str8 append (py-repr-of v) " is not in list"))))
                       i))))))
           ((Str8 =? name "remove")
             (fn (_ v)
-              (let ((i (%py-els-index (%py-list-elems obj) 0 n v)))
+              (let ((i (py-els-index (py-list-elems obj) 0 n v)))
                 (if (< i 0)
-                  (error (%py-instantiate %py-exc-ValueError (list "list.remove(x): x not in list")))
-                  (%py-list-set! obj (%py-els-drop-at (%py-list-elems obj) i))))))
+                  (error (py-instantiate py-exc-ValueError (list "list.remove(x): x not in list")))
+                  (%py-list-set! obj (py-els-drop-at (py-list-elems obj) i))))))
           ((Str8 =? name "pop")
             (fn (_ . a)
               (if (= n 0)
@@ -1046,14 +1047,14 @@
                 (let ((i (if (null? a) (- n 1) (%py-list-norm-i n (first a)))))
                   (if (if (< i 0) #t (>= i n))
                     (Err raise (lit index) "pop index out of range" ())
-                    (let ((v (List ref i (%py-list-elems obj))))
-                      (%seq (%py-list-set! obj (%py-els-drop-at (%py-list-elems obj) i)) v)))))))
+                    (let ((v (List ref i (py-list-elems obj))))
+                      (%seq (%py-list-set! obj (py-els-drop-at (py-list-elems obj) i)) v)))))))
           ((Str8 =? name "__getitem__") (fn (_ i) (%py-index obj i)))
           ((Str8 =? name "__setitem__")
-            (fn (_ i v) (%py-list-set! obj (%py-els-set-at (%py-list-elems obj) (%py-list-norm-i n i) v))))
+            (fn (_ i v) (%py-list-set! obj (py-els-set-at (py-list-elems obj) (%py-list-norm-i n i) v))))
           ((Str8 =? name "__delitem__")
-            (fn (_ i) (%py-list-set! obj (%py-els-drop-at (%py-list-elems obj) (%py-list-norm-i n i)))))
-          (#t (%py-class-row-attr %py-cls-list obj name "list")))))))
+            (fn (_ i) (%py-list-set! obj (py-els-drop-at (py-list-elems obj) (%py-list-norm-i n i)))))
+          (#t (py-class-row-attr %py-cls-list obj name "list")))))))
 
 ; A tuple's count and index, read as a list's are, and the tuple class's rows
 ; for any other name.
@@ -1062,74 +1063,74 @@
     (match
       ((Str8 =? name "count")
         (fn (_ . a)
-          (if (= (%py-length a) 1)
-            (%py-els-count (%py-tuple-elems t) (first a) 0)
+          (if (= (py-length a) 1)
+            (py-els-count (py-tuple-elems t) (first a) 0)
             (Err raise (lit type)
               (Str8 append "tuple.count() takes exactly one argument ("
-                (Str8 append (%py-str (%py-length a)) " given)")) ()))))
+                (Str8 append (py-str (py-length a)) " given)")) ()))))
       ((Str8 =? name "index")
         (fn (_ . a)
           (if (null? a)
             (Err raise (lit type) "index expected at least 1 argument, got 0" ())
-            (let ((els (%py-tuple-elems t)))
-              (let ((n (%py-length els)))
-                (let ((lo (%py-list-clamp n (%py-s-arg a 1) 0))
-                      (hi (%py-list-clamp n (%py-s-arg a 2) n)))
-                  (let ((i (%py-els-index (%py-drop els lo) lo hi (first a))))
+            (let ((els (py-tuple-elems t)))
+              (let ((n (py-length els)))
+                (let ((lo (py-list-clamp n (%py-s-arg a 1) 0))
+                      (hi (py-list-clamp n (%py-s-arg a 2) n)))
+                  (let ((i (py-els-index (py-drop els lo) lo hi (first a))))
                     (if (< i 0)
-                      (error (%py-instantiate %py-exc-ValueError
+                      (error (py-instantiate py-exc-ValueError
                                (list "tuple.index(x): x not in tuple")))
                       i))))))))
-      (#t (%py-class-row-attr %py-cls-tuple t name "tuple")))))
+      (#t (py-class-row-attr py-cls-tuple t name "tuple")))))
 
-(%py-sweep!)
+(py-sweep!)
 ; --- Dict helpers ------------------------------------------------------------
 (def %py-ditems
   (fn (self es)
-    (if (null? es) () (pair (%py-tuple-new (list (first (first es)) (rest (first es)))) (self (rest es))))))
+    (if (null? es) () (pair (py-tuple-new (list (first (first es)) (rest (first es)))) (self (rest es))))))
 (def %py-dict-drop
   (fn (self es k)
     (if (null? es) ()
-      (if (%py-truthy (%py-eq k (first (first es))))
+      (if (%py-truthy (py-eq k (first (first es))))
         (self (rest es) k)
         (pair (first es) (self (rest es) k))))))
 (def %py-pairs-of
   (fn (self vs acc)
-    (if (null? vs) (%py-reverse acc)
-      (let ((kv (%py-iter-elems (first vs))))
-        (if (not (= (%py-length kv) 2))
-          (error (%py-instantiate %py-exc-ValueError
+    (if (null? vs) (py-reverse acc)
+      (let ((kv (py-iter-elems (first vs))))
+        (if (not (= (py-length kv) 2))
+          (error (py-instantiate py-exc-ValueError
             (list (Str8 append
                     (Str8 append "dictionary update sequence element has length "
-                      (%py-str (%py-length kv)))
+                      (py-str (py-length kv)))
                     "; 2 is required"))))
           (self (rest vs) (pair (pair (first kv) (first (rest kv))) acc)))))))
 ; A mapping argument as the dict constructors read it: a dict subclass instance
 ; stands for the dict it carries, and anything else is itself.
 (def %py-dict-arg
   (fn (_ v)
-    (let ((n (%py-native-of v))) (if (%py-dict-is n) n v))))
+    (let ((n (py-native-of v))) (if (%py-dict-is n) n v))))
 (def %py-dict-merge!
   (fn (_ d o0)
     (let ((o (%py-dict-arg o0)))
-      (let ((rows (if (%py-dict? o) (%py-dict-copy (%py-dict-entries o)) (%py-pairs-of (%py-iter-elems o) ()))))
+      (let ((rows (if (py-dict? o) (%py-dict-copy (py-dict-entries o)) (%py-pairs-of (py-iter-elems o) ()))))
         (let ((put (fn (self l) (if (null? l) () (%seq (%py-dset d (first (first l)) (rest (first l))) (self (rest l)))))))
           (put rows))))))
 (def %py-ddel
   (fn (_ d k)
-    (if (null? (%py-dfind k (%py-dict-entries d)))
-      (error (%py-instantiate %py-exc-KeyError (list k)))
-      (%py-dict-set! d (%py-dict-drop (%py-dict-entries d) k)))))
+    (if (null? (%py-dfind k (py-dict-entries d)))
+      (error (py-instantiate %py-exc-KeyError (list k)))
+      (%py-dict-set! d (%py-dict-drop (py-dict-entries d) k)))))
 ; dict.fromkeys, a classmethod: dict answers a new dict, and a subclass is
 ; called with no arguments and each key stored through its __setitem__, as in
 ; Python.
 (def %py-dict-fromkeys
   (fn (_ cls it . v)
     (let ((val (if (null? v) () (first v))))
-      (if (same? cls %py-cls-dict)
-        (let ((go (fn (self ks acc) (if (null? ks) (%py-reverse acc) (self (rest ks) (pair (pair (first ks) val) acc))))))
-          (%py-dict-new (go (%py-iter-elems it) ())))
-        (%py-fromkeys-put! (%py-instantiate cls ()) (%py-iter-elems it) val)))))
+      (if (same? cls py-cls-dict)
+        (let ((go (fn (self ks acc) (if (null? ks) (py-reverse acc) (self (rest ks) (pair (pair (first ks) val) acc))))))
+          (py-dict-new (go (py-iter-elems it) ())))
+        (%py-fromkeys-put! (py-instantiate cls ()) (py-iter-elems it) val)))))
 (def %py-fromkeys-put!
   (fn (self o ks val)
     (if (null? ks) o (%seq (%py-setindex o (first ks) val) (self o (rest ks) val)))))
@@ -1138,45 +1139,45 @@
   (fn (_ d name)
     (match
       ((Str8 =? name "keys")
-        (fn (_) (%py-view-new "dict_keys" (%py-dkeys (%py-dict-entries d)))))
+        (fn (_) (%py-view-new "dict_keys" (%py-dkeys (py-dict-entries d)))))
       ((Str8 =? name "values")
-        (fn (_) (%py-view-new "dict_values" (%py-dvals (%py-dict-entries d)))))
+        (fn (_) (%py-view-new "dict_values" (%py-dvals (py-dict-entries d)))))
       ((Str8 =? name "items")
-        (fn (_) (%py-view-new "dict_items" (%py-ditems (%py-dict-entries d)))))
+        (fn (_) (%py-view-new "dict_items" (%py-ditems (py-dict-entries d)))))
       ((Str8 =? name "get")
         (fn (_ k . dflt)
-          (let ((e (%py-dfind k (%py-dict-entries d))))
+          (let ((e (%py-dfind k (py-dict-entries d))))
             (if (null? e) (if (null? dflt) () (first dflt)) (rest e)))))
       ((Str8 =? name "setdefault")
         (fn (_ k . dflt)
-          (let ((e (%py-dfind k (%py-dict-entries d))))
+          (let ((e (%py-dfind k (py-dict-entries d))))
             (if (not (null? e))
               (rest e)
               (let ((v (if (null? dflt) () (first dflt))))
                 (%seq (%py-dset d k v) v))))))
       ((Str8 =? name "pop")
         (fn (_ k . dflt)
-          (let ((e (%py-dfind k (%py-dict-entries d))))
+          (let ((e (%py-dfind k (py-dict-entries d))))
             (if (null? e)
-              (if (null? dflt) (error (%py-instantiate %py-exc-KeyError (list k))) (first dflt))
-              (%seq (%py-dict-set! d (%py-dict-drop (%py-dict-entries d) k)) (rest e))))))
+              (if (null? dflt) (error (py-instantiate %py-exc-KeyError (list k))) (first dflt))
+              (%seq (%py-dict-set! d (%py-dict-drop (py-dict-entries d) k)) (rest e))))))
       ((Str8 =? name "popitem")
         (fn (_)
-          (let ((rows (%py-dict-entries d)))
+          (let ((rows (py-dict-entries d)))
             (if (null? rows)
-              (error (%py-instantiate %py-exc-KeyError (list "popitem(): dictionary is empty")))
-              (let ((last (List ref (- (%py-length rows) 1) rows)))
-                (%seq (%py-dict-set! d (%py-drop-last rows))
-                  (%py-tuple-new (list (first last) (rest last)))))))))
+              (error (py-instantiate %py-exc-KeyError (list "popitem(): dictionary is empty")))
+              (let ((last (List ref (- (py-length rows) 1) rows)))
+                (%seq (%py-dict-set! d (py-drop-last rows))
+                  (py-tuple-new (list (first last) (rest last)))))))))
       ((Str8 =? name "update")
         (fn (_ . a) (if (null? a) () (%py-dict-merge! d (first a)))))
       ((Str8 =? name "clear") (fn (_) (%py-dict-set! d ())))
       ((Str8 =? name "copy")
-        (fn (_) (%py-dict-new (%py-dict-copy (%py-dict-entries d)))))
+        (fn (_) (py-dict-new (%py-dict-copy (py-dict-entries d)))))
       ((Str8 =? name "__contains__")
-        (fn (_ k) (not (null? (%py-dfind k (%py-dict-entries d))))))
+        (fn (_ k) (not (null? (%py-dfind k (py-dict-entries d))))))
       ((Str8 =? name "__getitem__") (fn (_ k) (%py-dget d k)))
       ((Str8 =? name "__setitem__") (fn (_ k v) (%py-dset d k v)))
       ((Str8 =? name "__delitem__") (fn (_ k) (%py-ddel d k)))
-      (#t (%py-class-row-attr %py-cls-dict d name "dict")))))
+      (#t (py-class-row-attr py-cls-dict d name "dict")))))
 

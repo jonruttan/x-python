@@ -25,6 +25,7 @@
 ; rebound to this value instead; a name the program never binds, and each name
 ; a def's body binds, start out bound to it.  Only the reads that may find it
 ; go through a check.
+(module python/core)
 (def %py-deleted (pair (lit %py-deleted) ()))
 
 (def %py-name-missing!
@@ -71,6 +72,11 @@
 ; The root, reached from any environment through its parents.
 (def %py-root
   (fn (self e) (if (null? (rest e)) e (self (rest e)))))
+
+; The environment Python's modules hang from.  It was the root, found by
+; walking up from here; it is this module's own environment now, so the
+; forms the compiler builds, which name the core's helpers, resolve them.
+(def %py-base-env (%py-here))
 
 ; SYM bound to V in ENV itself, as x-lang's loader defines in a module: the
 ; value is quoted, so a symbol is bound as itself and not looked up.
@@ -121,36 +127,36 @@
 ; (%py-find).  Anything else raises ModuleNotFoundError, an ImportError, which
 ; is what the corpus's own feature probes expect, since they wrap an import in
 ; a try and print SKIP when it fails.
-; The type is %py-module: %py-mod is Python's `%`.
+; The type is %py-module: py-mod is Python's `%`.
 (def %py-module ())
-(def %py-mod-new (fn (_ env) (%make-instance %py-module (list env))))
-(def %py-mod-is (fn (_ v) (%type? v %py-module)))
+(def %py-mod-new (fn (_ env) (make-instance %py-module (list env))))
+(def %py-mod-is (fn (_ v) (type? v %py-module)))
 (def %py-mod-env (fn (_ m) (first (first m))))
 
 ; type() and isinstance see one class for every module.
-(def %py-cls-module (%py-class-new "module" %py-cls-object () "module"))
+(def %py-cls-module (py-class-new "module" py-cls-object () "module"))
 
 ; --- code objects --------------------------------------------------------------
 ; What compile() answers and what eval and exec take beside a string: the
 ; forms the source parsed to, the mode it was parsed in, and the file it was
 ; said to come from.  A function's code, its __code__, is the same value in
 ; the mode `function`: its one form is the fn the def or lambda compiled to,
-; and RECORD is what %py-sig! is told of it -- (NAME NAMES NREQ HAS-REST
+; and RECORD is what py-sig! is told of it -- (NAME NAMES NREQ HAS-REST
 ; KWNAME KWONLY) -- so the function can be made again over other globals
 ; (python/base.x, %py-function-over).  There is no bytecode here, so a code
 ; object has no co_code and nothing that counts in it.
 (def %py-code ())
 (def %py-code-new
   (fn (_ mode forms file name record)
-    (%make-instance %py-code (list mode forms file name record))))
-(def %py-code-is (fn (_ v) (%type? v %py-code)))
+    (make-instance %py-code (list mode forms file name record))))
+(def %py-code-is (fn (_ v) (type? v %py-code)))
 (def %py-code-mode (fn (_ c) (first (first c))))
 (def %py-code-forms (fn (_ c) (List ref 1 (first c))))
 (def %py-code-file (fn (_ c) (List ref 2 (first c))))
 (def %py-code-name (fn (_ c) (List ref 3 (first c))))
 (def %py-code-record (fn (_ c) (List ref 4 (first c))))
 (def %py-cls-code
-  (%py-class-new "code" %py-cls-object (list (pair "%final" #t)) "code"))
+  (py-class-new "code" py-cls-object (list (pair "%final" #t)) "code"))
 
 ; <code object NAME at 0xADDR, file "FILE">
 (def %py-code-repr
@@ -158,11 +164,11 @@
     (Str8 append "<code object "
       (Str8 append (%py-code-name c)
         (Str8 append " at "
-          (Str8 append (%py-str (%py-hex (%py-id c)))
+          (Str8 append (py-str (%py-hex (%py-id c)))
             (Str8 append ", file \""
               (Str8 append (%py-code-file c) "\">"))))))))
 (set! %py-code
-  (%make-type
+  (make-type
     "PY-CODE"
     (list
       (pair (lit write) (fn (_ self) (display (%py-code-repr self)))))))
@@ -170,8 +176,8 @@
 (def %py-code-attr
   (fn (_ c name)
     (match
-      ((Str8 =? name "co_name") (%py-str-of-x (%py-code-name c)))
-      ((Str8 =? name "co_filename") (%py-str-of-x (%py-code-file c)))
+      ((Str8 =? name "co_name") (py-str-of-x (%py-code-name c)))
+      ((Str8 =? name "co_filename") (py-str-of-x (%py-code-file c)))
       (#t
         (Err raise (lit attribute)
           (Str8 append "'code' object has no attribute '" (Str8 append name "'")) ())))))
@@ -195,7 +201,7 @@
 (def %py-mod-no-attr
   (fn (_ m name)
     (Err raise (lit attribute)
-      (Str8 append (Str8 append "module '" (%py-text->x (%py-mod-own m "__name__")))
+      (Str8 append (Str8 append "module '" (py-text->x (%py-mod-own m "__name__")))
         (Str8 append "' has no attribute '" (Str8 append name "'")))
       ())))
 
@@ -215,7 +221,7 @@
             (let ((ga (%py-mod-own m "__getattr__")))
               (if (same? ga %py-mod-missing)
                 (%py-mod-no-attr m name)
-                (%py-call ga (%py-str-of-x name))))))))))
+                (%py-call ga (py-str-of-x name))))))))))
 
 ; `m.name = v` binds in the module's environment, where its code finds it;
 ; `del m.name` is the module's own `del name`.  The prompt's builtins are the
@@ -232,14 +238,14 @@
       ((same? (%py-mod-own m name) %py-mod-missing) (%py-mod-no-attr m name))
       (#t (%seq (%py-env-def! (%py-mod-env m) (%py-name->sym name) %py-deleted) ())))))
 
-(%py-sweep!)
+(py-sweep!)
 ; The module's names with their values, ("name" . value) rows in the order
 ; the module bound them, the deleted ones left out; the builtins module's are
 ; the builtins'.
 (def %py-mod-rows
   (fn (_ m)
     (if (%py-mod-builtins? m)
-      (%py-builtins-rows m %py-builtins)
+      (%py-builtins-rows m py-builtins)
       (%py-env-rows (first (%py-mod-env m)) ()))))
 
 ; --- the builtins module ------------------------------------------------------
@@ -250,7 +256,7 @@
 ; where every module of the program finds it first.  A module value marks it
 ; with a second field.
 (def %py-builtins-module
-  (fn (_) (%make-instance %py-module (list (%py-builtins-now) (lit builtins)))))
+  (fn (_) (make-instance %py-module (list (%py-builtins-now) (lit builtins)))))
 (def %py-mod-builtins? (fn (_ m) (not (null? (rest (first m))))))
 (def %py-builtins-fixed!
   (fn (_)
@@ -258,7 +264,7 @@
 (def %py-builtins-attr
   (fn (_ m name)
     (if (Str8 =? name "__name__")
-      (%py-str-of-x "builtins")
+      (py-str-of-x "builtins")
       (let ((sym (%py-name->sym name)))
         (if (symbol? sym)
           (guard (_ (Err raise (lit attribute)
@@ -285,11 +291,11 @@
 ; A module this runtime writes: an environment made from its rows, its
 ; __name__ bound first, as a module's is before its first statement runs, and
 ; a scope that holds its namespace dict, as a program's does (python/base.x).
-(def %py-module-new
+(def py-module-new
   (fn (_ name rows)
     (def env
-      (pair (%py-rows->cells (pair (pair "__name__" (%py-str-of-x name)) rows) ())
-        (pair () (%py-root (%py-here)))))
+      (pair (%py-rows->cells (pair (pair "__name__" (py-str-of-x name)) rows) ())
+        (pair () %py-base-env)))
     (%py-env-def! (rest env) (lit %py-ns) (%py-ns-new env))
     (%py-mod-new env)))
 (def %py-rows->cells
@@ -301,16 +307,16 @@
 
 ; A module prints as its name and where it came from.
 (set! %py-module
-  (%make-type
+  (make-type
     "PY-MODULE"
     (list
       (pair (lit write)
         (fn (_ self)
-          (display "<module '" (%py-text->x (%py-mod-own self "__name__")) "'")
+          (display "<module '" (py-text->x (%py-mod-own self "__name__")) "'")
           (let ((f (%py-mod-own self "__file__")))
             (if (same? f %py-mod-missing)
               (display " (built-in)>")
-              (display " from '" (%py-text->x f) "'>"))))))))
+              (display " from '" (py-text->x f) "'>"))))))))
 
 ; A program's modules, its search path and its builtins: the dict sys.modules
 ; is, the list sys.path is, and the environment the builtins module is, which
@@ -321,10 +327,10 @@
 ; its builtins are the root, which the prompt's lines are evaluated in.
 (def %py-program-new
   (fn (_ dir builtins)
-    (list (%py-dict-new ()) (%py-list-new (list (%py-str-of-x dir))) builtins)))
-(def %py-program (list (%py-program-new "" (%py-root (%py-here)))))
-(def %py-modules-now (fn (_) (first (first %py-program))))
-(def %py-path-now (fn (_) (first (rest (first %py-program)))))
+    (list (py-dict-new ()) (py-list-new (list (py-str-of-x dir))) builtins)))
+(def %py-program (list (%py-program-new "" %py-base-env)))
+(def py-modules-now (fn (_) (first (first %py-program))))
+(def py-path-now (fn (_) (first (rest (first %py-program)))))
 (def %py-builtins-now (fn (_) (first (rest (rest (first %py-program))))))
 
 ; --- a module's namespace as a dict -----------------------------------------
@@ -335,7 +341,7 @@
 ; environment, where the module's code finds it (python/types.x).  Each
 ; module keeps one in its scope, bound to %py-ns, so it is the same object
 ; every time it is asked for.
-(def %py-ns-new (fn (_ env) (%make-instance %py-dict (pair env ()))))
+(def %py-ns-new (fn (_ env) (make-instance %py-dict (pair env ()))))
 (def %py-ns-entries
   (fn (_ env) (%py-attr-entries (%py-env-rows (first env) ()))))
 (def %py-env-ns
@@ -346,8 +352,8 @@
 ; K, a str, bound to V in ENV.
 (def %py-ns-put!
   (fn (_ env k v)
-    (if (%py-str-is k)
-      (%seq (%py-env-def! env (%py-name->sym (%py-text->x k)) v) ())
+    (if (py-str-is k)
+      (%seq (%py-env-def! env (%py-name->sym (py-text->x k)) v) ())
       (Err raise (lit type) "a module's namespace takes str keys only here" ()))))
 
 ; ENV's names made to be ENTRIES: each bound to its value, and each name
@@ -369,7 +375,7 @@
     (if (null? rows)
       ()
       (%seq
-        (if (null? (%py-dfind (%py-str-of-x (first (first rows))) entries))
+        (if (null? (%py-dfind (py-str-of-x (first (first rows))) entries))
           (%py-env-def! env (%py-name->sym (first (first rows))) %py-deleted)
           ())
         (self env (rest rows) entries)))))
@@ -399,7 +405,7 @@
     (match
       ((same? f %py-dir) (%py-dir-sorted (%py-dir-keys (first rows) ())))
       ((if (same? f %py-locals) #t (same? f %py-vars))
-        (%py-dict-new (%py-attr-entries (%py-reverse (first rows)))))
+        (py-dict-new (%py-attr-entries (py-reverse (first rows)))))
       (#t (%py-call f)))))
 
 ; THE MODULE A PIECE OF CODE IS IN is found as any name is: its scope binds
@@ -430,7 +436,7 @@
       (match
         ((null? ns) (%py-no-namespace!))
         ((%py-in-fn? env (first (first ns)))
-          (%py-dict-new (%py-attr-entries (%py-frame-rows env (first (first ns)) ()))))
+          (py-dict-new (%py-attr-entries (%py-frame-rows env (first (first ns)) ()))))
         (#t ns)))))
 ; Whether a function's call frame is among the environments from ENV out to
 ; the module's, TOP.
@@ -462,7 +468,7 @@
   (fn (self rows named)
     (match
       ((null? rows) ())
-      ((null? (%py-alist-find (first (first rows)) named))
+      ((null? (py-alist-find (first (first rows)) named))
         (pair (first rows) (self (rest rows) named)))
       (#t (self (rest rows) named)))))
 
@@ -473,13 +479,13 @@
     (Err raise (lit type)
       (Str8 append who "() called by another name has no namespace to answer with") ())))
 (def %py-locals
-  (%py-sig! (fn (_) (%py-bare-refuse "locals")) "locals" () 0 #f))
+  (py-sig! (fn (_) (%py-bare-refuse "locals")) "locals" () 0 #f))
 (def %py-vars
-  (%py-sig!
+  (py-sig!
     (fn (_ . a) (if (null? a) (%py-bare-refuse "vars") (%py-getattr (first a) "__dict__")))
     "vars" (list "object") 0 #f))
 
-(%py-sweep!)
+(py-sweep!)
 ; --- the math module ------------------------------------------------------
 ;
 ; Python's math is libm's surface with Python's edges: an argument may be an
@@ -506,7 +512,7 @@
 ; dynamic-wind to hang cleanup on, and inventing one here would be a second
 ; mechanism for something the whole runtime needs once.
 
-; THE RECEIVER IS CHECKED BEFORE IT IS ASKED.  %py-dunder reads the class out
+; THE RECEIVER IS CHECKED BEFORE IT IS ASKED.  py-dunder reads the class out
 ; of an instance, so handing it an int walks a number as though it were one --
 ; `with 42:` SEGFAULTED before this guard, the same pattern as a shim arriving
 ; as a class base.
@@ -516,10 +522,10 @@
 (def %py-ctx-method
   (fn (_ m name)
     (match
-      ((%py-io-is m) (%py-getattr m name))
-      ((not (%py-obj-is m)) (%py-ctx-error m))
+      ((py-io-is m) (%py-getattr m name))
+      ((not (py-obj-is m)) (%py-ctx-error m))
       (#t
-        (let ((f (%py-dunder m name)))
+        (let ((f (py-dunder m name)))
           (if (null? f) (%py-ctx-error m) f))))))
 
 (def %py-ctx-error
@@ -563,14 +569,14 @@
 ; it raises StopAsyncIteration.
 (def %py-aiter
   (fn (_ v)
-    (if (not (%py-obj-is v))
+    (if (not (py-obj-is v))
       (Err raise (lit type) "async for requires an object with __aiter__" ())
-      (let ((f (%py-dunder v "__aiter__")))
+      (let ((f (py-dunder v "__aiter__")))
         (if (null? f) (Err raise (lit type) "async for requires an object with __aiter__" ()) (f))))))
 
 (def %py-anext-co
   (fn (_ it)
-    (let ((f (%py-dunder it "__anext__")))
+    (let ((f (py-dunder it "__anext__")))
       (if (null? f)
         (Err raise (lit type) "async for requires an object with __anext__" ())
         (f)))))
@@ -588,41 +594,41 @@
 ; matcher walks, and Err carries its text as the SUBJECT).
 (def %py-exc-instance-of
   (fn (_ e)
-    (if (%py-obj-is e)
+    (if (py-obj-is e)
       e
-      (%py-instantiate (%py-exc-class-of e) (list (Err subject-of e))))))
+      (py-instantiate (%py-exc-class-of e) (list (Err subject-of e))))))
 
 ; The float a math function reads: an int converts, a float is itself, an
 ; instance answers through __float__, and anything else is Python's TypeError.
-(def %py-mfloat
+(def py-mfloat
   (fn (_ x)
-    (let ((n (%py-boolnorm x)))
-      (let ((k (%py-num-py-type n)))
+    (let ((n (py-boolnorm x)))
+      (let ((k (py-num-py-type n)))
         (match
           ((eq? k (lit float)) n)
           ((eq? k (lit int)) (* n 1.0))
-          ((%py-obj-is n)
-            (if (null? (%py-dunder n "__float__"))
+          ((py-obj-is n)
+            (if (null? (py-dunder n "__float__"))
               (%py-mfloat-refused n)
               (%py-obj-float n)))
           (#t (%py-mfloat-refused n)))))))
 (def %py-mfloat-refused
   (fn (_ v)
     (Err raise (lit type)
-      (Str8 append "must be real number, not " (%py-class-name (%py-type-of v))) ())))
+      (Str8 append "must be real number, not " (py-class-name (py-type-of v))) ())))
 
 ; a domain error is Python's, not a NaN
-(def %py-mdomain
-  (fn (_) (%py-raise (%py-instantiate %py-exc-ValueError (list "math domain error")))))
+(def py-mdomain
+  (fn (_) (py-raise (py-instantiate py-exc-ValueError (list "math domain error")))))
 
 ; A domain error naming the input the function expected and the float it got,
 ; in CPython's words, or math domain error for a function with no such words.
 (def %py-mdomain-got
   (fn (_ expected v)
     (if (null? expected)
-      (%py-mdomain)
-      (%py-raise (%py-instantiate %py-exc-ValueError
-        (list (Str8 append expected (Str8 append ", got " (%py-repr-of v)))))))))
+      (py-mdomain)
+      (py-raise (py-instantiate py-exc-ValueError
+        (list (Str8 append expected (Str8 append ", got " (py-repr-of v)))))))))
 
 ; A one-argument function whose result is read as CPython's math_1 reads it: a
 ; NaN from an argument that was not one is a domain error, and an infinity from
@@ -631,12 +637,12 @@
 (def %py-math-1
   (fn (_ f can-overflow expected)
     (fn (_ x)
-      (let ((v (%py-mfloat x)))
+      (let ((v (py-mfloat x)))
         (let ((r (f v)))
           (match
             ((Float nan? r) (if (Float nan? v) r (%py-mdomain-got expected v)))
             ((if (Float inf? r) (Float finite? v) #f)
-              (if can-overflow (%py-mrange-error) (%py-mdomain-got expected v)))
+              (if can-overflow (py-mrange-error) (%py-mdomain-got expected v)))
             (#t r)))))))
 
 ; A NaN or an infinity has no integer for floor, ceil or trunc to answer.
@@ -645,7 +651,7 @@
     (if (Float nan? v)
       (Err raise (lit value) "cannot convert float NaN to integer" ())
       (if (Float inf? v)
-        (%py-raise (%py-instantiate %py-exc-OverflowError
+        (py-raise (py-instantiate %py-exc-OverflowError
           (list "cannot convert float infinity to integer")))
         v))))
 
@@ -655,10 +661,10 @@
 ; refuses an infinity or a NaN, and comes back an int.
 (def %py-mwhole
   (fn (_ x k)
-    (let ((n (%py-boolnorm x)))
-      (if (eq? (%py-num-py-type n) (lit int))
+    (let ((n (py-boolnorm x)))
+      (if (eq? (py-num-py-type n) (lit int))
         n
-        (let ((v (%py-mfinite (%py-mfloat n))))
+        (let ((v (%py-mfinite (py-mfloat n))))
           (let ((w (match
                      ((eq? k (lit floor)) (Float floor v))
                      ((eq? k (lit ceil)) (Float ceil v))
@@ -672,15 +678,14 @@
 (def %py-mwhole-low (- 0.0 4611686018427387904.0))
 ; A double from 2**62 up is its 52-bit mantissa with the hidden bit, times two
 ; to what its exponent says -- at that size 2**10 or more -- so its integer is
-; exact arithmetic on the pattern %py-ieee-raw reads.
-(def %py-f-2p52 4503599627370496)
+; exact arithmetic on the pattern py-ieee-raw reads.
 (def %py-mwhole-bits
   (fn (_ w)
-    (let ((u (%py-ieee-raw w)))
-      (let ((neg (>= u %py-ieee-2p63)))
-        (let ((low (if neg (- u %py-ieee-2p63) u)))
-          (let ((mag (* (+ %py-f-2p52 (% low %py-f-2p52))
-                        (Num expt 2 (- (Num quotient low %py-f-2p52) 1075)))))
+    (let ((u (py-ieee-raw w)))
+      (let ((neg (>= u py-ieee-2p63)))
+        (let ((low (if neg (- u py-ieee-2p63) u)))
+          (let ((mag (* (+ py-f-2p52 (% low py-f-2p52))
+                        (Num expt 2 (- (Num quotient low py-f-2p52) 1075)))))
             (if neg (- 0 mag) mag)))))))
 
 ; log, log2 and log10.  An int argument is checked before it converts, as
@@ -689,9 +694,9 @@
   (fn (_ f)
     (let ((g (%py-math-1 f #f "expected a positive input")))
       (fn (_ x)
-        (let ((n (%py-boolnorm x)))
-          (if (if (eq? (%py-num-py-type n) (lit int)) (not (< 0 n)) #f)
-            (%py-raise (%py-instantiate %py-exc-ValueError (list "expected a positive input")))
+        (let ((n (py-boolnorm x)))
+          (if (if (eq? (py-num-py-type n) (lit int)) (not (< 0 n)) #f)
+            (py-raise (py-instantiate py-exc-ValueError (list "expected a positive input")))
             (g n)))))))
 
 ; log(x), and log(x, base) as the quotient Python divides, where a base whose
@@ -704,7 +709,7 @@
         num
         (let ((den (%py-mlog-1 (first b))))
           (if (= den 0.0)
-            (%py-raise (%py-instantiate %py-exc-ZeroDivisionError (list "division by zero")))
+            (py-raise (py-instantiate %py-exc-ZeroDivisionError (list "division by zero")))
             (/ num den)))))))
 
 ; pow of two finite floats reads libm's answer as CPython does: a NaN is a
@@ -715,11 +720,11 @@
     (let ((r (Float pow x y)))
       (match
         ((not (if (Float finite? x) (Float finite? y) #f)) r)
-        ((Float nan? r) (%py-mdomain))
-        ((Float inf? r) (if (= x 0.0) (%py-mdomain) (%py-mrange-error)))
+        ((Float nan? r) (py-mdomain))
+        ((Float inf? r) (if (= x 0.0) (py-mdomain) (py-mrange-error)))
         (#t r)))))
 
-(%py-sweep!)
+(py-sweep!)
 ; --- the libm entries lib/x/num/float.x does not bind ---------------------------
 ; Each is one row through that file's own door, the way it binds sin and exp:
 ; the address resolves once into a cell a state image re-resolves.  Nothing here
@@ -733,22 +738,22 @@
 (def %py-ferfc     (%py-libm-fn (lit %py-ferfc)     "d->d"  "erfc"))
 (def %py-ftgamma   (%py-libm-fn (lit %py-ftgamma)   "d->d"  "tgamma"))
 (def %py-flgamma   (%py-libm-fn (lit %py-flgamma)   "d->d"  "lgamma"))
-(def %py-fsinh     (%py-libm-fn (lit %py-fsinh)     "d->d"  "sinh"))
-(def %py-fcosh     (%py-libm-fn (lit %py-fcosh)     "d->d"  "cosh"))
-(def %py-ftanh     (%py-libm-fn (lit %py-ftanh)     "d->d"  "tanh"))
-(def %py-fasinh    (%py-libm-fn (lit %py-fasinh)    "d->d"  "asinh"))
+(def py-fsinh     (%py-libm-fn (lit py-fsinh)     "d->d"  "sinh"))
+(def py-fcosh     (%py-libm-fn (lit py-fcosh)     "d->d"  "cosh"))
+(def py-ftanh     (%py-libm-fn (lit py-ftanh)     "d->d"  "tanh"))
+(def py-fasinh    (%py-libm-fn (lit py-fasinh)    "d->d"  "asinh"))
 (def %py-facosh    (%py-libm-fn (lit %py-facosh)    "d->d"  "acosh"))
 (def %py-fatanh    (%py-libm-fn (lit %py-fatanh)    "d->d"  "atanh"))
 (def %py-fexpm1    (%py-libm-fn (lit %py-fexpm1)    "d->d"  "expm1"))
-(def %py-flog1p    (%py-libm-fn (lit %py-flog1p)    "d->d"  "log1p"))
+(def py-flog1p    (%py-libm-fn (lit py-flog1p)    "d->d"  "log1p"))
 (def %py-flogb     (%py-libm-fn (lit %py-flogb)     "d->d"  "logb"))
-(def %py-fcopysign (%py-libm-fn (lit %py-fcopysign) "dd->d" "copysign"))
+(def py-fcopysign (%py-libm-fn (lit py-fcopysign) "dd->d" "copysign"))
 
 ; A result that overflowed a finite argument is Python's OverflowError.
-(def %py-mrange-error
-  (fn (_) (%py-raise (%py-instantiate %py-exc-OverflowError (list "math range error")))))
+(def py-mrange-error
+  (fn (_) (py-raise (py-instantiate %py-exc-OverflowError (list "math range error")))))
 (def %py-mrange-check
-  (fn (_ r) (if (Float inf? r) (%py-mrange-error) r)))
+  (fn (_ r) (if (Float inf? r) (py-mrange-error) r)))
 
 ; gamma and lgamma are libm's.  Python refuses zero and the negative integers
 ; before the call, where libm answers an infinity; lgamma takes the infinities,
@@ -760,13 +765,13 @@
 (def %py-mlgamma-1 (%py-math-1 %py-flgamma #t %py-mgamma-message))
 (def %py-mgamma
   (fn (_ x)
-    (let ((v (%py-mfloat x)))
+    (let ((v (py-mfloat x)))
       (if (%py-mgamma-refused? v)
         (%py-mdomain-got %py-mgamma-message v)
         (%py-mgamma-1 v)))))
 (def %py-mlgamma
   (fn (_ x)
-    (let ((v (%py-mfloat x)))
+    (let ((v (py-mfloat x)))
       (if (if (Float finite? v) (%py-mgamma-refused? v) #f)
         (%py-mdomain-got %py-mgamma-message v)
         (%py-mlgamma-1 v)))))
@@ -784,9 +789,8 @@
       ((if (Float inf? b) (Float finite? a) #f) a)
       ((Float nan? a) a)
       ((Float nan? b) b)
-      ((if (Float inf? a) #t (= b 0.0)) (%py-mdomain))
+      ((if (Float inf? a) #t (= b 0.0)) (py-mdomain))
       (#t (% a b)))))
-
 
 ; ldexp doubles or halves x n times.  Past 2,200 steps either way the answer has
 ; overflowed or underflowed, so n is clamped there, and a finite x that overflows
@@ -811,20 +815,20 @@
 (def %py-mfrexp
   (fn (_ x)
     (if (if (= x 0.0) #t (not (Float finite? x)))
-      (%py-tuple-new (list x 0))
+      (py-tuple-new (list x 0))
       (let ((s (if (< (Float abs x) %py-mmin-normal) 54 0)))
         (let ((y (if (= s 0) x (* x 18014398509481984.0))))
           (let ((e (+ (Float ->int (%py-flogb y)) 1)))
-            (%py-tuple-new
+            (py-tuple-new
               (list (* y (Float pow 2.0 (* (- 0 e) 1.0))) (- e s)))))))))
 
 ; modf(x) is (fraction, whole part), both floats carrying x's sign.
 (def %py-mmodf
   (fn (_ x)
     (if (Float inf? x)
-      (%py-tuple-new (list (%py-fcopysign 0.0 x) x))
+      (py-tuple-new (list (py-fcopysign 0.0 x) x))
       (let ((w (Float trunc x)))
-        (%py-tuple-new (list (%py-fcopysign (- x w) x) w))))))
+        (py-tuple-new (list (py-fcopysign (- x w) x) w))))))
 
 ; isclose is CPython's: a negative tolerance is refused, equal values are close,
 ; which is how an infinity is close to itself, any other infinity is not, and
@@ -835,8 +839,8 @@
   (fn (_ d t) (if (< d t) #t (= d t))))
 (def %py-misclose
   (fn (_ a b . kw)
-    (let ((rel (%py-mfloat (%py-opt kw 0 (/ 1.0 1000000000.0))))
-          (abs- (%py-mfloat (%py-opt kw 1 0.0))))
+    (let ((rel (py-mfloat (py-opt kw 0 (/ 1.0 1000000000.0))))
+          (abs- (py-mfloat (py-opt kw 1 0.0))))
       (match
         ((if (< rel 0.0) #t (< abs- 0.0))
           (Err raise (lit value) "tolerances must be non-negative" ()))
@@ -851,7 +855,7 @@
 
 (def %py-math-module
   (fn (_)
-    (%py-module-new "math"
+    (py-module-new "math"
       (list
         (pair "pi" (Float pi))
         (pair "e" (Float e))
@@ -859,8 +863,8 @@
         ; STRAIGHT TO THE PARSER, not through float(): these two spellings are
         ; the platform's strings, and the constructor takes a str -- it would
         ; refuse its own spelling of infinity.
-        (pair "inf" (%py-float-of-str "inf"))
-        (pair "nan" (%py-float-of-str "nan"))
+        (pair "inf" (py-float-of-str "inf"))
+        (pair "nan" (py-float-of-str "nan"))
         (pair "sqrt" (%py-math-1 (fn (_ v) (Float sqrt v)) #f "expected a nonnegative input"))
         (pair "exp" (%py-math-1 (fn (_ v) (Float exp v)) #t ()))
         (pair "log" (fn (_ x . b) (%py-mlog x b)))
@@ -874,23 +878,23 @@
         (pair "acos"
           (%py-math-1 (fn (_ v) (Float acos v)) #f "expected a number in range from -1 up to 1"))
         (pair "atan" (%py-math-1 (fn (_ v) (Float atan v)) #f ()))
-        (pair "atan2" (fn (_ y x) (Float atan2 (%py-mfloat y) (%py-mfloat x))))
-        (pair "hypot" (fn (_ a b) (Float hypot (%py-mfloat a) (%py-mfloat b))))
-        (pair "pow" (fn (_ a b) (%py-mpow (%py-mfloat a) (%py-mfloat b))))
-        (pair "fabs" (fn (_ x) (Float abs (%py-mfloat x))))
-        (pair "fmod" (fn (_ a b) (%py-mfmod (%py-mfloat a) (%py-mfloat b))))
-        (pair "copysign" (fn (_ a b) (%py-fcopysign (%py-mfloat a) (%py-mfloat b))))
-        (pair "ldexp" (fn (_ x n) (%py-mldexp (%py-mfloat x) (%py-boolnorm n))))
-        (pair "sinh" (%py-math-1 %py-fsinh #t ()))
-        (pair "cosh" (%py-math-1 %py-fcosh #t ()))
-        (pair "tanh" (%py-math-1 %py-ftanh #f ()))
-        (pair "asinh" (%py-math-1 %py-fasinh #f ()))
+        (pair "atan2" (fn (_ y x) (Float atan2 (py-mfloat y) (py-mfloat x))))
+        (pair "hypot" (fn (_ a b) (Float hypot (py-mfloat a) (py-mfloat b))))
+        (pair "pow" (fn (_ a b) (%py-mpow (py-mfloat a) (py-mfloat b))))
+        (pair "fabs" (fn (_ x) (Float abs (py-mfloat x))))
+        (pair "fmod" (fn (_ a b) (%py-mfmod (py-mfloat a) (py-mfloat b))))
+        (pair "copysign" (fn (_ a b) (py-fcopysign (py-mfloat a) (py-mfloat b))))
+        (pair "ldexp" (fn (_ x n) (%py-mldexp (py-mfloat x) (py-boolnorm n))))
+        (pair "sinh" (%py-math-1 py-fsinh #t ()))
+        (pair "cosh" (%py-math-1 py-fcosh #t ()))
+        (pair "tanh" (%py-math-1 py-ftanh #f ()))
+        (pair "asinh" (%py-math-1 py-fasinh #f ()))
         (pair "acosh" (%py-math-1 %py-facosh #f "expected argument value not less than 1"))
         (pair "atanh" (%py-math-1 %py-fatanh #f "expected a number between -1 and 1"))
         (pair "degrees"
-          (fn (_ x) (Float / (Float * (%py-mfloat x) (%py-mfloat 180)) (Float pi))))
+          (fn (_ x) (Float / (Float * (py-mfloat x) (py-mfloat 180)) (Float pi))))
         (pair "radians"
-          (fn (_ x) (Float / (Float * (%py-mfloat x) (Float pi)) (%py-mfloat 180))))
+          (fn (_ x) (Float / (Float * (py-mfloat x) (Float pi)) (py-mfloat 180))))
         ; floor, ceil and trunc answer INTS in Python, unlike libm's -- and an
         ; infinity has no integer to answer with (OverflowError), a NaN no
         ; value at all (ValueError)
@@ -899,25 +903,25 @@
         (pair "trunc" (fn (_ x) (%py-mwhole x (lit trunc))))
         (pair "factorial"
           (fn (_ n)
-            (let ((k (%py-boolnorm n)))
-              (if (< k 0) (%py-mdomain) (%py-mfactorial k 1)))))
-        (pair "isnan" (fn (_ x) (Float nan? (%py-mfloat x))))
-        (pair "isinf" (fn (_ x) (Float inf? (%py-mfloat x))))
-        (pair "isfinite" (fn (_ x) (Float finite? (%py-mfloat x))))
+            (let ((k (py-boolnorm n)))
+              (if (< k 0) (py-mdomain) (%py-mfactorial k 1)))))
+        (pair "isnan" (fn (_ x) (Float nan? (py-mfloat x))))
+        (pair "isinf" (fn (_ x) (Float inf? (py-mfloat x))))
+        (pair "isfinite" (fn (_ x) (Float finite? (py-mfloat x))))
         ; the keywords have to be HANDED ON: the signature declares rel_tol and
         ; abs_tol, and a wrapper that ignores them makes every tolerance the
         ; default while looking as though it took one
         (pair "isclose"
-          (%py-sig! (fn (_ a b . kw) (apply %py-misclose (pair (%py-mfloat a) (pair (%py-mfloat b) kw))))
+          (py-sig! (fn (_ a b . kw) (apply %py-misclose (pair (py-mfloat a) (pair (py-mfloat b) kw))))
             "isclose" (list "a" "b" "rel_tol" "abs_tol") 2 #f))
         (pair "erf" (%py-math-1 %py-ferf #f ()))
         (pair "erfc" (%py-math-1 %py-ferfc #f ()))
         (pair "gamma" %py-mgamma)
         (pair "lgamma" %py-mlgamma)
         (pair "expm1" (%py-math-1 %py-fexpm1 #t ()))
-        (pair "log1p" (%py-math-1 %py-flog1p #f "expected argument value > -1"))
-        (pair "frexp" (fn (_ x) (%py-mfrexp (%py-mfloat x))))
-        (pair "modf" (fn (_ x) (%py-mmodf (%py-mfloat x))))))))
+        (pair "log1p" (%py-math-1 py-flog1p #f "expected argument value > -1"))
+        (pair "frexp" (fn (_ x) (%py-mfrexp (py-mfloat x))))
+        (pair "modf" (fn (_ x) (%py-mmodf (py-mfloat x))))))))
 
 ; The types module: the type objects a program names rather than derives,
 ; and `coroutine`.  Awaiting here is the delegation `yield from` does, which
@@ -925,7 +929,7 @@
 ; what it was given.
 (def %py-types-module
   (fn (_)
-    (%py-module-new "types"
+    (py-module-new "types"
       (list
         (pair "FunctionType" %py-cls-function)
         (pair "LambdaType" %py-cls-function)
@@ -934,16 +938,16 @@
         (pair "MethodType" %py-cls-method)
         (pair "GeneratorType" %py-cls-generator)
         (pair "ModuleType" %py-cls-module)
-        (pair "SimpleNamespace" %py-cls-SimpleNamespace)
-        (pair "coroutine" (%py-sig! (fn (_ f) f) "coroutine" (list "func") 1 #f))))))
+        (pair "SimpleNamespace" py-cls-SimpleNamespace)
+        (pair "coroutine" (py-sig! (fn (_ f) f) "coroutine" (list "func") 1 #f))))))
 
-(%py-sweep!)
+(py-sweep!)
 ; gc: nothing here collects on its own, so collect() is the platform's own
 ; sweep, hand-placed as every other sweep in this bundle is.  It answers 0,
 ; the count of unreachable objects Python reports.
 (def %py-gc-module
   (fn (_)
-    (%py-module-new "gc"
+    (py-module-new "gc"
       (list (pair "collect" (fn (_ . a) (%seq (Heap collect) 0)))))))
 
 ; The modules this runtime offers, each built on first import and remembered
@@ -951,14 +955,14 @@
 (def %py-module-build
   (fn (_ name)
     (match
-      ((Str8 =? name "sys") (%py-sys-module))
+      ((Str8 =? name "sys") (py-sys-module))
       ((Str8 =? name "math") (%py-math-module))
-      ((Str8 =? name "cmath") (%py-cmath-module))
-      ((Str8 =? name "collections") (%py-collections-module))
-      ((Str8 =? name "array") (%py-array-module))
-      ((Str8 =? name "struct") (%py-struct-module))
+      ((Str8 =? name "cmath") (py-cmath-module))
+      ((Str8 =? name "collections") (py-collections-module))
+      ((Str8 =? name "array") (py-array-module))
+      ((Str8 =? name "struct") (py-struct-module))
       ((Str8 =? name "types") (%py-types-module))
-      ((Str8 =? name "io") (%py-io-module))
+      ((Str8 =? name "io") (py-io-module))
       ((Str8 =? name "gc") (%py-gc-module))
       ((Str8 =? name "builtins") (%py-builtins-module))
       (#t ()))))
@@ -981,7 +985,7 @@
         (Err raise (lit import)
           "attempted relative import with no known parent package" ()))
       (#t
-        (let ((e (%py-dfind (%py-str-of-x name) (%py-dict-entries (%py-modules-now)))))
+        (let ((e (%py-dfind (py-str-of-x name) (py-dict-entries (py-modules-now)))))
           (if (null? e) (%py-import-new name) (rest e)))))))
 
 (def %py-import-new
@@ -990,8 +994,8 @@
       (if (null? dot)
         (let ((built (%py-module-build name)))
           (if (null? built)
-            (%py-load name (%py-find name (%py-path-dirs (%py-path-now)) ()))
-            (%seq (%py-dset (%py-modules-now) (%py-str-of-x name) built) built)))
+            (%py-load name (%py-find name (%py-path-dirs (py-path-now)) ()))
+            (%seq (%py-dset (py-modules-now) (py-str-of-x name) built) built)))
         (%py-import-sub name (Str8 sub 0 dot name)
           (Str8 sub (+ dot 1) (- (Str8 length name) (+ dot 1)) name))))))
 
@@ -1002,7 +1006,7 @@
 (def %py-import-sub
   (fn (_ name parent tail)
     (let ((p (%py-import parent)))
-      (let ((e (%py-dfind (%py-str-of-x name) (%py-dict-entries (%py-modules-now)))))
+      (let ((e (%py-dfind (py-str-of-x name) (py-dict-entries (py-modules-now)))))
         (if (not (null? e))
           (rest e)
           (let ((dirs (%py-package-dirs p)))
@@ -1027,12 +1031,12 @@
 
 ; The directories a list of strs names, as the platform's strings.
 (def %py-path-dirs
-  (fn (_ l) (%py-text-list (%py-iter-elems l))))
+  (fn (_ l) (%py-text-list (py-iter-elems l))))
 (def %py-text-list
   (fn (self l)
     (match
       ((null? l) ())
-      ((%py-str-is (first l)) (pair (%py-text->x (first l)) (self (rest l))))
+      ((py-str-is (first l)) (pair (py-text->x (first l)) (self (rest l))))
       (#t (self (rest l))))))
 
 ; The index of the last dot in S at or before I, or () when there is none.
@@ -1040,7 +1044,7 @@
   (fn (self s i)
     (match
       ((< i 0) ())
-      ((= (%py-code-at s i) 46) i)
+      ((= (py-code-at s i) 46) i)
       (#t (self s (- i 1))))))
 (def %py-parent-name
   (fn (_ name)
@@ -1097,31 +1101,31 @@
     (def label (first found))
     (def file (first (rest (rest found))))
     (def env (%py-module-env))
-    (def key (%py-str-of-x name))
+    (def key (py-str-of-x name))
     (%py-env-def! env (lit py-__name__) key)
     (%py-env-def! env (lit py-__package__)
-      (%py-str-of-x (if (eq? label (lit module)) (%py-parent-name name) name)))
+      (py-str-of-x (if (eq? label (lit module)) (%py-parent-name name) name)))
     (if (eq? label (lit module))
       ()
       (%py-env-def! env (lit py-__path__)
-        (%py-list-new (list (%py-str-of-x (first (rest found)))))))
-    (if (null? file) () (%py-env-def! env (lit py-__file__) (%py-str-of-x file)))
-    (%py-dset (%py-modules-now) key (%py-mod-new env))
+        (py-list-new (list (py-str-of-x (first (rest found)))))))
+    (if (null? file) () (%py-env-def! env (lit py-__file__) (py-str-of-x file)))
+    (%py-dset (py-modules-now) key (%py-mod-new env))
     (if (null? file)
       ()
       (guard (e (%seq (%py-table-drop! key) (error e)))
         (%py-code-run env (python-parse (File read-all file)) ())))
     ; what the table holds when the code is done: a module may put something
     ; else there in its own place
-    (let ((e (%py-dfind key (%py-dict-entries (%py-modules-now)))))
+    (let ((e (%py-dfind key (py-dict-entries (py-modules-now)))))
       (if (null? e) (%py-no-module! name "") (rest e)))))
 (def %py-table-drop!
   (fn (_ key)
-    (if (null? (%py-dfind key (%py-dict-entries (%py-modules-now))))
+    (if (null? (%py-dfind key (py-dict-entries (py-modules-now))))
       ()
-      (%py-ddel (%py-modules-now) key))))
+      (%py-ddel (py-modules-now) key))))
 
-(%py-sweep!)
+(py-sweep!)
 ; --- the import statements -------------------------------------------------
 ;
 ; AN IMPORT STATEMENT CALLS __import__, as CPython's does: whichever one the
@@ -1134,11 +1138,11 @@
 ; names read off what it answered.
 (def %py-imp
   (fn (_ importer name names level g)
-    (%py-call importer (%py-str-of-x name) g ()
-      (if (null? names) () (%py-tuple-new (%py-strs names)))
+    (%py-call importer (py-str-of-x name) g ()
+      (if (null? names) () (py-tuple-new (%py-strs names)))
       level)))
 (def %py-strs
-  (fn (self l) (if (null? l) () (pair (%py-str-of-x (first l)) (self (rest l))))))
+  (fn (self l) (if (null? l) () (pair (py-str-of-x (first l)) (self (rest l))))))
 
 ; The namespace dict of the module a statement runs in, or None at the prompt.
 (def %py-ns-here (op () e (%py-ns-around e)))
@@ -1167,7 +1171,7 @@
 (def %py-from-attr
   (fn (_ m attr full)
     (guard (e (if (%py-exc-match e %py-exc-AttributeError)
-                (let ((s (%py-dfind (%py-str-of-x full) (%py-dict-entries (%py-modules-now)))))
+                (let ((s (%py-dfind (py-str-of-x full) (py-dict-entries (py-modules-now)))))
                   (if (null? s) (%py-cannot-import! (%py-parent-name full) attr) (rest s)))
                 (error e)))
       (%py-getattr m attr))))
@@ -1212,7 +1216,7 @@
 (def %py-module-name
   (fn (_ m)
     (let ((n (guard (_ ()) (%py-getattr m "__name__"))))
-      (if (%py-str-is n) (%py-text->x n) ""))))
+      (if (py-str-is n) (py-text->x n) ""))))
 
 ; A relative name is resolved against the package of the module the statement
 ; is in, each leading dot past the first climbing one package.  A module with
@@ -1221,7 +1225,7 @@
   (fn (_ name pkg)
     (def level (%py-dots name 0))
     (def tail (Str8 sub level (- (Str8 length name) level) name))
-    (def base (if (%py-str-is pkg) (%py-text->x pkg) ""))
+    (def base (if (py-str-is pkg) (py-text->x pkg) ""))
     (if (= (Str8 length base) 0)
       (Err raise (lit import) "attempted relative import with no known parent package" ())
       (let ((up (%py-climb base (- level 1))))
@@ -1232,7 +1236,7 @@
           (#t (Str8 append up (Str8 append "." tail))))))))
 (def %py-dots
   (fn (self s i)
-    (if (if (< i (Str8 length s)) (= (%py-code-at s i) 46) #f) (self s (+ i 1)) i)))
+    (if (if (< i (Str8 length s)) (= (py-code-at s i) 46) #f) (self s (+ i 1)) i)))
 ; BASE with its last K names taken off, or () when it has fewer.
 (def %py-climb
   (fn (self base k)
@@ -1249,24 +1253,24 @@
 ; first imported each listed name it does not bind as its submodule; without
 ; one it answers the head package, as the statement `import a.b` binds a.
 (def %py-import-call
-  (%py-sig!
+  (py-sig!
     (fn (_ . a)
-      (def level (%py-opt a 4 0))
+      (def level (py-opt a 4 0))
       (match
         ((null? a)
           (Err raise (lit type) "__import__() missing required argument 'name'" ()))
-        ((not (%py-str-is (first a)))
+        ((not (py-str-is (first a)))
           (Err raise (lit type) "module name must be a string" ()))
         ((< level 0) (Err raise (lit value) "level must be >= 0" ()))
-        ((if (> level 0) (not (%py-dict? (%py-opt a 1 ()))) #f)
+        ((if (> level 0) (not (py-dict? (py-opt a 1 ()))) #f)
           (Err raise (lit type) "globals must be a dict" ()))
         (#t
-          (let ((name (%ps->x (%py-str-cps (first a)))))
+          (let ((name (ps->x (py-str-cps (first a)))))
             (let ((full (if (> level 0)
                           (%py-resolve (Str8 append (%py-dot-run level "") name)
-                            (%py-globals-package (%py-opt a 1 ())))
+                            (%py-globals-package (py-opt a 1 ())))
                           name))
-                  (fromlist (%py-opt a 3 ())))
+                  (fromlist (py-opt a 3 ())))
               (let ((m (%py-import full)))
                 (if (%py-truthy fromlist)
                   (%seq (%py-fromlist! m full fromlist) m)
@@ -1280,17 +1284,17 @@
   (fn (_ m full fromlist)
     (if (null? (%py-package-dirs m))
       ()
-      (%py-fromlist-each! m full (%py-iter-elems fromlist)))))
+      (%py-fromlist-each! m full (py-iter-elems fromlist)))))
 (def %py-fromlist-each!
   (fn (self m full names)
     (if (null? names)
       ()
       (%seq
-        (if (%py-str-is (first names))
-          (let ((n (%py-text->x (first names))))
+        (if (py-str-is (first names))
+          (let ((n (py-text->x (first names))))
             (if (Str8 =? n "*")
               (let ((all (%py-star-all m)))
-                (if (same? all %py-mod-missing) () (%py-fromlist-each! m full (%py-iter-elems all))))
+                (if (same? all %py-mod-missing) () (%py-fromlist-each! m full (py-iter-elems all))))
               (if (%py-hasattr m (first names))
                 ()
                 (guard (e (if (%py-exc-match e %py-exc-ModuleNotFoundError) () (error e)))
@@ -1303,13 +1307,13 @@
 ; __name__ when it is a package's, and the name's parent when it is not.
 (def %py-globals-package
   (fn (_ g)
-    (let ((pkg (%py-dfind (%py-str-of-x "__package__") (%py-dict-entries g)))
-          (nm (%py-dfind (%py-str-of-x "__name__") (%py-dict-entries g))))
+    (let ((pkg (%py-dfind (py-str-of-x "__package__") (py-dict-entries g)))
+          (nm (%py-dfind (py-str-of-x "__name__") (py-dict-entries g))))
       (match
-        ((if (null? pkg) #f (%py-str-is (rest pkg))) (rest pkg))
+        ((if (null? pkg) #f (py-str-is (rest pkg))) (rest pkg))
         ((null? nm) ())
-        ((not (null? (%py-dfind (%py-str-of-x "__path__") (%py-dict-entries g)))) (rest nm))
-        (#t (%py-str-of-x (%py-parent-name (%py-text->x (rest nm)))))))))
+        ((not (null? (%py-dfind (py-str-of-x "__path__") (py-dict-entries g)))) (rest nm))
+        (#t (py-str-of-x (%py-parent-name (py-text->x (rest nm)))))))))
 
 (def %py-cannot-import!
   (fn (_ name attr)
@@ -1328,12 +1332,12 @@
 (def %py-class-build
   (fn (_ bc name bases make)
     (if (same? bc %py-build-class)
-      (make (if (null? bases) (list %py-cls-object) bases))
-      (apply %py-call (pair bc (pair make (pair (%py-str-of-x name) bases)))))))
+      (make (if (null? bases) (list py-cls-object) bases))
+      (apply %py-call (pair bc (pair make (pair (py-str-of-x name) bases)))))))
 ; The runtime's own, which only a class statement can use: CPython's calls the
 ; body with a namespace, and a body here is not a function of one.
 (def %py-build-class
-  (%py-sig!
+  (py-sig!
     (fn (_ . a)
       (Err raise (lit type) "__build_class__ here makes a class only for a class statement" ()))
     "__build_class__" (list "func" "name") 2 #t))
@@ -1345,16 +1349,16 @@
 ; after (%py-cread, OUTER a thunk for that read).
 (def %py-crow-put!
   (fn (_ rows name v)
-    (let ((e (%py-alist-find name (first rows))))
+    (let ((e (py-alist-find name (first rows))))
       (if (null? e)
         (%set-first! rows (pair (pair name v) (first rows)))
         (%set-rest! e v)))))
 (def %py-cread
   (fn (_ rows name outer)
-    (let ((e (%py-alist-find name (first rows))))
+    (let ((e (py-alist-find name (first rows))))
       (if (null? e) (outer) (rest e)))))
 
-(%py-sweep!)
+(py-sweep!)
 (def %py-mkclass
   (fn (_ name bases methods)
     ; A BASE THAT IS NOT A CLASS IS A TypeError, not a crash.  An undefined
@@ -1366,7 +1370,7 @@
       (let ((fin (%py-final-base bases)))
         (if (not (null? fin))
           (Err raise (lit type)
-            (Str8 append (Str8 append "type '" (%py-class-name fin))
+            (Str8 append (Str8 append "type '" (py-class-name fin))
               "' is not an acceptable base type") ())
           ; Two builtin bases cannot be combined unless one derives from the
           ; other: an instance carries one native value, so `class A(type,
@@ -1375,7 +1379,7 @@
           (if (eq? (%py-layout-base bases ()) #f)
             (Err raise (lit type)
               "multiple bases have instance lay-out conflict" ())
-            (let ((cls (%py-class-new name bases methods (Str8 append "__main__." name))))
+            (let ((cls (py-class-new name bases methods (Str8 append "__main__." name))))
               ; __set_name__ IS CALLED AS THE CLASS IS MADE, once per attribute
               ; that wants it, with the owner and the name it was written
               ; under -- the only moment a descriptor can learn its name.
@@ -1386,7 +1390,7 @@
   (fn (self bs)
     (if (null? bs)
       ()
-      (if (null? (%py-alist-find "%final" (%py-class-methods (first bs))))
+      (if (null? (py-alist-find "%final" (%py-class-methods (first bs))))
         (self (rest bs))
         (first bs)))))
 
@@ -1401,8 +1405,8 @@
         (match
           ((null? c) (self (rest bs) win))
           ((null? win) (self (rest bs) c))
-          ((%py-subclass? c win) (self (rest bs) c))
-          ((%py-subclass? win c) (self (rest bs) win))
+          ((py-subclass? c win) (self (rest bs) c))
+          ((py-subclass? win c) (self (rest bs) win))
           (#t #f))))))
 
 (def %py-set-names
@@ -1411,10 +1415,10 @@
       ()
       (let ((v (rest (first rows))))
         (%seq
-          (if (%py-obj-is v)
+          (if (py-obj-is v)
             ; __set_name__ is Python code and takes the name as a str
-            (let ((m (%py-dunder v "__set_name__")))
-              (if (null? m) () (m cls (%py-str-of-x (first (first rows))))))
+            (let ((m (py-dunder v "__set_name__")))
+              (if (null? m) () (m cls (py-str-of-x (first (first rows))))))
             ())
           (self cls (rest rows)))))))
 
@@ -1432,9 +1436,9 @@
 ; function under the key "%ctor", which no Python identifier can spell (method
 ; names come from tok-name, and % is not a name character), so a class body can
 ; never shadow it by accident.
-(set! %py-instantiate
+(set! py-instantiate
   (fn (_ cls args)
-    (let ((ctor (%py-alist-find "%ctor" (%py-class-methods cls))))
+    (let ((ctor (py-alist-find "%ctor" (%py-class-methods cls))))
       (if (not (null? ctor))
         (apply (rest ctor) args)
         ; __new__ MAKES the instance and __init__ fills it in.  Every class
@@ -1444,7 +1448,7 @@
         ; of the class being called.
         (let ((nw (%py-method-find cls "__new__")))
           (let ((o (apply nw (pair cls args))))
-            (if (if (%py-obj-is o) (%py-subclass? (%py-obj-class o) cls) #f)
+            (if (if (py-obj-is o) (py-subclass? (py-obj-class o) cls) #f)
               (%seq
                 ; A SUBCLASS OF A BUILTIN carries one: the %ctor INHERITED from
                 ; the builtin base builds the value, and the instance keeps it.
@@ -1454,7 +1458,7 @@
                 (let ((cc (%py-ctor-class cls)))
                   (if (null? cc)
                     ()
-                    (%py-obj-native! o (%py-native-new cc args))))
+                    (py-obj-native! o (%py-native-new cc args))))
                 (let ((init (%py-method-find cls "__init__")))
                   (if (null? init)
                     o
@@ -1484,8 +1488,8 @@
 ; then the empty value is right.
 (def %py-native-new
   (fn (_ cc args)
-    (let ((bc (rest (%py-alist-find "%ctor" (%py-class-methods cc)))))
-      (if (null? (%py-alist-find "__init__" (%py-class-methods cc)))
+    (let ((bc (rest (py-alist-find "%ctor" (%py-class-methods cc)))))
+      (if (null? (py-alist-find "__init__" (%py-class-methods cc)))
         (guard (e (bc)) (apply bc args))
         (bc)))))
 
@@ -1495,7 +1499,7 @@
   (fn (self cls)
     (if (null? cls)
       ()
-      (if (null? (%py-alist-find "%ctor" (%py-class-methods cls)))
+      (if (null? (py-alist-find "%ctor" (%py-class-methods cls)))
         (%py-ctor-class-bases (%py-class-bases cls))
         cls))))
 
@@ -1503,7 +1507,7 @@
 (def %py-inherited-ctor
   (fn (_ cls)
     (let ((c (%py-ctor-class cls)))
-      (if (null? c) () (rest (%py-alist-find "%ctor" (%py-class-methods c)))))))
+      (if (null? c) () (rest (py-alist-find "%ctor" (%py-class-methods c)))))))
 
 ; Does a class BELOW the builtin write its own __init__?  The walk stops at
 ; the class carrying the %ctor: that one and everything above it is the
@@ -1512,8 +1516,8 @@
   (fn (self cls)
     (match
       ((null? cls) #f)
-      ((not (null? (%py-alist-find "%ctor" (%py-class-methods cls)))) #f)
-      ((not (null? (%py-alist-find "__init__" (%py-class-methods cls)))) #t)
+      ((not (null? (py-alist-find "%ctor" (%py-class-methods cls)))) #f)
+      ((not (null? (py-alist-find "__init__" (%py-class-methods cls)))) #t)
       (#t (%py-init-below-ctor-bases? (%py-class-bases cls))))))
 (def %py-init-below-ctor-bases?
   (fn (self bs)
@@ -1527,7 +1531,7 @@
       (let ((c (%py-ctor-class (first bs))))
         (if (null? c) (self (rest bs)) c)))))
 
-(%py-sweep!)
+(py-sweep!)
 ; --- Tuples ------------------------------------------------------------------
 
 ; --- Generators --------------------------------------------------------------
@@ -1570,10 +1574,10 @@
     (if (%py-class-is e)
       (if (if (null? args) #f
             (if (null? (rest args))
-              (if (%py-obj-is (first args)) (%py-subclass? (%py-obj-class (first args)) e) #f)
+              (if (py-obj-is (first args)) (py-subclass? (py-obj-class (first args)) e) #f)
               #f))
         (first args)
-        (%py-instantiate e args))
+        (py-instantiate e args))
       e)))
 ; No exception is active outside a handler: the name every compiled handler
 ; binds to the one it caught is nil here, and a bare `raise` finds it so.
@@ -1581,8 +1585,8 @@
 (def %py-reraise
   (fn (_ e)
     (if (null? e)
-      (%py-raise
-        (%py-instantiate %py-exc-RuntimeError (list "No active exception to reraise")))
+      (py-raise
+        (py-instantiate %py-exc-RuntimeError (list "No active exception to reraise")))
       (error e))))
 ; the instance a raise statement or a generator's throw() raises: a class
 ; derived from BaseException instantiates, an instance of one is itself,
@@ -1611,8 +1615,8 @@
 ; is a thrown value (class or instance) of this exception class?
 (def %py-thrown-is?
   (fn (_ e cls)
-    (if (%py-class-is e) (%py-subclass? e cls)
-      (if (%py-obj-is e) (%py-exc-match e cls) #f))))
+    (if (%py-class-is e) (py-subclass? e cls)
+      (if (py-obj-is e) (%py-exc-match e cls) #f))))
 ; the body's side of a delegating yield: the raw message, (send v) | (throw e)
 (def %py-yield-raw
   (fn (_ g v)
@@ -1622,15 +1626,15 @@
         (%py-gen-set-status! g (lit suspended))
         ((%py-gen-ck g) (list (lit yield) v))))))
 ; StopIteration carrying the generator's return value (none for None)
-(def %py-raise-stop
+(def py-raise-stop
   (fn (_ rv)
-    (error (%py-instantiate %py-exc-StopIteration (if (null? rv) () (list rv))))))
+    (error (py-instantiate %py-exc-StopIteration (if (null? rv) () (list rv))))))
 (def %py-stop-value
   (fn (_ e)
-    (if (%py-obj-is e)
-      (let ((a (%py-alist-find "args" (%py-obj-attrs e))))
+    (if (py-obj-is e)
+      (let ((a (py-alist-find "args" (py-obj-attrs e))))
         (if (null? a) ()
-          (let ((es (%py-tuple-elems (rest a)))) (if (null? es) () (first es)))))
+          (let ((es (py-tuple-elems (rest a)))) (if (null? es) () (first es)))))
       ())))
 
 ; The body's side: hand v up, wait for what comes down.
@@ -1661,7 +1665,7 @@
   (fn (_ g label v)
     (def st (%py-gen-status g))
     (if (eq? st (lit done))
-      (if (eq? label (lit throw)) (%py-raise-any v) (%py-raise-stop ()))
+      (if (eq? label (lit throw)) (%py-raise-any v) (py-raise-stop ()))
     (if (eq? st (lit running))
       (Err raise (lit value) "generator already executing" ())
       (do
@@ -1692,7 +1696,7 @@
                 (if (eq? (first r) (lit yield))
                   (first (rest r))
                   (if (eq? (first r) (lit return))
-                    (%py-raise-stop (first (rest r)))
+                    (py-raise-stop (first (rest r)))
                     (error (first (rest r))))))))))))))
 
 ; next(g) with the StopIteration turned into the done sentinel
@@ -1705,7 +1709,7 @@
 (def %py-gen-drain
   (fn (self g acc)
     (let ((v (%py-gen-pull g)))
-      (if (same? v %py-gen-done) (%py-reverse acc) (self g (pair v acc))))))
+      (if (same? v %py-gen-done) (py-reverse acc) (self g (pair v acc))))))
 
 ; close(): throw GeneratorExit in; a body that swallows it and yields again
 ; is the RuntimeError, one that ends (either way) is fine
@@ -1718,8 +1722,8 @@
                           (%py-exc-match e %py-exc-StopIteration))
                     ()
                     (error e)))
-          (%py-gen-resume g (lit throw) (%py-instantiate %py-exc-GeneratorExit ()))
-          (error (%py-instantiate %py-exc-RuntimeError (list "generator ignored GeneratorExit"))))))))
+          (%py-gen-resume g (lit throw) (py-instantiate %py-exc-GeneratorExit ()))
+          (error (py-instantiate %py-exc-RuntimeError (list "generator ignored GeneratorExit"))))))))
 
 (def %py-gen-attr
   (fn (_ g name)
@@ -1732,7 +1736,7 @@
             (if (if (null? a) #t (if (null? (rest a)) (null? (first a)) #f)) e (%py-exc-instance e a)))))
       ((Str8 =? name "close") (fn (_) (%py-gen-close g)))
       ((Str8 =? name "__iter__") (fn (_) g))
-      ((Str8 =? name "__name__") (%py-str-of-x (%py-gen-name g)))
+      ((Str8 =? name "__name__") (py-str-of-x (%py-gen-name g)))
       (#t
         (Err raise (lit attribute)
           (Str8 append (Str8 append "'generator' object has no attribute '" name) "'") ())))))
@@ -1745,7 +1749,7 @@
       (#t
         (Err raise (lit attribute)
           (Str8 append "'"
-            (Str8 append (%py-class-name (%py-it-class it))
+            (Str8 append (py-class-name (%py-it-class it))
               (Str8 append "' object has no attribute '" (Str8 append name "'"))))
           ())))))
 
@@ -1756,7 +1760,7 @@
   (fn (_ g it)
     (if (not (%py-gen-is it))
       (let ((nx (match
-                  ((%py-obj-is it) (%py-dunder it "__next__"))
+                  ((py-obj-is it) (py-dunder it "__next__"))
                   ; a builtin iterator is read a step at a time too, so the
                   ; StopIteration a source of its raises is the result
                   ((%py-it-is it) (fn (_) (%py-it-answer ((%py-it-step it)))))
@@ -1764,15 +1768,15 @@
         (if (null? nx)
           (do
             (def go (fn (self es) (if (null? es) () (%seq (%py-yield g (first es)) (self (rest es))))))
-            (go (%py-iter-elems it))
+            (go (py-iter-elems it))
             ())
           ; PEP 380 on a duck-typed iterator: __next__ for None, send() for a
           ; value when it has one, throw() when it has one, StopIteration's
           ; value is the result
           (do
-            (def snd (if (%py-obj-is it) (%py-dunder it "send") ()))
-            (def thr (if (%py-obj-is it) (%py-dunder it "throw") ()))
-            (def cls (if (%py-obj-is it) (%py-dunder it "close") ()))
+            (def snd (if (py-obj-is it) (py-dunder it "send") ()))
+            (def thr (if (py-obj-is it) (py-dunder it "throw") ()))
+            (def cls (if (py-obj-is it) (py-dunder it "close") ()))
             (def step
               (fn (self label v)
                 (let ((r (guard (e (if (%py-exc-match e %py-exc-StopIteration)
@@ -1808,7 +1812,7 @@
                     (self (first down) (first (rest down)))))))))
         (step (lit send) ())))))
 
-(%py-sweep!)
+(py-sweep!)
 ; `is`: identity, with the cases Python's caching makes look like identity --
 ; None, True and False are singletons, small ints and interned strings
 ; compare equal -- stated as equality for ints and strings.
@@ -1819,16 +1823,16 @@
       ((null? a) (null? b))
       ((if (eq? a #t) #t (eq? a #f)) (eq? a b))
       ((if (null? b) #t (if (eq? b #t) #t (eq? b #f))) #f)
-      ((if (%py-str-is a) (%py-str-is b) #f) (%pb-eq? (%py-str-cps a) (%py-str-cps b)))
-      ((if (eq? (%py-num-py-type a) (lit int)) (eq? (%py-num-py-type b) (lit int)) #f)
+      ((if (py-str-is a) (py-str-is b) #f) (%pb-eq? (py-str-cps a) (py-str-cps b)))
+      ((if (eq? (py-num-py-type a) (lit int)) (eq? (py-num-py-type b) (lit int)) #f)
         (= a b))
       (#t #f))))
 
 ; sum(iterable[, start]) -- NOT %py-sum, which is the parser's arithmetic level
 (def %py-builtin-sum
   (fn (_ it . st)
-    (def go (fn (self es acc) (if (null? es) acc (self (rest es) (%py-add acc (first es))))))
-    (go (%py-iter-elems it) (if (null? st) 0 (first st)))))
+    (def go (fn (self es acc) (if (null? es) acc (self (rest es) (py-add acc (first es))))))
+    (go (py-iter-elems it) (if (null? st) 0 (first st)))))
 
 ; map, zip, enumerate and filter are BUILTIN ITERATORS (%py-it): a step over
 ; the sources opened at the call, one item a call.  A source's StopIteration
@@ -1848,18 +1852,18 @@
   (fn (_ f r) (if (same? r %py-gen-done) r (%py-apply-any f r))))
 (def %py-open-all
   (fn (self its acc)
-    (if (null? its) (%py-reverse acc) (self (rest its) (pair (%py-iter-open (first its)) acc)))))
+    (if (null? its) (py-reverse acc) (self (rest its) (pair (%py-iter-open (first its)) acc)))))
 (def %py-zip (fn (_ . its) (%py-zip-over (%py-open-all its ()))))
 (def %py-zip-over
   (fn (_ srcs)
     (%py-it-new
       (fn (_) (if (null? srcs) %py-gen-done (%py-row-tuple (%py-row srcs ()))))
       %py-cls-zip)))
-(def %py-row-tuple (fn (_ r) (if (same? r %py-gen-done) r (%py-tuple-new r))))
+(def %py-row-tuple (fn (_ r) (if (same? r %py-gen-done) r (py-tuple-new r))))
 ; the next item of each source, in order, or %py-gen-done once one has ended
 (def %py-row
   (fn (self srcs acc)
-    (if (null? srcs) (%py-reverse acc)
+    (if (null? srcs) (py-reverse acc)
       (%py-row-add self (rest srcs) acc (%py-iter-next (first srcs))))))
 (def %py-row-add
   (fn (_ go srcs acc v) (if (same? v %py-gen-done) v (go srcs (pair v acc)))))
@@ -1887,46 +1891,46 @@
           ((%py-truthy v) #t)
           (#t (self)))))
     (go)))
-; sorted(it): a stable merge sort on %py-lt
+; sorted(it): a stable merge sort on py-lt
 (def %py-msort
   (fn (self l)
     (if (if (null? l) #t (null? (rest l))) l
-      (let ((h (%py-split-half l (%py-length l))))
+      (let ((h (%py-split-half l (py-length l))))
         (%py-merge (self (first h)) (self (rest h)))))))
 (def %py-split-half
   (fn (_ l n)
-    (def go (fn (self k xs acc) (if (= k 0) (pair (%py-reverse acc) xs) (self (- k 1) (rest xs) (pair (first xs) acc)))))
+    (def go (fn (self k xs acc) (if (= k 0) (pair (py-reverse acc) xs) (self (- k 1) (rest xs) (pair (first xs) acc)))))
     (go (Num quotient n 2) l ())))
 (def %py-merge
   (fn (self a b)
     (match
       ((null? a) b)
       ((null? b) a)
-      ((%py-truthy (%py-lt (first b) (first a)))
+      ((%py-truthy (py-lt (first b) (first a)))
         (pair (first b) (self a (rest b))))
       (#t (pair (first a) (self (rest a) b))))))
 (def %py-msort-by
   (fn (self l key)
     (if (if (null? l) #t (null? (rest l))) l
-      (let ((h (%py-split-half l (%py-length l))))
+      (let ((h (%py-split-half l (py-length l))))
         (%py-merge-by (self (first h) key) (self (rest h) key) key)))))
 (def %py-merge-by
   (fn (self a b key)
     (match
       ((null? a) b)
       ((null? b) a)
-      ((%py-truthy (%py-lt (key (first b)) (key (first a))))
+      ((%py-truthy (py-lt (key (first b)) (key (first a))))
         (pair (first b) (self a (rest b) key)))
       (#t (pair (first a) (self (rest a) b key))))))
 (def %py-ident (fn (_ v) v))
 (def %py-sorted
-  (%py-sig!
+  (py-sig!
     (fn (_ it . a)
-      (if (= (%py-length a) 1)
+      (if (= (py-length a) 1)
         (Err raise (lit type) "sorted expected 1 argument, got 2" ())
-        (let ((key (%py-opt a 0 ())) (rev (%py-opt a 1 #f)))
-          (let ((l (%py-msort-by (%py-iter-elems it) (if (null? key) %py-ident key))))
-            (%py-list-new (if (%py-truthy rev) (%py-reverse l) l))))))
+        (let ((key (py-opt a 0 ())) (rev (py-opt a 1 #f)))
+          (let ((l (%py-msort-by (py-iter-elems it) (if (null? key) %py-ident key))))
+            (py-list-new (if (%py-truthy rev) (py-reverse l) l))))))
     "sorted" (list "iterable" "key" "reverse") 1 #f))
 
 ; next(it[, default]) and iter(x)
@@ -1938,10 +1942,10 @@
           ((%py-gen-is it) (%py-gen-resume it (lit send) ()))
           ((%py-it-is it) (%py-it-answer ((%py-it-step it))))
           ; a stream is its own iterator, over its lines
-          ((%py-io-is it)
-            (let ((l (%py-io-line! it))) (if (null? l) (%py-raise-stop ()) l)))
-          ((%py-obj-is it)
-            (let ((m (%py-dunder it "__next__")))
+          ((py-io-is it)
+            (let ((l (py-io-line! it))) (if (null? l) (py-raise-stop ()) l)))
+          ((py-obj-is it)
+            (let ((m (py-dunder it "__next__")))
               (if (null? m) (%py-not-iterator it) (m))))
           (#t (%py-not-iterator it)))))
     (if (null? d)
@@ -1950,13 +1954,13 @@
         (pull)))))
 ; a builtin iterator's item, or the StopIteration its plain end raises
 (def %py-it-answer
-  (fn (_ v) (if (same? v %py-gen-done) (%py-raise-stop ()) v)))
+  (fn (_ v) (if (same? v %py-gen-done) (py-raise-stop ()) v)))
 ; 'list' object is not an iterator
 (def %py-not-iterator
   (fn (_ v)
     (Err raise (lit type)
       (Str8 append "'"
-        (Str8 append (%py-class-name (%py-type-of v)) "' object is not an iterator"))
+        (Str8 append (py-class-name (py-type-of v)) "' object is not an iterator"))
       ())))
 ; iter(x): an object's own __iter__, or a generator over the source
 ; %py-iter-open makes of x -- so a value that is not iterable is refused here,
@@ -1965,9 +1969,9 @@
   (fn (_ v)
     (match
       ((if (%py-gen-is v) #t (%py-it-is v)) v)
-      ((%py-io-is v) v)
-      ((if (%py-obj-is v) (not (null? (%py-dunder v "__iter__"))) #f)
-        ((%py-dunder v "__iter__")))
+      ((py-io-is v) v)
+      ((if (py-obj-is v) (not (null? (py-dunder v "__iter__"))) #f)
+        ((py-dunder v "__iter__")))
       ((%py-range-is v) (%py-range-iter v))
       (#t (%py-src-gen (%py-iter-open v))))))
 (def %py-src-gen
@@ -1984,25 +1988,25 @@
 ; A for loop PULLS: a generator or a builtin iterator one value per iteration
 ; (its prints interleave with the body's, and it may be infinite), anything
 ; else from its materialized element list.
-; `who` is %py-iter-elems' door: a caller may name itself in the refusal.
+; `who` is py-iter-elems' door: a caller may name itself in the refusal.
 (def %py-iter-open
   (fn (_ v . who)
     (def elems
-      (fn (_) (if (null? who) (%py-iter-elems v) (%py-iter-elems v (first who)))))
+      (fn (_) (if (null? who) (py-iter-elems v) (py-iter-elems v (first who)))))
     (if (if (%py-gen-is v) #t (%py-it-is v)) v
-      (if (%py-obj-is v)
+      (if (py-obj-is v)
         ; an object with __iter__ whose iterator has __next__ is pulled a
         ; step at a time too, so a __next__ that prints or raises does so
         ; in step with the loop body
-        (let ((it-m (%py-dunder v "__iter__")))
+        (let ((it-m (py-dunder v "__iter__")))
           (if (null? it-m)
             ; the old sequence protocol, read a step at a time too
-            (let ((gi (%py-dunder v "__getitem__")))
+            (let ((gi (py-dunder v "__getitem__")))
               (if (null? gi)
                 (pair (elems) ())
                 (list (lit %py-cursor) (%py-getitem-steps gi))))
             (let ((it (it-m)))
-              (let ((nx (if (%py-obj-is it) (%py-dunder it "__next__") ())))
+              (let ((nx (if (py-obj-is it) (py-dunder it "__next__") ())))
                 (if (null? nx)
                   (pair (%py-iter-answer it) ())
                   (list (lit %py-cursor) nx))))))
@@ -2010,9 +2014,9 @@
         ; line at a time
         (match
           ((%py-range-is v) (%py-range-iter v))
-          ((%py-io-is v)
+          ((py-io-is v)
             (list (lit %py-cursor)
-              (fn (_) (let ((l (%py-io-line! v))) (if (null? l) %py-gen-done l)))))
+              (fn (_) (let ((l (py-io-line! v))) (if (null? l) %py-gen-done l)))))
           (#t (pair (elems) ())))))))
 (def %py-iter-pull!
   (fn (_ src)
@@ -2061,9 +2065,9 @@
       (#t
         (let ((v (first (first src)))) (%set-first! src (rest (first src))) v)))))
 
-(%py-sweep!)
-(def %py-mktuple (fn (_ . elems) (%py-tuple-new elems)))
+(py-sweep!)
+(def %py-mktuple (fn (_ . elems) (py-tuple-new elems)))
 ; A *rest parameter arrives as an x list and becomes the tuple Python hands
 ; the function; a *spread at a call site concatenates argument segments.
-(def %py-tuple-of-list (fn (_ l) (%py-tuple-new l)))
+(def py-tuple-of-list (fn (_ l) (py-tuple-new l)))
 
