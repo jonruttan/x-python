@@ -42,10 +42,6 @@
 ; `List from-seq`; these take a list or nil, which is what all 131 call sites
 ; passed.  A call that wants an iterable should still say `List`.
 
-(provide python/util
-  %py-reverse %py-rev-onto %py-length %py-append %py-take %py-byte-len %py-sweep!
-  %py-fx+ %py-fx- %py-fx< %py-fx*)
-
 ; A sweep after each of the loads this bundle drives.  The load is mostly
 ; garbage -- 734M objects allocated for 305K live, python/runtime's seven
 ; files 311M of it -- and the engine sweeps only when asked, so a source
@@ -59,23 +55,24 @@
 ; hook below runs only after a load (x-lang lib/x/boot/reflect.x), so the
 ; mark it sets is never in an image, and the writer's child, which loads
 ; from source, sweeps like any other source boot.
+(module python/core)
 (def %py-image-collect (prim-ref (lit heap) (lit collect)))
 (def %py-from-image (pair () ()))
 (set! %image-recache-hooks
   (pair (fn (_) (%set-first! %py-from-image #t)) %image-recache-hooks))
-(def %py-sweep!
+(def python-sweep!
   (fn (_) (if (first %py-from-image) () (%py-image-collect))))
 
 ; Reverse-prepend: the accumulate-and-reverse list builder.  Every walk in the bundle
 ; accumulates front-to-back and reverses once, so this is the pattern underneath
 ; both names below -- and it is worth having spelled out, because
-; `(%py-append (%py-reverse xs) acc)` is `(%py-rev-onto xs acc)` without the
+; `(%py-append (python-reverse xs) acc)` is `(python-rev-onto xs acc)` without the
 ; intermediate list.
-(def %py-rev-onto
+(def python-rev-onto
   (fn (self xs acc)
     (if (null? xs) acc (self (rest xs) (pair (first xs) acc)))))
 
-(def %py-reverse (fn (_ xs) (%py-rev-onto xs ())))
+(def python-reverse (fn (_ xs) (python-rev-onto xs ())))
 
 ; The integer doors, for counts and positions only: a length, an index
 ; clamped to one, a byte count a read returned.  A door is 0 or 1 objects a
@@ -83,25 +80,29 @@
 ; operands (nil segfaults) nor promotes past a word, so a value a program
 ; supplied never reaches one.
 (def %py-fx+ (prim-ref (lit int) (lit +)))
-(def %py-fx- (prim-ref (lit int) (lit -)))
-(def %py-fx< (prim-ref (lit int) (lit <)))
+(def python-fx- (prim-ref (lit int) (lit -)))
+(def python-fx< (prim-ref (lit int) (lit <)))
 (def %py-fx* (prim-ref (lit int) (lit *)))
 
 (def %py-count-from
   (fn (self xs n)
     (if (null? xs) n (self (rest xs) (%py-fx+ n 1)))))
 
-(def %py-length (fn (_ xs) (%py-count-from xs 0)))
+(def python-length (fn (_ xs) (%py-count-from xs 0)))
 
 ; Append and take, which the parser and the runtime both walk with.
 (def %py-append
   (fn (self a b)
     (if (null? a) b (pair (first a) (self (rest a) b)))))
-(def %py-take
+(def python-take
   (fn (self n l)
-    (if (= n 0) () (if (null? l) () (pair (first l) (self (%py-fx- n 1) (rest l)))))))
+    (if (= n 0) () (if (null? l) () (pair (first l) (self (python-fx- n 1) (rest l)))))))
 
 ; A string's length through the raw byte door, not the Str8 class: the class
 ; call is ~15,000 objects, the primitive is at the floor, and the number
 ; converters ask it once per literal.
-(def %py-byte-len (prim-ref (lit str) (lit byte-len)))
+(def python-byte-len (prim-ref (lit str) (lit byte-len)))
+
+; The implementation version, here rather than in python/sys: python-version
+; reads it when the core loads, before the libraries.
+(def python-implementation-version "0.0.1")

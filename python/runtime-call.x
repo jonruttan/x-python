@@ -25,8 +25,9 @@
 ; parameter names.  So every def registers its signature here, keyed by the
 ; closure itself -- (name names nreq has-rest) -- and a keyword call looks it
 ; up, arranges the keywords into positional slots, and applies.  A slot left
-; empty between given arguments carries %py-dflt, which the callee's %py-opt
+; empty between given arguments carries python-dflt, which the callee's python-opt
 ; prelude reads as "take the default".
+(module python/core)
 (def %py-sig-of
   (fn (_ f)
     (def go
@@ -44,38 +45,38 @@
   (fn (_ sig)
     (list (first sig) (rest (List ref 1 sig)) (- (List ref 2 sig) 1)
       (List ref 3 sig)
-      (if (> (%py-length sig) 4) (List ref 4 sig) ())
-      (if (> (%py-length sig) 5) (List ref 5 sig) ())
-      (if (> (%py-length sig) 6) (List ref 6 sig) ()))))
-(def %py-drop
-  (fn (self l k) (if (= k 0) l (if (null? l) () (self (rest l) (%py-fx- k 1))))))
-(def %py-list-cat
+      (if (> (python-length sig) 4) (List ref 4 sig) ())
+      (if (> (python-length sig) 5) (List ref 5 sig) ())
+      (if (> (python-length sig) 6) (List ref 6 sig) ()))))
+(def python-drop
+  (fn (self l k) (if (= k 0) l (if (null? l) () (self (rest l) (python-fx- k 1))))))
+(def python-list-cat
   (fn (self a b) (if (null? a) b (pair (first a) (self (rest a) b)))))
 ; f() takes from NREQ to N positional arguments but M were given -- or, with
 ; no defaults, f() takes N positional arguments but M were given.  `more` is
 ; the tail past the required names, without the keyword box.
 (def %py-arity!
   (fn (_ fname more0 nreq ndflts)
-    (let ((more (%py-args-strip-kw (%py-drop more0 nreq))))
-      (if (> (%py-length more) ndflts)
+    (let ((more (%py-args-strip-kw (python-drop more0 nreq))))
+      (if (> (python-length more) ndflts)
         (Err raise (lit type)
           (Str8 append fname
             (Str8 append (%py-takes-text nreq ndflts)
-              (%py-given-text (+ nreq (%py-length more)))))
+              (%py-given-text (+ nreq (python-length more)))))
           ())
         ()))))
 (def %py-takes-text
   (fn (_ nreq ndflts)
     (if (= ndflts 0)
       (Str8 append "() takes "
-        (Str8 append (%py-str nreq)
+        (Str8 append (python-str nreq)
           (if (= nreq 1) " positional argument but " " positional arguments but ")))
       (Str8 append "() takes from "
-        (Str8 append (%py-str nreq)
+        (Str8 append (python-str nreq)
           (Str8 append " to "
-            (Str8 append (%py-str (+ nreq ndflts)) " positional arguments but ")))))))
+            (Str8 append (python-str (+ nreq ndflts)) " positional arguments but ")))))))
 (def %py-given-text
-  (fn (_ n) (Str8 append (%py-str n) (if (= n 1) " was given" " were given"))))
+  (fn (_ n) (Str8 append (python-str n) (if (= n 1) " was given" " were given"))))
 (def %py-kw-error
   (fn (_ fname msg)
     (Err raise (lit type) (Str8 append (Str8 append fname "() ") msg) ())))
@@ -86,12 +87,12 @@
     (def nreq (List ref 2 sig))
     (def has-rest (List ref 3 sig))
     ; the **name this function declares, if it declares one
-    (def kwname (if (> (%py-length sig) 4) (List ref 4 sig) ()))
+    (def kwname (if (> (python-length sig) 4) (List ref 4 sig) ()))
     ; the keyword-only names: never filled by position, and read from the
     ; box by the callee's prelude
-    (def kwonly (if (> (%py-length sig) 5) (List ref 5 sig) ()))
-    (def n (%py-length names))
-    (def npos (%py-length pos))
+    (def kwonly (if (> (python-length sig) 5) (List ref 5 sig) ()))
+    (def n (python-length names))
+    (def npos (python-length pos))
     (def known?
       (fn (self k ns)
         (if (null? ns) #f (if (Str8 =? k (first ns)) #t (self k (rest ns))))))
@@ -111,42 +112,42 @@
     (def spare
       (fn (self ks acc)
         (if (null? ks)
-          (%py-reverse acc)
+          (python-reverse acc)
           (if (known? (first (first ks)) names)
             (self (rest ks) acc)
             ; the name crosses over: these rows become the **kwargs DICT, and
             ; a dict's keys are strs (see %py-dict-kwargs)
             (self (rest ks)
-              (pair (pair (%py-str-of-x (first (first ks))) (rest (first ks))) acc))))))
+              (pair (pair (python-str-of-x (first (first ks))) (rest (first ks))) acc))))))
     (def slot
       (fn (_ i)
         (let ((nm (List ref i names)))
-          (let ((kw (%py-alist-find nm kws)))
+          (let ((kw (python-alist-find nm kws)))
             (if (null? kw)
               (if (< i npos)
                 (List ref i pos)
                 (if (< i nreq)
                   (%py-kw-error fname
                     (Str8 append (Str8 append "missing 1 required positional argument: '" nm) "'"))
-                  %py-dflt))
+                  python-dflt))
               (if (< i npos)
                 (%py-kw-error fname
                   (Str8 append (Str8 append "got multiple values for argument '" nm) "'"))
                 (rest kw)))))))
     (def build
       (fn (self i acc)
-        (if (>= i n) (%py-reverse acc) (self (+ i 1) (pair (slot i) acc)))))
+        (if (>= i n) (python-reverse acc) (self (+ i 1) (pair (slot i) acc)))))
     (check kws)
     (if (if (> npos n) (not has-rest) #f)
       (Err raise (lit type)
         (Str8 append fname
           (Str8 append (%py-takes-text n 0) (%py-given-text npos)))
         ())
-      (let ((base (%py-list-cat (build 0 ()) (%py-drop pos n))))
+      (let ((base (python-list-cat (build 0 ()) (python-drop pos n))))
         (if (if (null? kwname) (null? kwonly) #f)
           base
           ; the box goes last, where the prelude reads it
-          (%py-list-cat base (list (%py-kwbox (%py-dict-new (spare kws ()))))))))))
+          (python-list-cat base (list (%py-kwbox (python-dict-new (spare kws ()))))))))))
 ; The keyword list a call sends, with every `**d` merged onto what was written
 ; by name.  A later spelling wins, which is what Python does when a name is
 ; given twice by different spellings.
@@ -162,12 +163,12 @@
 ; mapping protocol -- each key from keys(), its value by subscript.
 (def %py-mapping-rows
   (fn (_ d)
-    (if (%py-dict? d)
-      (%py-dict-entries d)
-      (%py-rows-by-key d (%py-iter-elems ((%py-getattr d "keys"))) ()))))
+    (if (python-dict? d)
+      (python-dict-entries d)
+      (%py-rows-by-key d (python-iter-elems ((%py-getattr d "keys"))) ()))))
 (def %py-rows-by-key
   (fn (self d keys acc)
-    (if (null? keys) (%py-reverse acc)
+    (if (null? keys) (python-reverse acc)
       (self d (rest keys) (pair (pair (first keys) (%py-index d (first keys))) acc)))))
 ; A `**dict` key is a str and a keyword name is the platform's string, so the
 ; key crosses over on the way in.  A name already given -- by an earlier `**`
@@ -177,10 +178,10 @@
     (if (null? rows)
       acc
       (let ((k (first (first rows))))
-        (if (not (%py-str-is k))
+        (if (not (python-str-is k))
           (Err raise (lit type) "keywords must be strings" ())
-          (let ((name (%ps->x (%py-str-cps k))))
-            (if (not (null? (%py-alist-find name acc)))
+          (let ((name (ps->x (python-str-cps k))))
+            (if (not (null? (python-alist-find name acc)))
               (Err raise (lit type)
                 (Str8 append "got multiple values for keyword argument '"
                   (Str8 append name "'")) ())
@@ -197,11 +198,11 @@
       ((if (%py-class-is f)
          (if (same? (%py-inherited-ctor f) %py-dict-ctor) (not (%py-init-below-ctor? f)) #f)
          #f)
-        (let ((d (if (null? pos) (%py-dict-new ()) (%py-dict-ctor (first pos)))))
-          (%seq (%py-dict-merge! d (%py-dict-new (%py-dict-kwargs kws)))
-            (if (same? f %py-cls-dict) d (%py-instantiate f (list d))))))
+        (let ((d (if (null? pos) (python-dict-new ()) (%py-dict-ctor (first pos)))))
+          (%seq (%py-dict-merge! d (python-dict-new (%py-dict-kwargs kws)))
+            (if (same? f python-cls-dict) d (python-instantiate f (list d))))))
       ((%py-class-is f)
-        (let ((ctor (%py-alist-find "%ctor" (%py-class-methods f))))
+        (let ((ctor (python-alist-find "%ctor" (%py-class-methods f))))
           (let ((csig (if (null? ctor) () (%py-sig-of (rest ctor)))))
             (if (not (null? csig))
               (apply (rest ctor) (%py-kw-args csig pos kws))
@@ -211,10 +212,10 @@
                 (let ((sig (if (null? init) () (%py-sig-of init))))
                   (if (null? sig)
                     (Err raise (lit type)
-                      (Str8 append (%py-class-name f) "() takes no keyword arguments") ())
+                      (Str8 append (python-class-name f) "() takes no keyword arguments") ())
                     ; the class's own call door, direct: apply would reach it
                     ; through PY-CLASS's handler, dearer (see %py-apply-any)
-                    (%py-instantiate f (%py-kw-args (%py-sig-shift sig) pos kws)))))))))
+                    (python-instantiate f (%py-kw-args (%py-sig-shift sig) pos kws)))))))))
       ; a bound method: its function's signature, with self already supplied
       ((%py-bound-is f)
         (let ((sig (%py-sig-of (%py-bound-fn f))))
@@ -222,7 +223,7 @@
             (Err raise (lit type) "this callable takes no keyword arguments" ())
             (apply (%py-bound-fn f)
               (pair (%py-bound-self f) (%py-kw-args (%py-sig-shift sig) pos kws))))))
-      ((not (if (%py-fn-is f) #t (%py-obj-is f))) (%py-call-refuse f))
+      ((not (if (%py-fn-is f) #t (python-obj-is f))) (%py-call-refuse f))
       (#t
         (let ((sig (%py-sig-of f)))
           (if (null? sig)
@@ -237,27 +238,27 @@
         ()))))
 (def %py-none-holes
   (fn (self l)
-    (if (null? l) () (pair (if (same? (first l) %py-dflt) () (first l)) (self (rest l))))))
+    (if (null? l) () (pair (if (same? (first l) python-dflt) () (first l)) (self (rest l))))))
 (def %py-kwcall-attr
   (fn (_ obj name pos kws)
     ; d.update(a=1) merges the keywords
     (match
-      ((if (%py-dict? obj) (Str8 =? name "update") #f)
+      ((if (python-dict? obj) (Str8 =? name "update") #f)
         (let ((d obj))
           (%seq (if (null? pos) () (%py-dict-merge! d (first pos)))
-            (%py-dict-merge! d (%py-dict-new (%py-dict-kwargs kws))))))
-      ((%py-list? obj)
+            (%py-dict-merge! d (python-dict-new (%py-dict-kwargs kws))))))
+      ((python-list? obj)
         (let ((names (%py-list-kw-names name)))
           (if (null? names)
             (Err raise (lit type)
               (Str8 append (Str8 append "list." name) "() takes no keyword arguments") ())
             (apply (%py-list-attr obj name)
               (%py-none-holes (%py-kw-args (list name names 0 #f) pos kws))))))
-      ((%py-str-is obj)
+      ((python-str-is obj)
         (if (Str8 =? name "format")
           ; the template crosses over and the result crosses back -- the brace
           ; engine works in platform strings from end to end
-          (%py-str-of-x (%py-strformat-kw (%ps->x (%py-str-cps obj)) pos kws))
+          (python-str-of-x (%py-strformat-kw (ps->x (python-str-cps obj)) pos kws))
           (let ((names (%py-str-kw-names name)))
             (if (null? names)
               (Err raise (lit type)
@@ -265,8 +266,8 @@
               (apply (%py-str-attr obj name)
                 (%py-none-holes
                   (%py-kw-args (list (Str8 append "str." name) names 0 #f) pos kws)))))))
-      ((%py-obj-is obj)
-        (let ((m (%py-method-find (%py-obj-class obj) name)))
+      ((python-obj-is obj)
+        (let ((m (%py-method-find (python-obj-class obj) name)))
           (let ((sig (if (null? m) () (%py-sig-of m))))
             (if (null? sig)
               (%py-kwcall (%py-getattr obj name) pos kws)
@@ -292,9 +293,9 @@
           (if (null? (first ss)) (self (rest ss))
             (pair (first (first ss)) (self (pair (rest (first ss)) (rest ss))))))))
     (cat segs)))
-(def %py-tuple? (fn (_ v) (%py-tuple-is v)))
+(def %py-tuple? (fn (_ v) (python-tuple-is v)))
 
-(%py-sweep!)
+(python-sweep!)
 ; Unpacking is a count and a walk: `a, b = f()` is how a Python function
 ; returns two things, and Python is strict about the count.  A tuple or a list
 ; is counted whole; any other iterable is read one value past the count and no
@@ -302,12 +303,12 @@
 (def %py-unpack
   (fn (_ v n)
     (match
-      ((%py-tuple-is v) (%py-unpack-counted (%py-tuple-elems v) n))
-      ((%py-list? v) (%py-unpack-counted (%py-list-elems v) n))
+      ((python-tuple-is v) (%py-unpack-counted (python-tuple-elems v) n))
+      ((python-list? v) (%py-unpack-counted (python-list-elems v) n))
       (#t (%py-unpack-pulled (%py-unpack-source v) n 0 ())))))
 (def %py-unpack-counted
   (fn (_ es n)
-    (let ((got (%py-length es)))
+    (let ((got (python-length es)))
       (match
         ((< got n) (%py-unpack-short n got))
         ((> got n) (%py-unpack-refuse "too many" (%number->str n) (%py-unpack-got got)))
@@ -316,7 +317,7 @@
   (fn (self src n i acc)
     (if (= i n)
       (if (same? (%py-iter-pull! src) %py-gen-done)
-        (%py-reverse acc)
+        (python-reverse acc)
         ; an iterator's length is not known, so CPython names no count
         (%py-unpack-refuse "too many" (%number->str n) ""))
       (let ((v (%py-iter-pull! src)))
@@ -340,28 +341,28 @@
   (fn (_ v)
     (%py-iter-open v
       (Str8 append "cannot unpack non-iterable "
-        (Str8 append (%py-class-name (%py-type-of v)) " object")))))
+        (Str8 append (python-class-name (python-type-of v)) " object")))))
 
 ; `a, *b, c = v`: before values, a list of the middle, after values -- every
 ; value read, since the star takes what the others leave
 (def %py-unpack-star
   (fn (_ v before after)
     (let ((es (match
-                ((%py-tuple-is v) (%py-tuple-elems v))
-                ((%py-list? v) (%py-list-elems v))
+                ((python-tuple-is v) (python-tuple-elems v))
+                ((python-list? v) (python-list-elems v))
                 (#t (%py-unpack-drain (%py-unpack-source v) ())))))
-      (let ((got (%py-length es)) (least (+ before after)))
+      (let ((got (python-length es)) (least (+ before after)))
         (if (< got least)
           (%py-unpack-refuse "not enough" (Str8 append "at least " (%number->str least))
             (%py-unpack-got got))
-          (let ((tail (%py-drop es before)))
-            (%py-list-cat (%py-take-n es before ())
-              (pair (%py-list-new (%py-take-n tail (- got least) ()))
-                (%py-drop tail (- got least))))))))))
+          (let ((tail (python-drop es before)))
+            (python-list-cat (python-take-n es before ())
+              (pair (python-list-new (python-take-n tail (- got least) ()))
+                (python-drop tail (- got least))))))))))
 (def %py-unpack-drain
   (fn (self src acc)
     (let ((v (%py-iter-pull! src)))
-      (if (same? v %py-gen-done) (%py-reverse acc) (self src (pair v acc))))))
+      (if (same? v %py-gen-done) (python-reverse acc) (self src (pair v acc))))))
 
 ; --- super() -----------------------------------------------------------------
 ;
@@ -391,8 +392,8 @@
     ; from: a method then comes back unbound, and a classmethod binds that
     ; class, as a lookup through the class would.
     (def obj (%py-super-self sup))
-    (def cls? (if (%py-class-is obj) (%py-subclass? obj (%py-super-from sup)) #f))
-    (def owner (if cls? obj (%py-obj-class obj)))
+    (def cls? (if (%py-class-is obj) (python-subclass? obj (%py-super-from sup)) #f))
+    (def owner (if cls? obj (python-obj-class obj)))
     (let ((base (%py-class-base (%py-super-from sup))))
       (if (null? base)
         (Err raise (lit attribute)
@@ -417,7 +418,7 @@
                   ((eq? k (lit classmethod)) (%py-bound-new f owner))
                   (cls? m)
                   (#t (%py-prop-get m obj name)))))
-            ((%py-desc-get? m) ((%py-dunder m "__get__") (if cls? () obj) owner))
+            ((%py-desc-get? m) ((python-dunder m "__get__") (if cls? () obj) owner))
             ((not (%py-fn-is m)) m)
             ; __new__ comes back unbound whatever the self, as the instance
             ; path reads it: CPython makes it a staticmethod
@@ -451,10 +452,10 @@
 ;
 ; So a NUL-bearing str raises here, like at every other crossing: a format
 ; field is built as a platform string and cannot carry one.
-(def %py-str
+(def python-str
   (fn (_ v)
     (match
-      ((%py-str-is v) (%ps->x (%py-str-cps v)))
+      ((python-str-is v) (ps->x (python-str-cps v)))
       ((%py-fn-is v) (%py-fn-repr v))
       ((%py-bound-is v) (%py-bound-repr v))
       ; ALREADY TEXT, AND ALREADY THE PLATFORM'S.  A conversion has run ahead
@@ -467,10 +468,10 @@
       ((eq? v #t) "True")
       ((eq? v #f) "False")
       ((%py-float-is v) (%py-frepr v))
-      ((%py-complex-is v) (%py-crepr v))
+      ((python-complex-is v) (%py-crepr v))
       ; str(e) is the MESSAGE, the same rule %py-write states for print(e)
       ((Err err? v) (v msg))
-      ((%py-obj-is v) (%py-text->x (%py-obj-str v)))
+      ((python-obj-is v) (python-text->x (%py-obj-str v)))
       (#t (%py-write-to-str v)))))
 
 ; A STRING'S repr IS PYTHON'S: single quotes unless the text holds a single
@@ -482,9 +483,9 @@
   (fn (_ n) (Str8 append (Str8 sub (Num quotient n 16) 1 "0123456789abcdef") (Str8 sub (Num modulo n 16) 1 "0123456789abcdef"))))
 (def %py-str-repr
   (fn (_ v)
-    (let ((l (%py-str-cps v)))
+    (let ((l (python-str-cps v)))
       (let ((q (if (if (%pb-in? (list 39) l) (not (%pb-in? (list 34) l)) #f) 34 39)))
-        (let ((qs (%py-list->string (list (%py-int->char q)))))
+        (let ((qs (python-list->string (list (%py-int->char q)))))
           (Str8 append qs (Str8 append (%py-str-repr-go l q "") qs)))))))
 
 ; A CODE POINT SHOWS AS ITSELF unless it cannot: the quote in use, a
@@ -510,7 +511,7 @@
           (Str8 append acc
             (match
               ((= c 92) "\\\\")
-              ((= c q) (Str8 append "\\" (%py-list->string (list (%py-int->char c)))))
+              ((= c q) (Str8 append "\\" (python-list->string (list (%py-int->char c)))))
               ((= c 10) "\\n")
               ((= c 13) "\\r")
               ((= c 9) "\\t")
@@ -524,9 +525,9 @@
               ((if (>= c 55296) (<= c 57343) #f)
                 (Str8 append "\\u"
                   (Str8 append (%py-hex2 (Num quotient c 256)) (%py-hex2 (% c 256)))))
-              (#t (%pb->str (%ps-enc1 c))))))))))
+              (#t (pb->str (ps-enc1 c))))))))))
 
-(%py-sweep!)
+(python-sweep!)
 ; <function NAME at 0xADDR>: the name is the signature's, the address is the
 ; identity every function already has for hashing.
 (def %py-fn-repr
@@ -535,7 +536,7 @@
       (Str8 append "<function "
         (Str8 append (if (null? sig) "?" (first sig))
           (Str8 append " at "
-            (Str8 append (%py-str (%py-hex (%py-id v))) ">")))))))
+            (Str8 append (python-str (%py-hex (%py-id v))) ">")))))))
 
 ; <bound method CLASS.NAME of REPR>: the class is the receiver's, or the
 ; receiver itself when a classmethod was bound to a class.
@@ -545,11 +546,11 @@
       (let ((sig (%py-sig-of m)))
         (Str8 append "<bound method "
           (Str8 append
-            (if (%py-class-is self) (%py-class-name self)
-              (if (%py-obj-is self) (%py-class-name (%py-obj-class self)) "?"))
+            (if (%py-class-is self) (python-class-name self)
+              (if (python-obj-is self) (python-class-name (python-obj-class self)) "?"))
             (Str8 append "."
               (Str8 append (if (null? sig) "?" (first sig))
-                (Str8 append " of " (Str8 append (%py-repr-of self) ">"))))))))))
+                (Str8 append " of " (Str8 append (python-repr-of self) ">"))))))))))
 
 ; The attributes a bound method answers for: its name, its receiver, and the
 ; function underneath.
@@ -562,58 +563,58 @@
         (let ((sig (%py-sig-of (%py-bound-fn v))))
           (if (null? sig)
             (Err raise (lit attribute) "'method' object has no attribute '__name__'" ())
-            (%py-str-of-x (first sig)))))
+            (python-str-of-x (first sig)))))
       (#t
         (Err raise (lit attribute)
           (Str8 append (Str8 append "'method' object has no attribute '" name) "'") ())))))
 
-(def %py-repr-of
+(def python-repr-of
   (fn (_ v)
     (match
       ((null? v) "None")
       ((eq? v #t) "True")
       ((eq? v #f) "False")
-      ((%py-str-is v) (%py-str-repr v))
+      ((python-str-is v) (%py-str-repr v))
       ((%py-fn-is v) (%py-fn-repr v))
       ((%py-bound-is v) (%py-bound-repr v))
       ((%py-float-is v) (%py-frepr v))
-      ((%py-complex-is v) (%py-crepr v))
-      ((%py-obj-is v) (%py-text->x (%py-obj-repr v)))
+      ((python-complex-is v) (%py-crepr v))
+      ((python-obj-is v) (python-text->x (%py-obj-repr v)))
       ((eq? v %py-Ellipsis) "Ellipsis")
       (#t (%py-write-to-str v)))))
 
-; repr() the BUILTIN, against %py-repr-of the internal one -- the same split
+; repr() the BUILTIN, against python-repr-of the internal one -- the same split
 ; str() makes just above, and for the same reason: every other caller of
-; %py-repr-of is appending its answer to a platform string.  A repr never
+; python-repr-of is appending its answer to a platform string.  A repr never
 ; carries a NUL out (%py-str-repr writes one as \x00), so this crossing is
 ; always safe.
-(def %py-repr-builtin (fn (_ v) (%py-str-of-x (%py-repr-of v))))
+(def %py-repr-builtin (fn (_ v) (python-str-of-x (python-repr-of v))))
 
 ; str(o) and repr(o) for an object: __str__ (falling back to __repr__) and
 ; __repr__, each answering a string; an exception instance's str is its
 ; message; the default is the <qualname object> form.
 (def %py-obj-default-repr
   (fn (_ o)
-    (if (%py-subclass? (%py-obj-class o) %py-exc-BaseException)
-      (Str8 append (%py-class-name (%py-obj-class o))
+    (if (python-subclass? (python-obj-class o) %py-exc-BaseException)
+      (Str8 append (python-class-name (python-obj-class o))
         (Str8 append ": " (%py-exc-msg o)))
-      (let ((n (%py-obj-native o)))
+      (let ((n (python-obj-native o)))
         (if (null? n)
-          (Str8 append "<" (Str8 append (%py-class-qualname (%py-obj-class o)) " object>"))
-          (%py-repr-of n))))))
+          (Str8 append "<" (Str8 append (python-class-qualname (python-obj-class o)) " object>"))
+          (python-repr-of n))))))
 (def %py-obj-repr
   (fn (_ o)
-    (let ((m (%py-dunder o "__repr__")))
+    (let ((m (python-dunder o "__repr__")))
       (if (null? m) (%py-obj-default-repr o) (m)))))
 (def %py-obj-str
   (fn (_ o)
-    (let ((m (%py-dunder o "__str__")))
+    (let ((m (python-dunder o "__str__")))
       (if (not (null? m))
         (m)
-        (let ((r (%py-dunder o "__repr__")))
+        (let ((r (python-dunder o "__repr__")))
           (if (not (null? r))
             (r)
-            (if (%py-subclass? (%py-obj-class o) %py-exc-Exception)
+            (if (python-subclass? (python-obj-class o) %py-exc-Exception)
               (%py-exc-msg o)
               (%py-obj-default-repr o))))))))
 
@@ -626,15 +627,15 @@
 ; bin(-15) is -0b1111, not 0b-1111.
 (def %py-based-str
   (fn (_ v base pfx)
-    (if (not (eq? (%py-num-py-type (%py-boolnorm v)) (lit int)))
+    (if (not (eq? (python-num-py-type (python-boolnorm v)) (lit int)))
       (Err raise (lit type) "an integer is required" ())
-      (let ((m (%py-fmt-base (%py-boolnorm v) base #f)))
+      (let ((m (%py-fmt-base (python-boolnorm v) base #f)))
         ; bin/hex/oct ARE PYTHON-FACING and answer strs -- its only three
         ; callers are those builtins.  `bin(b)[:20]` slices the result, and a
         ; platform string is not a str, so the subscript fell past the string
         ; arm into the mapping one and complained "unhashable type: 'slice'"
         ; about a perfectly ordinary slice.
-        (%py-str-of-x
+        (python-str-of-x
           (Str8 append (if (first m) "-" "") (Str8 append pfx (rest m))))))))
 (def %py-bin (fn (_ v) (%py-based-str v 2 "0b")))
 (def %py-hex (fn (_ v) (%py-based-str v 16 "0x")))
@@ -642,8 +643,8 @@
 
 (def %py-divmod
   (fn (_ a b)
-    (if (if (%py-num? a) (%py-num? b) #f)
-      (%py-tuple-new (list (%py-floordiv a b) (%py-mod a b)))
+    (if (if (python-num? a) (python-num? b) #f)
+      (python-tuple-new (list (python-floordiv a b) (python-mod a b)))
       (%py-op-refuse "divmod()" a b))))
 
 ; A CLOSURE HAS NO PREDICATE, so its type handle is taken from one built
@@ -656,7 +657,7 @@
       ((%py-fn-is v) #t)
       ((%py-bound-is v) #t)
       ((%py-class-is v) #t)
-      ((%py-obj-is v) (not (null? (%py-dunder v "__call__"))))
+      ((python-obj-is v) (not (null? (python-dunder v "__call__"))))
       (#t #f))))
 
 ; Every call goes through one door.  The engine applies a closure, and an
@@ -678,9 +679,9 @@
   (fn (_ f args)
     (match
       ((%py-fn-is f) (apply f args))
-      ((%py-class-is f) (%py-instantiate f args))
+      ((%py-class-is f) (python-instantiate f args))
       ; the object's own door, which asks __call__ or names the class
-      ((%py-obj-is f) (%py-obj-call f args))
+      ((python-obj-is f) (%py-obj-call f args))
       ; a bound method: the receiver goes first, then the arguments
       ((%py-bound-is f) (apply (%py-bound-fn f) (pair (%py-bound-self f) args)))
       (#t (%py-call-refuse f)))))
@@ -690,7 +691,7 @@
 (def %py-call-refuse
   (fn (_ f)
     (Err raise (lit type)
-      (Str8 append (Str8 append "'" (%py-class-name (%py-type-of f)))
+      (Str8 append (Str8 append "'" (python-class-name (python-type-of f)))
         "' object is not callable")
       ())))
 
@@ -708,7 +709,7 @@
     (let ((found (go (first %py-ids))))
       (if (not (null? found))
         found
-        (let ((n (+ 4300000000 (* 16 (%py-length (first %py-ids))))))
+        (let ((n (+ 4300000000 (* 16 (python-length (first %py-ids))))))
           (%seq (%set-first! %py-ids (pair (pair v n) (first %py-ids))) n))))))
 
 ; getattr's default catches ONLY AttributeError, as in Python
@@ -723,7 +724,7 @@
 (def %py-attr-name!
   (fn (_ n)
     (match
-      ((%py-str-is n) (%ps->x (%py-str-cps n)))
+      ((python-str-is n) (ps->x (python-str-cps n)))
       ; ALREADY THE PLATFORM'S, AND SO ALREADY DONE.  These doors have two variants
       ; of caller: getattr/setattr/delattr/hasattr, where the name is a str the
       ; program computed, and the PARSER, where `del obj.x` read the name out of
@@ -742,7 +743,7 @@
 (def %py-setattr3
   (fn (_ o n0 v)
     (def n (%py-attr-name! n0))
-    (if (match ((%py-obj-is o) #t) ((%py-class-is o) #t) (#t (%py-mod-is o)))
+    (if (match ((python-obj-is o) #t) ((%py-class-is o) #t) (#t (%py-mod-is o)))
       (%py-setattr o n v)
       (Err raise (lit attribute) "object has no settable attributes" ()))))
 (def %py-delattr
@@ -753,12 +754,12 @@
       ; refuses, as in Python
       (match
         ((%py-class-builtin? o) (%py-immutable-type! "delete" o n))
-        ((null? (%py-alist-find n (%py-class-methods o)))
+        ((null? (python-alist-find n (%py-class-methods o)))
           (Err raise (lit attribute)
-            (Str8 append (Str8 append "type object '" (%py-class-name o))
+            (Str8 append (Str8 append "type object '" (python-class-name o))
               (Str8 append "' has no attribute '" (Str8 append n "'"))) ()))
-        (#t (%seq (%py-class-methods-set! o (%py-attr-drop (%py-class-methods o) n)) ())))
-    (if (not (%py-obj-is o))
+        (#t (%seq (python-class-methods-set! o (%py-attr-drop (%py-class-methods o) n)) ())))
+    (if (not (python-obj-is o))
       (if (%py-mod-is o)
         (%py-mod-del! o n)
         (Err raise (lit attribute) "object has no deletable attributes" ()))
@@ -770,13 +771,13 @@
       ; object carries a __delattr__ as well, so the lookup always finds one:
       ; a class supplies a hook when what the walk finds is not object's
       ; default, and the default is the drop below.
-      (let ((h (%py-method-find (%py-obj-class o) "__delattr__")))
+      (let ((h (%py-method-find (python-obj-class o) "__delattr__")))
         (if (if (null? h) #f (not (same? h %py-object-delattr)))
-          (%seq ((%py-bind-method h o) (%py-str-of-x n)) ())
-          (let ((d (%py-method-find (%py-obj-class o) n)))
+          (%seq ((%py-bind-method h o) (python-str-of-x n)) ())
+          (let ((d (%py-method-find (python-obj-class o) n)))
             (match
               ((%py-prop? d) (%py-prop-del d o n))
-              ((%py-desc-delete? d) (%seq ((%py-dunder d "__delete__") o) ()))
+              ((%py-desc-delete? d) (%seq ((python-dunder d "__delete__") o) ()))
               (#t (%py-obj-drop-attr! o n))))))))))
 (def %py-attr-drop
   (fn (self as n)
@@ -785,7 +786,7 @@
         (self (rest as) n)
         (pair (first as) (self (rest as) n))))))
 
-(%py-sweep!)
+(python-sweep!)
 ; the explicit super(type, obj) form: unimplemented, and every argument
 ; signature the corpus passes is one Python itself rejects
 ; super(type, obj): the explicit form, the same record the zero-argument
@@ -800,8 +801,8 @@
         (Err raise (lit type) "super() argument 2 is required here" ()))
       (#t
         (let ((cls (first a)) (obj (first (rest a))))
-          (if (if (%py-obj-is obj) (%py-subclass? (%py-obj-class obj) cls)
-                (if (%py-class-is obj) (%py-subclass? obj cls) #f))
+          (if (if (python-obj-is obj) (python-subclass? (python-obj-class obj) cls)
+                (if (%py-class-is obj) (python-subclass? obj cls) #f))
             (%py-super-new cls obj)
             (Err raise (lit type)
               "super(type, obj): obj must be an instance or subtype of type" ())))))))
@@ -811,8 +812,8 @@
     (match
       ((not (%py-class-is c))
         (Err raise (lit type) "issubclass() arg 1 must be a class" ()))
-      ((%py-tuple-is b) (%py-any-subclass? c (%py-tuple-elems b)))
-      ((%py-class-is b) (%py-subclass? c b))
+      ((python-tuple-is b) (%py-any-subclass? c (python-tuple-elems b)))
+      ((%py-class-is b) (python-subclass? c b))
       (#t
         (Err raise (lit type)
           "issubclass() arg 2 must be a class or tuple of classes" ())))))
@@ -822,19 +823,19 @@
       ((null? bs) #f)
       ((not (%py-class-is (first bs)))
         (Err raise (lit type) "issubclass() arg 2 must be a class or tuple of classes" ()))
-      ((%py-subclass? c (first bs)) #t)
+      ((python-subclass? c (first bs)) #t)
       (#t (self c (rest bs))))))
 
 ; enumerate and filter are builtin iterators, like map (%py-it): a step over
 ; the source opened at the call, ending with the StopIteration its source
 ; raised (%py-iter-next).
 (def %py-enumerate
-  (%py-sig!
+  (python-sig!
     (fn (_ . a)
       (if (null? a)
         (Err raise (lit type) "enumerate() missing required argument 'iterable'" ())
         ())
-      (%py-enumerate-over (%py-iter-open (%py-opt a 0 ())) (pair (%py-opt a 1 0) ())))
+      (%py-enumerate-over (%py-iter-open (python-opt a 0 ())) (pair (python-opt a 1 0) ())))
     "enumerate" (list "iterable" "start") 1 #f))
 ; `at` is the count the next item gets, in a cell the step moves on
 (def %py-enumerate-over
@@ -844,7 +845,7 @@
 (def %py-enumerate-item
   (fn (_ at v) (if (same? v %py-gen-done) v (%py-enumerate-pair at (first at) v))))
 (def %py-enumerate-pair
-  (fn (_ at i v) (%seq (%set-first! at (+ i 1)) (%py-tuple-new (list i v)))))
+  (fn (_ at i v) (%seq (%set-first! at (+ i 1)) (python-tuple-new (list i v)))))
 ; filter(None, it) keeps the truthy elements
 (def %py-filter
   (fn (_ f it)
@@ -866,22 +867,22 @@
 ; anything materialisable
 (def %py-rev-index
   (fn (self g i acc)
-    (if (< i 0) (%py-reverse acc) (self g (- i 1) (pair (g i) acc)))))
+    (if (< i 0) (python-reverse acc) (self g (- i 1) (pair (g i) acc)))))
 (def %py-reversed
   (fn (_ v)
     (match
-      ((%py-obj-is v)
-        (let ((m (%py-dunder v "__reversed__")))
+      ((python-obj-is v)
+        (let ((m (python-dunder v "__reversed__")))
           (if (not (null? m))
             (m)
-            (let ((l (%py-dunder v "__len__")))
-              (let ((g (%py-dunder v "__getitem__")))
+            (let ((l (python-dunder v "__len__")))
+              (let ((g (python-dunder v "__getitem__")))
                 (if (if (null? l) #t (null? g))
                   (Err raise (lit type) "object is not reversible" ())
                   ; %py-rev-index already walks from the end
-                  (%py-list-new (%py-rev-index g (- (l) 1) ()))))))))
+                  (python-list-new (%py-rev-index g (- (l) 1) ()))))))))
       ((%py-range-is v) (%py-range-reversed v))
-      (#t (%py-list-new (%py-reverse (%py-iter-elems v)))))))
+      (#t (python-list-new (python-reverse (python-iter-elems v)))))))
 
 ; --- Sets --------------------------------------------------------------------
 ;
@@ -890,23 +891,23 @@
 ; every builder folds through %py-set-put rather than filtering afterwards.
 (def %py-set-has?
   (fn (self v es)
-    (if (null? es) #f (if (%py-truthy (%py-eq v (first es))) #t (self v (rest es))))))
+    (if (null? es) #f (if (%py-truthy (python-eq v (first es))) #t (self v (rest es))))))
 ; a set, list or dict cannot be a set element or a dict key; a frozenset can
 (def %py-hashable?
   (fn (_ v)
     (match
       ((%py-list-is v) #f)
       ((%py-dict-is v) #f)
-      ((%py-set-is v) (%py-set-frozen? v))
-      ((%py-dq-is v) #f)
-      ((%py-barr-is v) #f)
+      ((python-set-is v) (%py-set-frozen? v))
+      ((python-dq-is v) #f)
+      ((python-barr-is v) #f)
       ; an instance is as its class decides (%py-hash-rule)
-      ((%py-obj-is v)
-        (let ((rule (%py-hash-rule (%py-obj-class v))))
+      ((python-obj-is v)
+        (let ((rule (%py-hash-rule (python-obj-class v))))
           (match
             ((null? rule) #t)
             ((eq? rule (lit own)) #t)
-            ((eq? rule (lit native)) (%py-hashable? (%py-native-of v)))
+            ((eq? rule (lit native)) (%py-hashable? (python-native-of v)))
             (#t #f))))
       (#t #t))))
 ; cannot use 'list' as a set element (unhashable type: 'list'), ROLE being
@@ -927,7 +928,7 @@
   (fn (_ v)
     (Err raise (lit type)
       (Str8 append (Str8 append "unhashable type: '" (%py-type-name v)) "'") ())))
-(def %py-type-name (fn (_ v) (%py-class-name (%py-type-of v))))
+(def %py-type-name (fn (_ v) (python-class-name (python-type-of v))))
 ; append v unless an equal element is already there
 (def %py-set-put
   (fn (_ es v)
@@ -942,15 +943,15 @@
 (def %py-set-ctor
   (fn (_ . a)
     (%seq (%py-at-most-one! "set" a)
-      (%py-set-of #f (if (null? a) () (%py-iter-elems (first a)))))))
+      (%py-set-of #f (if (null? a) () (python-iter-elems (first a)))))))
 (def %py-frozenset-ctor
   (fn (_ . a)
     (%seq (%py-at-most-one! "frozenset" a)
-      (%py-set-of #t (if (null? a) () (%py-iter-elems (first a)))))))
+      (%py-set-of #t (if (null? a) () (python-iter-elems (first a)))))))
 ; the elements of any iterable, as a plain list
 (def %py-set-args
   (fn (self as acc)
-    (if (null? as) acc (self (rest as) (%py-append acc (%py-iter-elems (first as)))))))
+    (if (null? as) acc (self (rest as) (%py-append acc (python-iter-elems (first as)))))))
 (def %py-set-minus
   (fn (self es drop)
     (if (null? es) ()
@@ -974,12 +975,12 @@
         (if (null? l) #t
           (let ((e (%py-dfind (first (first l)) eb)))
             (if (null? e) #f
-              (if (%py-truthy (%py-eq (rest (first l)) (rest e))) (self (rest l)) #f))))))
-    (if (= (%py-length ea) (%py-length eb)) (same ea) #f)))
+              (if (%py-truthy (python-eq (rest (first l)) (rest e))) (self (rest l)) #f))))))
+    (if (= (python-length ea) (python-length eb)) (same ea) #f)))
 
 (def %py-set-eq?
   (fn (_ a b)
-    (if (= (%py-length a) (%py-length b)) (%py-set-subset? a b) #f)))
+    (if (= (python-length a) (python-length b)) (%py-set-subset? a b) #f)))
 ; a mutating method on a frozenset is simply absent, as in Python
 (def %py-set-mutate!
   (fn (_ s name new)
@@ -993,8 +994,8 @@
 ; result takes the LEFT operand's frozen bit, as in Python.
 (def %py-set-binop
   (fn (_ a b op body)
-    (if (if (%py-set-is a) (%py-set-is b) #f)
-      (%py-set-new (%py-set-frozen? a) (body (%py-set-elems a) (%py-set-elems b)))
+    (if (if (python-set-is a) (python-set-is b) #f)
+      (%py-set-new (%py-set-frozen? a) (body (python-set-elems a) (python-set-elems b)))
       (%py-op-refuse op a b))))
 (def %py-set-or  (fn (_ a b) (%py-set-binop a b "|" (fn (_ x y) (%py-set-fold x y)))))
 (def %py-set-and (fn (_ a b) (%py-set-binop a b "&" (fn (_ x y) (%py-set-keep x y)))))
@@ -1006,14 +1007,14 @@
 ; <= is subset, < is proper subset (and the mirror for >= and >
 (def %py-set-cmp
   (fn (_ a b op)
-    (if (if (%py-set-is a) (%py-set-is b) #f)
-      (let ((x (%py-set-elems a)) (y (%py-set-elems b)))
+    (if (if (python-set-is a) (python-set-is b) #f)
+      (let ((x (python-set-elems a)) (y (python-set-elems b)))
         (match
           ((Str8 =? op "<=") (%py-set-subset? x y))
           ((Str8 =? op "<")
-            (if (%py-set-subset? x y) (< (%py-length x) (%py-length y)) #f))
+            (if (%py-set-subset? x y) (< (python-length x) (python-length y)) #f))
           ((Str8 =? op ">=") (%py-set-subset? y x))
-          ((%py-set-subset? y x) (> (%py-length x) (%py-length y)))
+          ((%py-set-subset? y x) (> (python-length x) (python-length y)))
           (#t #f)))
       (%py-ord-refuse op a b))))
 
@@ -1042,7 +1043,7 @@
 
 (def %py-set-attr
   (fn (_ s name)
-    (def es (fn (_) (%py-set-elems s)))
+    (def es (fn (_) (python-set-elems s)))
     (def frozen (%py-set-frozen? s))
     (def like (fn (_ l) (%py-set-new frozen l)))
     (match
@@ -1055,12 +1056,12 @@
       ((Str8 =? name "remove")
         (fn (_ v)
           (if (not (%py-set-has? v (es)))
-            (error (%py-instantiate %py-exc-KeyError (list v)))
+            (error (python-instantiate %py-exc-KeyError (list v)))
             (%py-set-mutate! s "remove" (%py-set-minus (es) (list v))))))
       ((Str8 =? name "pop")
         (fn (_)
           (if (null? (es))
-            (error (%py-instantiate %py-exc-KeyError (list "pop from an empty set")))
+            (error (python-instantiate %py-exc-KeyError (list "pop from an empty set")))
             (let ((v (first (es))))
               (%seq (%py-set-mutate! s "pop" (rest (es))) v)))))
       ((Str8 =? name "clear") (fn (_) (%py-set-mutate! s "clear" ())))
@@ -1073,7 +1074,7 @@
         (fn (_ . a) (like (%py-set-minus (es) (%py-set-args a ())))))
       ((Str8 =? name "symmetric_difference")
         (fn (_ o)
-          (let ((os (%py-iter-elems o)))
+          (let ((os (python-iter-elems o)))
             (like (%py-set-fold (%py-set-minus (es) os) (%py-set-minus os (es)))))))
       ((Str8 =? name "update")
         (fn (_ . a) (%py-set-mutate! s "update" (%py-set-fold (es) (%py-set-args a ())))))
@@ -1083,23 +1084,23 @@
         (fn (_ . a) (%py-set-mutate! s "difference_update" (%py-set-minus (es) (%py-set-args a ())))))
       ((Str8 =? name "symmetric_difference_update")
         (fn (_ o)
-          (let ((os (%py-iter-elems o)))
+          (let ((os (python-iter-elems o)))
             (%py-set-mutate! s "symmetric_difference_update"
               (%py-set-fold (%py-set-minus (es) os) (%py-set-minus os (es)))))))
       ((Str8 =? name "issubset")
-        (fn (_ o) (%py-set-subset? (es) (%py-iter-elems o))))
+        (fn (_ o) (%py-set-subset? (es) (python-iter-elems o))))
       ((Str8 =? name "issuperset")
-        (fn (_ o) (%py-set-subset? (%py-iter-elems o) (es))))
+        (fn (_ o) (%py-set-subset? (python-iter-elems o) (es))))
       ((Str8 =? name "isdisjoint")
-        (fn (_ o) (null? (%py-set-keep (es) (%py-iter-elems o)))))
+        (fn (_ o) (null? (%py-set-keep (es) (python-iter-elems o)))))
       ((Str8 =? name "__contains__") (fn (_ v) (%py-set-has? v (es))))
       (#t
-        (%py-class-row-attr (if frozen %py-cls-frozenset %py-cls-set) s name
+        (python-class-row-attr (if frozen %py-cls-frozenset %py-cls-set) s name
           (if frozen "frozenset" "set"))))))
 
-(%py-sweep!)
+(python-sweep!)
 (def %py-mklist-of
-  (fn (_ v) (%py-list-new (%py-iter-elems v))))
+  (fn (_ v) (python-list-new (python-iter-elems v))))
 
 ; --- dir ---------------------------------------------------------------------
 ;
@@ -1138,7 +1139,7 @@
   (fn (_ v)
     (match
       ((%py-class-is v) (%py-dir-class v ()))
-      ((%py-obj-is v) (%py-dir-class (%py-obj-class v) (%py-dir-keys (%py-obj-attrs v) ())))
+      ((python-obj-is v) (%py-dir-class (python-obj-class v) (%py-dir-keys (python-obj-attrs v) ())))
       ((%py-mod-is v) (%py-dir-keys (%py-mod-rows v) ()))
       (#t ()))))
 
@@ -1162,25 +1163,25 @@
 (def %py-dir-strs
   (fn (self l acc)
     (if (null? l) acc
-      (self (rest l) (pair (%py-str-of-x (first l)) acc)))))
+      (self (rest l) (pair (python-str-of-x (first l)) acc)))))
 
 ; Names, as the platform's strings, to the sorted list of strs dir() answers.
 (def %py-dir-sorted
   (fn (_ names)
-    (%py-list-new (%py-msort-by (%py-dir-strs (%py-dir-uniq names ()) ()) %py-ident))))
+    (python-list-new (%py-msort-by (%py-dir-strs (%py-dir-uniq names ()) ()) %py-ident))))
 
 (def %py-dir
-  (%py-sig!
+  (python-sig!
     (fn (_ . a)
       (if (null? a)
         (Err raise (lit type)
           "dir() with no arguments needs a namespace this runtime does not keep" ())
         ; an object's class may say what dir() lists (__dir__); a class is
         ; listed by type's rule, the walk below, whatever its own __dir__ says
-        (let ((m (if (%py-obj-is (first a)) (%py-dunder (first a) "__dir__") ())))
+        (let ((m (if (python-obj-is (first a)) (python-dunder (first a) "__dir__") ())))
           (if (null? m)
             (%py-dir-sorted (%py-dir-of (first a)))
-            (%py-list-new (%py-msort-by (%py-iter-elems (m)) %py-ident))))))
+            (python-list-new (%py-msort-by (python-iter-elems (m)) %py-ident))))))
     "dir" (list "object") 0 #f))
 
 ; `hasattr` is defined in terms of getattr in Python too: it is "does this

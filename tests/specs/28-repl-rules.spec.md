@@ -19,7 +19,6 @@ must echo.
 ```python
 (%seq
   (do
-    (import python/repl)
     (write (list
       (%py-stmt-form? (lit (set! py-x 5)))
       (%py-stmt-form? (lit (def py-f ())))
@@ -36,9 +35,8 @@ must echo.
 ```python
 (%seq
   (do
-    (import python/repl)
     (write (list
-      (%py-stmt-form? (lit (%py-add 1 2)))
+      (%py-stmt-form? (lit (python-add 1 2)))
       (%py-stmt-form? (lit py-x))
       (%py-stmt-form? (lit (let ((%py-acc (pair () ()))) (%seq a b))))
       (%py-stmt-form? (lit (let ((%py-lhs 1)) (if (%py-truthy %py-lhs) 2 %py-lhs))))
@@ -57,7 +55,6 @@ there: `def f(): ...` on one line is `f` on the next, and at x's prompt too.
 
 ```python
 (do
-  (import python/repl)
   (%py-repl-eval "def f(n):\n    return n + 1")
   (%py-repl-eval "f(41)"))
 ```
@@ -69,7 +66,6 @@ there: `def f(): ...` on one line is `f` on the next, and at x's prompt too.
 ```python
 (%seq
   (do
-    (import python/repl)
     (%py-repl-eval "def sq(n):\n    return n * n")
     (write (py-sq 12)))
   (newline))
@@ -84,7 +80,6 @@ there: `def f(): ...` on one line is `f` on the next, and at x's prompt too.
 ```python
 (%seq
   (do
-    (import python/repl)
     (write (list
       (%py-opens-block? "def f():")
       (%py-opens-block? "if x:")
@@ -106,7 +101,6 @@ name only where the environment does not have it already.
 ```python
 (%seq
   (do
-    (import python/repl)
     (%py-repl-eval "x = 5")
     (%py-repl-eval "x = x + 1")
     (%py-repl-eval "print(x)"))

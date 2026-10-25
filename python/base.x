@@ -45,27 +45,17 @@
 ; what it cannot do it fails at rather than answering uniformly.  The suite
 ; measures the difference; `make score` ranks what is still red.
 
-(import python/util)
 ; A sweep after each load; see python/util.x.
-(import python/tokens python-tokenize)
-(%py-sweep!)
-(import python/indent)
-(%py-sweep!)
-(import python/types)
-(%py-sweep!)
-(import python/str)
-(%py-sweep!)
-(import python/runtime)
-(%py-sweep!)
-(import python/parse)
-(%py-sweep!)
-
-(provide python/base python-version python-run python-tokenize python-lex python-parse python-parse-expr %python-repl-print
-  %py-eval %py-exec %py-compile %py-module-env %py-code-run %py-function-over
-  %py-code-answer)
+(module python/core)
+(python-sweep!)
+(python-sweep!)
+(python-sweep!)
+(python-sweep!)
+(python-sweep!)
+(python-sweep!)
 
 ; the one number sys.implementation.version is read from too
-(def python-version %py-implementation-version)
+(def python-version python-implementation-version)
 
 ; (python-run SRC) -- run a Python program held in a string.
 ; (python-run SRC FILE) -- run it as the file FILE, as CPython runs a script:
@@ -78,22 +68,22 @@
 ; Returns nil: a Python statement has no value to show and `print` writes to
 ; stdout itself, so the REPL printer has nothing to say about a program that
 ; ran.  An expression typed at the prompt is a different question, and
-; %python-repl-print below is where it gets answered.
+; python-repl-print below is where it gets answered.
 (def python-run
   (fn (_ src . file)
     (def before (first %py-program))
     (%set-first! %py-program
       (%py-program-new (if (null? file) "" (%py-parent-dir (first file)))
-        (pair () (%py-root (%py-here)))))
+        (pair () %py-base-env)))
     (def env (%py-module-env))
-    (%py-env-def! env (lit py-__name__) (%py-str-of-x "__main__"))
-    (if (null? file) () (%py-env-def! env (lit py-__file__) (%py-str-of-x (first file))))
-    (%py-dset (%py-modules-now) (%py-str-of-x "__main__") (%py-mod-new env))
+    (%py-env-def! env (lit py-__name__) (python-str-of-x "__main__"))
+    (if (null? file) () (%py-env-def! env (lit py-__file__) (python-str-of-x (first file))))
+    (%py-dset (python-modules-now) (python-str-of-x "__main__") (%py-mod-new env))
     ; raise SystemExit ends the program QUIETLY; anything else uncaught
     ; travels on to whoever ran the program, the table the caller had put back
     ; first either way
     (guard (e (%seq (%set-first! %py-program before)
-                (if (%py-exc-match e %py-exc-SystemExit) () (error e))))
+                (if (%py-exc-match e python-exc-SystemExit) () (error e))))
       (%seq (%py-code-run env (python-parse src) ())
         (%seq (%set-first! %py-program before) ())))))
 
@@ -107,7 +97,7 @@
   (fn (self s i)
     (match
       ((< i 0) ())
-      ((= (%py-code-at s i) 47) i)
+      ((= (python-code-at s i) 47) i)
       (#t (self s (- i 1))))))
 
 ; --- eval, exec, compile -----------------------------------------------------
@@ -147,20 +137,20 @@
 ; Source to forms.
 ; THE SOURCE ARRIVES AS A str AND THE LEXER TAKES A PLATFORM STRING, so this
 ; is a crossing like any other: `str?` asks the platform whether it holds one
-; of ITS strings, which a Python str is no longer, so the test is %py-str-is
+; of ITS strings, which a Python str is no longer, so the test is python-str-is
 ; and the value has to come over before python-lex sees it.
 (def %py-code-of
   (fn (_ src mode)
     (match
       ((%py-code-is src) (%py-code-forms src))
       ; a buffer is source too, read as the utf-8 it holds
-      ((%py-buffer? src)
+      ((python-buffer? src)
         (%py-code-of
-          (%py-str-new (%ps-decode-as (%py-buffer-bytes src) "utf-8" "strict")) mode))
-      ((not (%py-str-is src))
+          (python-str-new (ps-decode-as (python-buffer-bytes src) "utf-8" "strict")) mode))
+      ((not (python-str-is src))
         (Err raise (lit type) "eval()/exec() wants a string or a code object" ()))
       (#t
-        (let ((x (%ps->x (%py-str-cps src))))
+        (let ((x (ps->x (python-str-cps src))))
           (match
             ((Str8 =? mode "eval") (list (%py-eval-expr (python-lex x))))
             ((Str8 =? mode "single") (python-parse-single x))
@@ -182,12 +172,12 @@
 ; A locals mapping is an environment inside the globals', copied the same way.
 (def %py-code-in
   (fn (_ who env src mode ns)
-    (def g (%py-opt ns 0 ()))
-    (def l (%py-opt ns 1 ()))
-    (if (if (null? g) #f (not (%py-dict? g)))
+    (def g (python-opt ns 0 ()))
+    (def l (python-opt ns 1 ()))
+    (if (if (null? g) #f (not (python-dict? g)))
       (Err raise (lit type) (Str8 append who "() globals must be a dict") ())
       ())
-    (if (if (null? l) #f (not (%py-dict? l)))
+    (if (if (null? l) #f (not (python-dict? l)))
       (Err raise (lit type) (Str8 append who "() locals must be a mapping") ())
       ())
     (def genv (if (null? g) env (%py-dict-env g (fn (_) (%py-module-env)))))
@@ -204,19 +194,19 @@
     (let ((ns (first (first d))))
       (if (null? ns)
         (let ((env (make)))
-          (%seq (%py-ns-put-all! env (%py-str-keyed (%py-dict-entries d))) env))
+          (%seq (%py-ns-put-all! env (%py-str-keyed (python-dict-entries d))) env))
         ns))))
 (def %py-str-keyed
   (fn (self entries)
     (match
       ((null? entries) ())
-      ((%py-str-is (first (first entries))) (pair (first entries) (self (rest entries))))
+      ((python-str-is (first (first entries))) (pair (first entries) (self (rest entries))))
       (#t (self (rest entries))))))
 
 ; A dict a program made takes back the names its environment ended with.
 (def %py-dict-back!
   (fn (self d env)
-    (if (if (%py-dict? d) (null? (first (first d))) #f)
+    (if (if (python-dict? d) (null? (first (first d))) #f)
       (%py-dict-back-rows! d (%py-ns-entries env))
       ())))
 (def %py-dict-back-rows!
@@ -228,7 +218,7 @@
 
 (def %py-eval-for
   (fn (_ env)
-    (%py-sig!
+    (python-sig!
       (fn (_ src . ns) (%py-code-in "eval" env src "eval" ns))
       "eval" (list "source" "globals" "locals") 1 #f)))
 
@@ -236,14 +226,14 @@
 ; value is dropped here rather than never taken.
 (def %py-exec-for
   (fn (_ env)
-    (%py-sig!
+    (python-sig!
       (fn (_ src . ns) (%seq (%py-code-in "exec" env src "exec" ns) ()))
       "exec" (list "source" "globals" "locals") 1 #f)))
 
 ; globals() is the program's namespace dict, the same one every time.
 (def %py-globals-for
   (fn (_ env)
-    (%py-sig! (fn (_) (%py-env-ns env)) "globals" () 0 #f)))
+    (python-sig! (fn (_) (%py-env-ns env)) "globals" () 0 #f)))
 
 ; A module's environment -- the program's own, or a file's it imports --
 ; descended from the program's builtins (%py-program) and through them the
@@ -265,10 +255,10 @@
 ; The root's own, for the prompt, whose lines are evaluated there
 ; (python/repl.x).  The prompt's names are x's root, which nothing here can
 ; list, so globals() says so, as dir() with no argument does.
-(def %py-eval (%py-eval-for (%py-root (%py-here))))
-(def %py-exec (%py-exec-for (%py-root (%py-here))))
+(def %py-eval (%py-eval-for %py-base-env))
+(def %py-exec (%py-exec-for %py-base-env))
 (def %py-globals
-  (%py-sig!
+  (python-sig!
     (fn (_)
       (Err raise (lit type)
         "globals() at the prompt needs a namespace this runtime does not list" ()))
@@ -278,21 +268,21 @@
 ; prompt's do (python/parse.x, python-parse-single).  A mode that is none of
 ; the three is a ValueError, as it is in Python.
 (def %py-compile
-  (%py-sig!
+  (python-sig!
     (fn (_ src file mode0)
       ; THE MODE ARRIVES AS A str AND IS COMPARED WITH Str8, so it crosses over
       ; first -- `compile(src, "<s>", "eval")` died with "Str8 =?: not a string"
       ; before it could read its own argument.  %py-code-of takes the crossed
       ; one too: it asks the same question of it.
-      (def mode (if (%py-str-is mode0) (%ps->x (%py-str-cps mode0)) mode0))
+      (def mode (if (python-str-is mode0) (ps->x (python-str-cps mode0)) mode0))
       (if (if (Str8 =? mode "exec") #t (if (Str8 =? mode "eval") #t (Str8 =? mode "single")))
         (%py-code-new mode (%py-code-of src mode)
-          (if (%py-str-is file) (%py-text->x file) "<string>") "<module>" ())
+          (if (python-str-is file) (python-text->x file) "<string>") "<module>" ())
         (Err raise (lit value)
           "compile() mode must be 'exec', 'eval' or 'single'" ())))
     "compile" (list "source" "filename" "mode") 3 #f))
 
-(%py-sweep!)
+(python-sweep!)
 ; function(code, globals): the function CODE is of, made again with GLOBALS
 ; for its globals.  The fn CODE holds is evaluated in the environment the
 ; dict stands for -- a module's own for its namespace dict, and for a dict a
@@ -306,7 +296,7 @@
     (match
       ((not (%py-code-is code))
         (Err raise (lit type) "function() argument 'code' must be code" ()))
-      ((not (%py-dict? globals))
+      ((not (python-dict? globals))
         (Err raise (lit type) "function() argument 'globals' must be dict" ()))
       (#t
         (eval (%py-function-form code)
@@ -315,7 +305,7 @@
   (fn (_ code)
     (if (Str8 =? (%py-code-mode code) "function")
       (let ((r (%py-code-record code)) (f (first (%py-code-forms code))))
-        (list (lit %py-sig!) f (first r)
+        (list (lit python-sig!) f (first r)
           (list (lit lit) (List ref 1 r))
           (List ref 2 r) (List ref 3 r)
           (list (lit lit) (List ref 4 r))
@@ -323,7 +313,7 @@
           #t
           (list (lit %py-here))
           (list (lit lit) (pair f r))))
-      (list (lit %py-sig!)
+      (list (lit python-sig!)
         (list (lit fn) (pair (lit %py-fn) (lit %py-more))
           (list (lit %py-code-answer) (list (lit lit) code) (list (lit %py-here))))
         (%py-code-name code) () 0 #f () () #t (list (lit %py-here))))))
@@ -332,6 +322,6 @@
     (let ((v (%py-code-run env (%py-code-forms code) ())))
       (if (Str8 =? (%py-code-mode code) "eval") v ()))))
 
-(def %python-repl-print
+(def python-repl-print
   (fn (_ result)
     (unless (null? result) (%seq (write result) (newline)))))

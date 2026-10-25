@@ -15,7 +15,7 @@ element. These cases exist so the slot is exercised rather than merely present.
 ### a Python list, including a None
 
 ```python
-(%seq (write (Iter ->list (Iter new (%py-list-new (list 1 () 2))))) (newline))
+(%seq (write (Iter ->list (Iter new (python-list-new (list 1 () 2))))) (newline))
 ```
 ---
     (1 () 2)
@@ -23,7 +23,7 @@ element. These cases exist so the slot is exercised rather than merely present.
 ### a None at the end, where a value-terminated stepper would have been right by luck
 
 ```python
-(%seq (write (Iter ->list (Iter new (%py-list-new (list 1 ()))))) (newline))
+(%seq (write (Iter ->list (Iter new (python-list-new (list 1 ()))))) (newline))
 ```
 ---
     (1 ())
@@ -31,7 +31,7 @@ element. These cases exist so the slot is exercised rather than merely present.
 ### a list of nothing but None
 
 ```python
-(%seq (write (Iter ->list (Iter new (%py-list-new (list ()))))) (newline))
+(%seq (write (Iter ->list (Iter new (python-list-new (list ()))))) (newline))
 ```
 ---
     (())
@@ -42,7 +42,7 @@ The empty case and the all-None case are the two that a value-terminated
 stepper cannot tell apart. They differ here.
 
 ```python
-(%seq (write (Iter ->list (Iter new (%py-list-new ())))) (newline))
+(%seq (write (Iter ->list (Iter new (python-list-new ())))) (newline))
 ```
 ---
     ()
@@ -50,7 +50,7 @@ stepper cannot tell apart. They differ here.
 ### a dict yields its keys
 
 ```python
-(%seq (write (Iter ->list (Iter new (%py-dict-new (list (pair "a" 1) (pair "b" 2)))))) (newline))
+(%seq (write (Iter ->list (Iter new (python-dict-new (list (pair "a" 1) (pair "b" 2)))))) (newline))
 ```
 ---
     ("a" "b")

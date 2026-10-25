@@ -52,14 +52,7 @@
 ; a 16K frame is an ordinary size for one and a fatal recursion depth for
 ; the other (docs and the spec-crash signatures both say so).
 
-(provide python/bytes
-  %pb-of-str %pb->str %pb-nul? %pb-len %pb-ref %pb-sub %pb-cat %pb-repeat
-  %pb-eq? %pb-cmp %pb-find %pb-rfind %pb-count %pb-drop %pb-take %pb-starts? %pb-ends? %pb-in?
-  %pb-split %pb-rsplit %pb-splitlines %pb-join %pb-replace %pb-strip
-  %pb-partition %pb-rpartition %pb-center %pb-ljust %pb-rjust
-  %pb-upper %pb-lower %pb-swapcase %pb-capitalize %pb-title
-  %pb-isspace %pb-isalpha %pb-isdigit %pb-isalnum %pb-isupper %pb-islower)
-
+(module python/core)
 (def %pb-code (prim-ref (lit char) (lit ->int)))
 (def %pb-char (prim-ref (lit int) (lit ->char)))
 ; The engine's byte packer: the low byte of each character goes into the string.
@@ -74,7 +67,7 @@
 ; A STRING BECOMES BYTES BY ITS BYTES, not by its characters: the source is
 ; already the platform's byte string, so this reads it with `str byte-ref`
 ; and never asks the utf-8 layer what a character is.
-(def %pb-of-str
+(def pb-of-str
   (fn (self s)
     (%pb-of-str-go s (- (%pb-blen s) 1) ())))
 (def %pb-of-str-go
@@ -90,7 +83,7 @@
 ; wants a value the str layer will hold -- a decode, a float to read, a name
 ; to compare -- and a silent stop at the first zero is the failure this file
 ; exists to end.
-(def %pb->str
+(def pb->str
   (fn (self l)
     (if (%pb-nul? l)
       ; THE SAME SENTENCE AS EVERY OTHER CROSSING.  The limit is stated once
@@ -106,7 +99,7 @@
     (if (null? l) (List reverse acc) (self (rest l) (pair (%pb-char (first l)) acc)))))
 
 ; --- the sequence ------------------------------------------------------------
-(def %pb-len (fn (_ l) (List length l)))
+(def pb-len (fn (_ l) (List length l)))
 (def %pb-ref (fn (_ l i) (List ref i l)))
 
 (def %pb-drop
