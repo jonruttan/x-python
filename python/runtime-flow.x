@@ -944,11 +944,40 @@
 (python-sweep!)
 ; gc: nothing here collects on its own, so collect() is the platform's own
 ; sweep, hand-placed as every other sweep in this bundle is.  It answers 0,
-; the count of unreachable objects Python reports.
+; the count of unreachable objects Python reports.  enable() and disable()
+; turn a flag only isenabled() reads: there is no automatic collector to stop.
+(def %py-gc-on (pair #t ()))
 (def %py-gc-module
   (fn (_)
     (python-module-new "gc"
-      (list (pair "collect" (fn (_ . a) (%seq (Heap collect) 0)))))))
+      (list
+        (pair "collect" (fn (_ . a) (%seq (Heap collect) 0)))
+        (pair "isenabled" (fn (_) (first %py-gc-on)))
+        (pair "enable" (fn (_) (%seq (%set-first! %py-gc-on #t) ())))
+        (pair "disable" (fn (_) (%seq (%set-first! %py-gc-on #f) ())))))))
+
+; errno: THE PLATFORM'S OWN TABLE, not one written here.  The numbers are the
+; host's (Err from-errno picks Darwin's or Linux's at load), so each number
+; the platform names becomes its constant, EIO for 'eio, and errorcode maps
+; it back.  Python's own table reaches no further than 133 on either host.
+(def %py-errno-rows
+  (fn (self n acc)
+    (if (= n 0)
+      acc
+      (let ((sym (Assoc get (lit sym) ((Err from-errno n (lit errno)) data))))
+        (self (- n 1)
+          (if (eq? sym (lit unknown))
+            acc
+            (pair (pair (Str8 upcase (symbol->str sym)) n) acc)))))))
+(def %py-errno-module
+  (fn (_)
+    (let ((rows (%py-errno-rows 133 ())))
+      (python-module-new "errno"
+        (pair
+          (pair "errorcode"
+            (python-dict-new
+              (List map (fn (_ r) (pair (rest r) (python-str-of-x (first r)))) rows)))
+          rows)))))
 
 ; The modules this runtime offers, each built on first import and remembered
 ; after.
@@ -964,6 +993,7 @@
       ((Str8 =? name "types") (%py-types-module))
       ((Str8 =? name "io") (python-io-module))
       ((Str8 =? name "gc") (%py-gc-module))
+      ((Str8 =? name "errno") (%py-errno-module))
       ((Str8 =? name "builtins") (%py-builtins-module))
       (#t ()))))
 
