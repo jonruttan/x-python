@@ -137,7 +137,6 @@ left of the cursor, so a stand-in with that method serves here as it does in
 ```python
 (%seq
   (do
-    (import python/repl)
     (let ((q (list "    return 1" "" "unreached")))
       (write (%py-read-entry "def f():"
                (fn (_) (let ((l (first q))) (set! q (rest q)) l))))))
@@ -151,7 +150,6 @@ left of the cursor, so a stand-in with that method serves here as it does in
 ```python
 (%seq
   (do
-    (import python/repl)
     (write (list (%py-read-entry "def f():" (fn (_) (lit cancel)))
                  (%py-read-entry "def f():" (fn (_) (lit eof))))))
   (newline))
@@ -163,7 +161,6 @@ left of the cursor, so a stand-in with that method serves here as it does in
 
 ```python
 (do
-  (import python/repl)
   (%py-eval-line "3 * 7")
   (%py-eval-line "z = 2")
   (%py-eval-line "z + 1")
@@ -179,7 +176,6 @@ left of the cursor, so a stand-in with that method serves here as it does in
 
 ```python
 (do
-  (import python/repl)
   (%py-eval-line "1 +")
   (display "still here") (newline))
 ```
@@ -196,7 +192,6 @@ still here
 ```python
 (%seq
   (do
-    (import python/repl)
     (python-repl-install!)
     (write (let ((r (list (Lang current) (Assoc get '%repl-prompt (Lang get "python"))
                           (same? (Assoc get '%repl-eval-line (Lang get "python")) %py-eval-line))))

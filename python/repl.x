@@ -126,18 +126,39 @@
 ; A line's forms are evaluated in the root, as a program's are in its own
 ; environment (python/base.x): a name one line binds is there for the next,
 ; and at x's prompt too, which is what lets one session hold both.
+; The prompt's lines are evaluated in an environment of their own that hangs
+; from the core's, so the forms the parser builds, which name the core's
+; helpers, resolve there; a name a line binds is then published in the root,
+; so x's prompt calls it by its prefixed name, as it always could.
+(def %py-prompt-env (pair () %py-base-env))
+(def %py-publish-prompt-names!
+  (fn (self forms)
+    (unless (null? forms)
+      (%seq
+        (let ((f (first forms)))
+          (if (if (pair? f)
+                (match ((eq? (first f) (lit set!)) #t) ((eq? (first f) (lit def)) #t)
+                       (#t (eq? (first f) (lit %py-hoist))))
+                #f)
+            (let ((sym (first (rest f))))
+              (if (if (symbol? sym) (%py-env-has? %py-prompt-env sym) #f)
+                (%py-env-def! (%py-root %py-prompt-env) sym (eval sym %py-prompt-env))
+                ()))
+            ()))
+        (self (rest forms))))))
 (def %py-repl-eval
   (fn (_ src)
     (def go
       (fn (self forms last)
         (if (null? forms)
           last
-          (let ((v (eval! (first forms))))
+          (let ((v (eval (first forms) %py-prompt-env)))
             (self (rest forms)
               (if (%py-stmt-form? (first forms)) () v))))))
     (def forms (python-parse src))
     (%py-repl-names! forms)
     (let ((v (go forms ())))
+      (%py-publish-prompt-names! forms)
       (unless (null? v) (%seq (%py-write v) (newline))))))
 
 ; Remembered for Tab: a name a line binds at its top level, a (set! SYM V) --
