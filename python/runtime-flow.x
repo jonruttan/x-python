@@ -963,6 +963,7 @@
       ((Str8 =? name "struct") (python-struct-module))
       ((Str8 =? name "types") (%py-types-module))
       ((Str8 =? name "io") (python-io-module))
+      ((Str8 =? name "os") (python-os-module))
       ((Str8 =? name "gc") (%py-gc-module))
       ((Str8 =? name "builtins") (%py-builtins-module))
       (#t ()))))

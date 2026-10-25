@@ -119,6 +119,8 @@
   python-buffer-bytes python-buffer-text python-buffer? python-cls-memoryview python-mv-at
   python-mv-attr python-mv-elems python-mv-in python-mv-is python-mv-len python-mv-put!
   python-mv-setslice! python-mv-slice)
+(import python/os
+  python-os-module)
 (import python/struct
   python-struct-module)
 (import python/sys
