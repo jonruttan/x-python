@@ -678,6 +678,14 @@
       (if (%py-op-is? (first toks) ":")
         (pair (python-reverse (pair (first toks) acc)) (rest toks))
         (self (rest toks) (pair (first toks) acc))))))
+; NOR ARE A COMPREHENSION TARGET'S: `f(x for a, b in y)` is one argument, a
+; generator over pairs.  A target holds no `in`, so its first one ends it.
+(def %py-for-head
+  (fn (self toks acc)
+    (if (null? toks) (pair (python-reverse acc) ())
+      (if (%py-kw? (first toks) "in")
+        (pair (python-reverse (pair (first toks) acc)) (rest toks))
+        (self (rest toks) (pair (first toks) acc))))))
 (def %py-comma-split
   (fn (self toks cur acc)
     (match
@@ -695,6 +703,9 @@
       ((%py-kw? (first toks) "lambda")
         (let ((h (%py-lambda-head toks ())))
           (self (rest h) (%py-append (python-reverse (first h)) cur) acc)))
+      ((%py-kw? (first toks) "for")
+        (let ((h (%py-for-head toks ())))
+          (self (rest h) (%py-append (python-reverse (first h)) cur) acc)))
       (#t (self (rest toks) (pair (first toks) cur) acc)))))
 
 (def %py-has-comma?
@@ -704,6 +715,8 @@
       ((%py-op-is? (first toks) ",") #t)
       ((%py-kw? (first toks) "lambda")
         (self (rest (%py-lambda-head toks ()))))
+      ((%py-kw? (first toks) "for")
+        (self (rest (%py-for-head toks ()))))
       (#t (self (rest toks))))))
 
 ; A CONDITIONAL EXPRESSION sits above `or`: `a if c else b`, right-
