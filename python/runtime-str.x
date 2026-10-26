@@ -45,6 +45,8 @@
     ; of list would have gone to the list surface and lost its own methods
     ; and its own attributes.
     (match
+      ; an instance's __dict__ is its attributes as a dict (%py-obj-ns)
+      ((if (python-obj-is obj) (Str8 =? name "__dict__") #f) (%py-obj-ns obj))
       ((python-obj-is obj) (%py-obj-attr obj name))
       ((%py-mod-is obj) (%py-mod-attr obj name))
       ((%py-code-is obj) (%py-code-attr obj name))

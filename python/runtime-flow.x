@@ -341,9 +341,25 @@
 ; environment, where the module's code finds it (python/types.x).  Each
 ; module keeps one in its scope, bound to %py-ns, so it is the same object
 ; every time it is asked for.
+;
+; AN INSTANCE'S __dict__ IS THE SAME KIND OF DICT over the instance's own
+; attribute rows, so `o.__dict__["k"] = v` and `o.__dict__.update(kw)` set
+; attributes, as CPython's do -- without __setattr__, as CPython's do.  The
+; runtime's own rows, keyed with a %, are neither shown nor dropped; the
+; dict is kept in one of them so it too is the same object each time.
 (def %py-ns-new (fn (_ env) (make-instance %py-dict (pair env ()))))
+(def %py-obj-ns
+  (fn (_ obj)
+    (let ((e (python-alist-find "%dict" (python-obj-attrs obj))))
+      (if (not (null? e))
+        (rest e)
+        (let ((d (%py-ns-new obj)))
+          (%seq (python-obj-set-attrs! obj (pair (pair "%dict" d) (python-obj-attrs obj))) d))))))
 (def %py-ns-entries
-  (fn (_ env) (%py-attr-entries (%py-env-rows (first env) ()))))
+  (fn (_ env)
+    (if (python-obj-is env)
+      (%py-attr-entries (python-obj-attrs env))
+      (%py-attr-entries (%py-env-rows (first env) ())))))
 (def %py-env-ns
   (fn (_ env)
     (let ((c (%py-env-cell (first (rest env)) (lit %py-ns))))
@@ -352,9 +368,12 @@
 ; K, a str, bound to V in ENV.
 (def %py-ns-put!
   (fn (_ env k v)
-    (if (python-str-is k)
-      (%seq (%py-env-def! env (%py-name->sym (python-text->x k)) v) ())
-      (Err raise (lit type) "a module's namespace takes str keys only here" ()))))
+    (match
+      ((not (python-str-is k))
+        (Err raise (lit type) "a namespace takes str keys only here" ()))
+      ((python-obj-is env)
+        (python-obj-set-attrs! env (%py-attr-put (python-obj-attrs env) (python-text->x k) v)))
+      (#t (%seq (%py-env-def! env (%py-name->sym (python-text->x k)) v) ())))))
 
 ; ENV's names made to be ENTRIES: each bound to its value, and each name
 ; ENTRIES does not have deleted, as `del` deletes one.  Every change a dict
@@ -362,8 +381,37 @@
 ; the environment this way.
 (def %py-ns-assign!
   (fn (_ env entries)
-    (%py-ns-put-all! env entries)
-    (%py-ns-drop-others! env (%py-env-rows (first env) ()) entries)))
+    (if (python-obj-is env)
+      (python-obj-set-attrs! env
+        (%py-append (%py-own-rows (python-obj-attrs env)) (%py-entry-rows entries)))
+      (%seq
+        (%py-ns-put-all! env entries)
+        (%py-ns-drop-others! env (%py-env-rows (first env) ()) entries)))))
+; an instance's rows the runtime keeps for itself, keyed with a %
+(def %py-own-rows
+  (fn (self rows)
+    (match
+      ((null? rows) ())
+      ((= (python-char-code (%str-ref (first (first rows)) 0)) 37)
+        (pair (first rows) (self (rest rows))))
+      (#t (self (rest rows))))))
+; and the rest, the ones a program named
+(def %py-named-rows
+  (fn (self rows)
+    (match
+      ((null? rows) ())
+      ((= (python-char-code (%str-ref (first (first rows)) 0)) 37) (self (rest rows)))
+      (#t (pair (first rows) (self (rest rows)))))))
+; a dict's entries as attribute rows, the keys back to the platform's strings
+(def %py-entry-rows
+  (fn (self entries)
+    (match
+      ((null? entries) ())
+      ((not (python-str-is (first (first entries))))
+        (Err raise (lit type) "a namespace takes str keys only here" ()))
+      (#t
+        (pair (pair (python-text->x (first (first entries))) (rest (first entries)))
+          (self (rest entries)))))))
 (def %py-ns-put-all!
   (fn (self env entries)
     (if (null? entries)

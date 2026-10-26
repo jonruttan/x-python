@@ -187,12 +187,15 @@
     (%py-dict-back! l lenv)
     v))
 
+; An instance's __dict__ is a namespace dict with no environment behind it,
+; so a program's code runs in a fresh one, as it does for a dict it made.
+(def %py-plain-ns? (fn (_ ns) (if (null? ns) #t (python-obj-is ns))))
 ; The environment dict D stands for: a namespace dict's module's own, or a
 ; fresh one from MAKE with D's str-keyed entries bound in it.
 (def %py-dict-env
   (fn (_ d make)
     (let ((ns (first (first d))))
-      (if (null? ns)
+      (if (%py-plain-ns? ns)
         (let ((env (make)))
           (%seq (%py-ns-put-all! env (%py-str-keyed (python-dict-entries d))) env))
         ns))))
@@ -206,7 +209,7 @@
 ; A dict a program made takes back the names its environment ended with.
 (def %py-dict-back!
   (fn (self d env)
-    (if (if (python-dict? d) (null? (first (first d))) #f)
+    (if (if (python-dict? d) (%py-plain-ns? (first (first d))) #f)
       (%py-dict-back-rows! d (%py-ns-entries env))
       ())))
 (def %py-dict-back-rows!
