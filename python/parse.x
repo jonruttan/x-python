@@ -1170,24 +1170,35 @@
         (pair (list (first syms) (list (lit first) at)) acc)))))
 
 ; A clause's body as a function of one item: a single name is the
-; function's parameter, and a target list unpacks the item.
+; function's parameter, and a target list unpacks the item.  Any other tree
+; -- nested, starred -- binds its names to nothing in a let of the body's
+; own and assigns the item to the tree there (%py-for-bind).
 (def %py-comp-body
-  (fn (_ syms inner)
-    (if (null? (rest syms))
-      (list (lit fn) (list (lit _) (first syms)) inner)
-      (list (lit fn) (list (lit _) (lit %py-item))
-        (list (lit let)
-          (list (list (lit %py-unpacked)
-                  (list (lit %py-unpack) (lit %py-item) (%py-count syms))))
-          (list (lit let) (%py-comp-refs syms (lit %py-unpacked) ()) inner))))))
+  (fn (_ tree inner)
+    (let ((syms (%py-flat-syms tree)))
+      (match
+        ((null? syms)
+          (list (lit fn) (list (lit _) (lit %py-item))
+            (list (lit let)
+              (List map (fn (_ s) (list s ()))
+                (%py-syms-of (python-reverse (%py-tree-names tree ())) ()))
+              (list (lit %seq) (%py-for-bind tree) inner))))
+        ((null? (rest syms))
+          (list (lit fn) (list (lit _) (first syms)) inner))
+        (#t
+          (list (lit fn) (list (lit _) (lit %py-item))
+            (list (lit let)
+              (list (list (lit %py-unpacked)
+                      (list (lit %py-unpack) (lit %py-item) (%py-count syms))))
+              (list (lit let) (%py-comp-refs syms (lit %py-unpacked) ()) inner))))))))
 
 ; The body runs on each item of the source the iterable opens, read a step
 ; at a time where the source is one (%py-comp-each).
 (def %py-comp-loop
-  (fn (_ syms iter inner)
-    (list (lit %py-comp-each) (list (lit %py-iter-open) iter) (%py-comp-body syms inner))))
+  (fn (_ tree iter inner)
+    (list (lit %py-comp-each) (list (lit %py-iter-open) iter) (%py-comp-body tree inner))))
 
-; (for SYMS ITER-FORM) and (if COND-FORM), in source order.  The first iterable
+; (for TREE ITER-FORM) and (if COND-FORM), in source order.  The first iterable
 ; is evaluated in the enclosing scope, as in Python, so it is compiled before the
 ; names the clauses bind are in scope, and every clause after it with them.
 (def %py-comp-clauses ())
@@ -1196,9 +1207,9 @@
     (match
       ((null? toks) (python-reverse acc))
       ((%py-kw? (first toks) "for")
-        (let ((n (%py-for-names (rest toks) ())))
+        (let ((n (%py-for-target (rest toks))))
           (let ((it (%py-or-e (rest n))))
-            (let ((more (pair (list (lit for) (%py-syms-of (first n) ()) (first it)) acc)))
+            (let ((more (pair (list (lit for) (first n) (first it)) acc)))
               (if (null? acc)
                 (%py-comp-scoped toks (fn (_) (self (rest it) more)))
                 (self (rest it) more))))))
@@ -2824,16 +2835,51 @@
 ; The item variable is a plain assignment, so it lives in whatever scope the
 ; hoist put it in -- which is Python's rule too: a for target outlives its loop.
 ; `for a, b in pairs:` unpacks each item -- the same rule as `a, b = x` applied
-; once per iteration, so it reuses %py-unpack and gets its length checking free.
-(def %py-for-names
+; once per iteration, so the target is an assignment's target tree
+; (%py-target-tree), nested and starred ones too: `for (a, b), *c in rows`.
+; A target holds no `in`, so its first one ends it.
+(def %py-for-target-toks
   (fn (self toks acc)
-    (let ((t (if (null? toks) () (first toks))))
-      (match
-        ((%py-kw? t "in") (pair (python-reverse acc) (rest toks)))
-        ((%py-op-is? t ",") (self (rest toks) acc))
-        ((eq? (%py-label t) (lit tok-name))
-          (self (rest toks) (pair (%py-val t) acc)))
-        (#t (Err raise (lit syntax) "expected in after a for target" ()))))))
+    (match
+      ((null? toks) (Err raise (lit syntax) "expected in after a for target" ()))
+      ((%py-kw? (first toks) "in")
+        (if (null? acc)
+          (Err raise (lit syntax) "expected a target after for" ())
+          (pair (python-reverse acc) (rest toks))))
+      (#t (self (rest toks) (pair (first toks) acc))))))
+; (TREE . TOKENS-AFTER-IN)
+(def %py-for-target
+  (fn (_ toks)
+    (let ((h (%py-for-target-toks toks ())))
+      (pair (%py-target-tree (first h)) (rest h)))))
+(def %py-for-tree (fn (_ toks) (first (%py-for-target toks))))
+; The names a target tree binds, in source order: a subscript or attribute
+; target binds none.
+(def %py-tree-names
+  (fn (self node acc)
+    (match
+      ((eq? (first node) (lit name)) (pair (first (rest node)) acc))
+      ((eq? (first node) (lit star)) (self (first (rest node)) acc))
+      ((eq? (first node) (lit seq)) (%py-trees-names (first (rest node)) acc))
+      (#t acc))))
+(def %py-trees-names
+  (fn (self nodes acc)
+    (if (null? nodes) acc (self (rest nodes) (%py-tree-names (first nodes) acc)))))
+; (NAMES . TOKENS-AFTER-IN), the names as text
+(def %py-for-names
+  (fn (_ toks acc)
+    (let ((t (%py-for-target toks)))
+      (pair (python-reverse (%py-tree-names (first t) ())) (rest t)))))
+; What may follow `for`: a name, a bracketed target, or a starred one.
+(def %py-for-start?
+  (fn (_ t)
+    (match
+      ((null? t) #f)
+      ((eq? (%py-label t) (lit tok-name)) #t)
+      ((%py-group? t "(") #t)
+      ((%py-group? t "[") #t)
+      ((%py-op-is? t "*") #t)
+      (#t #f))))
 
 (def %py-syms-of
   (fn (self names acc)
@@ -2841,14 +2887,35 @@
       (python-reverse acc)
       (self (rest names) (pair (%py-target-sym (first names) "assign to") acc)))))
 
+; A name or a flat list of names binds as it always has; any other tree --
+; nested, starred, a subscript -- is the assignment it reads as.
 (def %py-for-bind
-  (fn (_ syms)
-    (if (null? (rest syms))
-      (list (lit set!) (first syms) (lit %py-item))
-      (list (lit let)
-        (list (list (lit %py-unpacked)
-                (list (lit %py-unpack) (lit %py-item) (%py-count syms))))
-        (pair (lit do) (%py-unpack-sets syms 0 ()))))))
+  (fn (_ tree)
+    (let ((syms (%py-flat-syms tree)))
+      (match
+        ((null? syms) (%py-assign tree (lit %py-item)))
+        ((null? (rest syms)) (list (lit set!) (first syms) (lit %py-item)))
+        (#t
+          (list (lit let)
+            (list (list (lit %py-unpacked)
+                    (list (lit %py-unpack) (lit %py-item) (%py-count syms))))
+            (pair (lit do) (%py-unpack-sets syms 0 ()))))))))
+; The symbols of a name, or of a seq of nothing but names, else nil.
+(def %py-flat-syms
+  (fn (_ tree)
+    (match
+      ((eq? (first tree) (lit name))
+        (list (%py-target-sym (first (rest tree)) "assign to")))
+      ((not (eq? (first tree) (lit seq))) ())
+      ((%py-all-names? (first (rest tree)))
+        (%py-syms-of (python-reverse (%py-trees-names (first (rest tree)) ())) ()))
+      (#t ()))))
+(def %py-all-names?
+  (fn (self nodes)
+    (match
+      ((null? nodes) #t)
+      ((eq? (first (first nodes)) (lit name)) (self (rest nodes)))
+      (#t #f))))
 
 (python-sweep!)
 ; --- break and continue ------------------------------------------------------
@@ -2956,7 +3023,7 @@
 ; replaced by that await.
 (def %py-async-for
   (fn (_ toks)
-    (if (not (eq? (%py-label (if (null? toks) () (first toks))) (lit tok-name)))
+    (if (not (%py-for-start? (if (null? toks) () (first toks))))
       (Err raise (lit syntax) "expected a name after async for" ())
       (let ((n (%py-for-names toks ())))
         (let ((syms (%py-syms-of (first n) ())))
@@ -2981,7 +3048,7 @@
                           (list (lit if) (list (lit same?) (lit %py-item) (lit %py-gen-done))
                             ()
                             (list (lit %seq)
-                              (%py-for-bind syms)
+                              (%py-for-bind (%py-for-tree toks))
                               (list (lit %seq) (%py-wrap-escape (first b) (lit %py-continue))
                                 (list (lit self) (lit %py-ait)))))))
                       (list (lit %py-aiter) (first it)))
@@ -2997,7 +3064,7 @@
 
 (def %py-for
   (fn (_ toks)
-    (if (not (eq? (%py-label (if (null? toks) () (first toks))) (lit tok-name)))
+    (if (not (%py-for-start? (if (null? toks) () (first toks))))
       (Err raise (lit syntax) "expected a name after for" ())
       (let ((n (%py-for-names toks ())))
         (let ((syms (%py-syms-of (first n) ())))
@@ -3016,7 +3083,7 @@
                           (list (lit if) (list (lit same?) (lit %py-item) (lit %py-gen-done))
                             ()
                             (list (lit %seq)
-                              (%py-for-bind syms)
+                              (%py-for-bind (%py-for-tree toks))
                               (list (lit %seq) (%py-wrap-escape (first b) (lit %py-continue))
                                 (list (lit self) (lit %py-src)))))))
                       (list (lit %py-iter-open) (first it)))
@@ -4508,7 +4575,7 @@
 (def %py-for-target?
   (fn (_ toks)
     (if (%py-kw? (if (null? toks) () (first toks)) "for")
-      (if (eq? (%py-label (if (null? (rest toks)) () (first (rest toks)))) (lit tok-name))
+      (if (%py-for-start? (if (null? (rest toks)) () (first (rest toks))))
         #t #f)
       #f)))
 
