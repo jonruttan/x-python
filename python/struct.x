@@ -31,8 +31,8 @@
   python-num? python-obj-is python-opt python-reverse python-str-cps python-str-is python-sweep!
   python-tuple-of-list)
 (import python/array
-  python-ieee-bits python-ieee-double python-ieee-half python-ieee-one python-ieee-sign
-  python-ieee-single python-ieee-top python-ieee-value python-take-n)
+  python-arr-find python-ieee-bits python-ieee-double python-ieee-half python-ieee-one
+  python-ieee-sign python-ieee-single python-ieee-top python-ieee-value python-take-n)
 
 ; (typecode standard-size native-size signed?), where a float code's last field
 ; is its IEEE format rather than a sign
@@ -46,12 +46,7 @@
     (list "e" 2 2 python-ieee-half) (list "f" 4 4 python-ieee-single)
     (list "d" 8 8 python-ieee-double)))
 
-(def %py-st-find
-  (fn (self tc rows)
-    (if (null? rows) ()
-      (if (Str8 =? tc (first (first rows))) (first rows) (self tc (rest rows))))))
-
-(def %py-st-code (fn (_ tc) (%py-st-find tc %py-st-codes)))
+(def %py-st-code (fn (_ tc) (python-arr-find tc %py-st-codes)))
 (def %py-st-width (fn (_ e align) (if align (List ref 2 e) (List ref 1 e))))
 (def %py-st-signed? (fn (_ e) (List ref 3 e)))
 
