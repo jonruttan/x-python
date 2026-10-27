@@ -1439,3 +1439,85 @@
 (def %py-cls-range-iterator
   (python-class-new "range_iterator" python-cls-object (list (pair "%final" #t))
     "range_iterator"))
+
+; --- what dir() lists for a builtin type ---------------------------------------
+;
+; A BUILTIN TYPE'S METHODS ARE NOT ROWS ON ITS CLASS.  A list's `append` is
+; reached by type, at the seam (%py-list-attr and its siblings), so walking the
+; class finds only the protocol rows.  So each table below is CPython 3.14's
+; public names for one type, a fact about Python and not about this runtime,
+; and dir() lists a name only when this runtime's own lookup answers it on an
+; empty value of the type, built by the type's %ctor.  A table cannot then
+; claim a method the seam lacks, and the seam stays the one place a method is
+; written.
+(def %py-dir-public
+  (list
+    (pair %py-cls-str
+      (list "capitalize" "casefold" "center" "count" "encode" "endswith" "expandtabs" "find"
+            "format" "format_map" "index" "isalnum" "isalpha" "isascii" "isdecimal" "isdigit"
+            "isidentifier" "islower" "isnumeric" "isprintable" "isspace" "istitle" "isupper"
+            "join" "ljust" "lower" "lstrip" "maketrans" "partition" "removeprefix" "removesuffix"
+            "replace" "rfind" "rindex" "rjust" "rpartition" "rsplit" "rstrip" "split"
+            "splitlines" "startswith" "strip" "swapcase" "title" "translate" "upper" "zfill"))
+    (pair %py-cls-list
+      (list "append" "clear" "copy" "count" "extend" "index" "insert" "pop" "remove"
+            "reverse" "sort"))
+    (pair python-cls-tuple (list "count" "index"))
+    (pair python-cls-dict
+      (list "clear" "copy" "fromkeys" "get" "items" "keys" "pop" "popitem" "setdefault"
+            "update" "values"))
+    (pair %py-cls-set
+      (list "add" "clear" "copy" "difference" "difference_update" "discard" "intersection"
+            "intersection_update" "isdisjoint" "issubset" "issuperset" "pop" "remove"
+            "symmetric_difference" "symmetric_difference_update" "union" "update"))
+    (pair %py-cls-frozenset
+      (list "copy" "difference" "intersection" "isdisjoint" "issubset" "issuperset"
+            "symmetric_difference" "union"))
+    (pair %py-cls-bytes
+      (list "capitalize" "center" "count" "decode" "endswith" "expandtabs" "find" "fromhex"
+            "hex" "index" "isalnum" "isalpha" "isascii" "isdigit" "islower" "isspace" "istitle"
+            "isupper" "join" "ljust" "lower" "lstrip" "maketrans" "partition" "removeprefix"
+            "removesuffix" "replace" "rfind" "rindex" "rjust" "rpartition" "rsplit" "rstrip"
+            "split" "splitlines" "startswith" "strip" "swapcase" "title" "translate" "upper"
+            "zfill"))
+    (pair %py-cls-bytearray
+      (list "append" "capitalize" "center" "clear" "copy" "count" "decode" "endswith"
+            "expandtabs" "extend" "find" "fromhex" "hex" "index" "insert" "isalnum" "isalpha"
+            "isascii" "isdigit" "islower" "isspace" "istitle" "isupper" "join" "ljust" "lower"
+            "lstrip" "maketrans" "partition" "pop" "remove" "removeprefix" "removesuffix"
+            "replace" "resize" "reverse" "rfind" "rindex" "rjust" "rpartition" "rsplit" "rstrip"
+            "split" "splitlines" "startswith" "strip" "swapcase" "title" "translate" "upper"
+            "zfill"))
+    (pair %py-cls-int
+      (list "as_integer_ratio" "bit_count" "bit_length" "conjugate" "denominator" "from_bytes"
+            "imag" "is_integer" "numerator" "real" "to_bytes"))
+    (pair %py-cls-float
+      (list "as_integer_ratio" "conjugate" "from_number" "fromhex" "hex" "imag" "is_integer"
+            "real"))
+    (pair %py-cls-complex (list "conjugate" "from_number" "imag" "real"))))
+
+(def %py-dir-answers
+  (fn (self v names acc)
+    (if (null? names)
+      acc
+      (self v (rest names)
+        (if (guard (e #f) (%seq (%py-getattr v (first names)) #t))
+          (pair (first names) acc)
+          acc)))))
+
+; The public names of builtin class C that this runtime answers, onto ACC; a
+; class with no table, or whose %ctor will not build an empty value, adds none.
+(def %py-dir-builtin
+  (fn (self c acc)
+    (let ((row (%py-dir-row c %py-dir-public)))
+      (if (null? row)
+        acc
+        (let ((bc (python-alist-find "%ctor" (%py-class-methods c))))
+          (let ((v (guard (e %py-dir-public) ((rest bc)))))
+            (if (same? v %py-dir-public) acc (%py-dir-answers v (rest row) acc))))))))
+(def %py-dir-row
+  (fn (self c rows)
+    (match
+      ((null? rows) ())
+      ((same? (first (first rows)) c) (first rows))
+      (#t (self c (rest rows))))))

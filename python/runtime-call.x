@@ -1113,10 +1113,13 @@
 ; here without an argument -- by another name, or at the prompt, whose names
 ; are x's root -- it refuses rather than answer wrongly.
 ;
-; A BUILTIN TYPE ANSWERS ITS OWN NAMES ONLY.  `dir(list)` does not list
-; `append`: this runtime reaches a list's methods by type at the seam rather
-; than hanging them off the class object, so they are not there to be found.
-; Whatever a class DOES carry is reported.
+; A BUILTIN TYPE'S METHODS COME FROM A TABLE.  `dir(list)` lists `append`,
+; though this runtime reaches a list's methods by type at the seam rather than
+; hanging them off the class object: python/runtime-py-type.x keeps CPython's
+; public names for each builtin type and lists the ones the seam answers
+; (%py-dir-builtin).  A value that is not an instance -- `dir([])` -- is
+; listed as its type is.  The runtime's own rows, keyed with a %, are no
+; one's names, on a class or an instance.
 (def %py-dir-keys
   (fn (self rows acc)
     (if (null? rows)
@@ -1127,7 +1130,8 @@
   (fn (self c acc)
     (if (null? c)
       acc
-      (%py-dir-bases (%py-class-bases c) (%py-dir-keys (%py-class-methods c) acc)))))
+      (%py-dir-bases (%py-class-bases c)
+        (%py-dir-builtin c (%py-dir-keys (%py-named-rows (%py-class-methods c)) acc))))))
 
 (def %py-dir-bases
   (fn (self bs acc)
@@ -1139,11 +1143,10 @@
   (fn (_ v)
     (match
       ((%py-class-is v) (%py-dir-class v ()))
-      ; the runtime's own rows, keyed with a %, are not the instance's names
       ((python-obj-is v)
         (%py-dir-class (python-obj-class v) (%py-dir-keys (%py-named-rows (python-obj-attrs v)) ())))
       ((%py-mod-is v) (%py-dir-keys (%py-mod-rows v) ()))
-      (#t ()))))
+      (#t (%py-dir-class (guard (e ()) (python-type-of v)) ())))))
 
 (def %py-dir-seen?
   (fn (self n seen)

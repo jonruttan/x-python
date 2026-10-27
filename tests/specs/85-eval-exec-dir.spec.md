@@ -213,22 +213,6 @@ TypeError
 True
 ```
 
-### a builtin type answers only the names its class object carries
-
-DIVERGENCE.  `dir(list)` does not list `append`: a list's methods are reached
-by type at the attribute seam rather than hung off the class object, so they
-are not there to be found.  Whatever a class DOES carry is reported, which is
-why `dir` of a Python class above is complete and this one is not.
-
-```python
-(python-run "print('append' in dir(list))\nclass F:\n    def append(self):\n        pass\nprint('append' in dir(F))")
-```
----
-```output
-False
-True
-```
-
 ### eval takes one expression and nothing after it
 
 ```python
