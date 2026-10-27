@@ -1568,9 +1568,13 @@
 (def %py-native-new
   (fn (_ cc args)
     (let ((bc (rest (python-alist-find "%ctor" (%py-class-methods cc)))))
-      (if (null? (python-alist-find "__init__" (%py-class-methods cc)))
-        (guard (e (bc)) (apply bc args))
-        (bc)))))
+      ; A constructor that answers an INSTANCE -- a namedtuple's, a class over
+      ; tuple -- built its own class's object around the value, and the
+      ; subclass keeps that object's value, the tuple, not the object.
+      (let ((v (if (null? (python-alist-find "__init__" (%py-class-methods cc)))
+                 (guard (e (bc)) (apply bc args))
+                 (bc))))
+        (if (python-obj-is v) (python-obj-native v) v)))))
 
 ; The class a class inherits its %ctor from -- the builtin base, found by the
 ; same base walk everything else uses -- or nil for a class of its own.
