@@ -1139,7 +1139,9 @@
   (fn (_ v)
     (match
       ((%py-class-is v) (%py-dir-class v ()))
-      ((python-obj-is v) (%py-dir-class (python-obj-class v) (%py-dir-keys (python-obj-attrs v) ())))
+      ; the runtime's own rows, keyed with a %, are not the instance's names
+      ((python-obj-is v)
+        (%py-dir-class (python-obj-class v) (%py-dir-keys (%py-named-rows (python-obj-attrs v)) ())))
       ((%py-mod-is v) (%py-dir-keys (%py-mod-rows v) ()))
       (#t ()))))
 
