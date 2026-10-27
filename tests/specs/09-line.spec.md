@@ -92,7 +92,7 @@ a string green, `<s>`; a comment dim, `<c>`.
         "t = \"\"\"open ' \" triple"))
 ```
 ---
-    ("<s>r'\\d+' + <s>b'x' + <s>u\"y\" + <s>F\"z\" + <s>BR\"w\" + <s>bu'no'" "<s>\"a\\\"b\" + <s>'c\\'d'" "x = <s>\"\"\"abc\"\"\" + <y>1" "x = <s>'''a'b''' + <y>2" "s = <s>'abc" "x = <s>\"unterminated # not a comment" "t = <s>\"\"\"open ' \" triple")
+    ("<s>r'\\d+' + <s>b'x' + <s>u\"y\" + <s>F\"z\" + <s>BR\"w\" + bu<s>'no'" "<s>\"a\\\"b\" + <s>'c\\'d'" "x = <s>\"\"\"abc\"\"\" + <y>1" "x = <s>'''a'b''' + <y>2" "s = <s>'abc" "x = <s>\"unterminated # not a comment" "t = <s>\"\"\"open ' \" triple")
 
 ### a comment runs to the end, a decorator is one span, and operators stay plain
 
