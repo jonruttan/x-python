@@ -1293,10 +1293,6 @@
 ; pairs and nowhere else.  CPython names the position of the first character
 ; that is not a digit where one was due, and says so differently when the
 ; string simply ran out in the middle of a pair.
-(def %py-hex-space?
-  (fn (_ c)
-    (match ((= c 32) #t) ((= c 9) #t) ((= c 10) #t) ((= c 13) #t) ((= c 11) #t) (#t (= c 12)))))
-
 (def %py-fromhex-bad!
   (fn (_ i)
     (Err raise (lit value)
@@ -1307,7 +1303,7 @@
   (fn (self cs i acc)
     (match
       ((null? cs) (List reverse acc))
-      ((%py-hex-space? (first cs)) (self (rest cs) (+ i 1) acc))
+      ((%pb-space? (first cs)) (self (rest cs) (+ i 1) acc))
       ((null? (python-hexval (first cs))) (%py-fromhex-bad! i))
       ((null? (rest cs))
         (Err raise (lit value)

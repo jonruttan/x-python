@@ -169,12 +169,14 @@
     (%py-arr-entry "q" 8 #t) (%py-arr-entry "Q" 8 #f)
     (list "f" 4 #f 0 0 python-ieee-single) (list "d" 8 #f 0 0 python-ieee-double)))
 
-(def %py-arr-find
+; The row of a typecode table that starts with tc, or nil: this table's, and
+; python/struct's.
+(def python-arr-find
   (fn (self tc rows)
     (if (null? rows) ()
       (if (Str8 =? tc (first (first rows))) (first rows) (self tc (rest rows))))))
 
-(def python-arr-info (fn (_ tc) (%py-arr-find tc %py-arr-codes)))
+(def python-arr-info (fn (_ tc) (python-arr-find tc %py-arr-codes)))
 (def python-arr-size (fn (_ e) (List ref 1 e)))
 (def %py-arr-signed? (fn (_ e) (List ref 2 e)))
 (def %py-arr-low (fn (_ e) (List ref 3 e)))
@@ -437,8 +439,9 @@
   (fn (_) (python-module-new "array" (list (pair "array" python-cls-array)))))
 
 (provide python/array
-  python-arr-at python-arr-attr python-arr-buffer python-arr-cat python-arr-el python-arr-info
-  python-arr-is python-arr-item python-arr-put! python-arr-set! python-arr-size python-arr-tc
+  python-arr-at python-arr-attr python-arr-buffer python-arr-cat python-arr-el python-arr-find
+  python-arr-info python-arr-is python-arr-item python-arr-put! python-arr-set! python-arr-size
+  python-arr-tc
   python-array-module python-cls-array python-ieee-2p63 python-ieee-bits python-ieee-double
   python-ieee-half python-ieee-one python-ieee-raw python-ieee-sign python-ieee-single
   python-ieee-top python-ieee-value python-take-n)
