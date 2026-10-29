@@ -112,7 +112,7 @@ hello
 (python-run "print([1][::0])")
 ```
 ---
-    Error: #<err:value slice step cannot be zero>
+    Error: value: slice step cannot be zero
 
 ### a dict does not slice: the slice is a key, and usually a missing one
 

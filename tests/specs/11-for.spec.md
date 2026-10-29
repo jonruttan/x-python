@@ -135,7 +135,7 @@ rather than an error.
 (python-run "print(range(0, 5, 0))")
 ```
 ---
-    Error: #<err:value range() arg 3 must not be zero>
+    Error: value: range() arg 3 must not be zero
 
 ## for strings
 
@@ -159,7 +159,7 @@ c
 (python-run "for x in 5:\n    print(x)")
 ```
 ---
-    Error: #<err:type 'int' object is not iterable>
+    Error: type: 'int' object is not iterable
 
 ### a name is required after for
 
@@ -167,7 +167,7 @@ c
 (python-run "for 5 in [1]:\n    print(1)")
 ```
 ---
-    Error: #<err:syntax expected a name after for>
+    Error: syntax: expected a name after for
 
 ## for together
 

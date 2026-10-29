@@ -21,7 +21,7 @@ point with a name that has not graduated.
 (python-run "print(frob(1))")
 ```
 ---
-    Error: #<err:name name 'frob' is not defined>
+    Error: name: name 'frob' is not defined
 
 ### int graduated from this file
 
@@ -40,7 +40,7 @@ change of answer IS the feature: the name stopped raising because it now works.
 (python-run "print(frobnicate(1))")
 ```
 ---
-    Error: #<err:name name 'frobnicate' is not defined>
+    Error: name: name 'frobnicate' is not defined
 
 ### a bare reference raises too
 
@@ -51,7 +51,7 @@ called, so a bare mention raises the same error.
 (python-run "print(undefined_thing)")
 ```
 ---
-    Error: #<err:name name 'undefined_thing' is not defined>
+    Error: name: name 'undefined_thing' is not defined
 
 ### in an expression, a raise, an except clause and a class base
 

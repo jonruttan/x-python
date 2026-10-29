@@ -215,7 +215,7 @@ CPython prints the three-character string `x\x00y`.
 (python-run "print(f'x\\x00y')")
 ```
 ---
-    Error: #<err:value a NUL byte is not representable here>
+    Error: value: a NUL byte is not representable here
 
 ### at runtime the crossings raise and the carriers do not
 

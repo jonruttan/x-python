@@ -105,7 +105,7 @@ that produced it.
 (python-run "a = [1]\nprint(a[5])")
 ```
 ---
-    Error: #<err:index list index out of range>
+    Error: index: list index out of range
 
 ### the index may be an expression
 
@@ -121,7 +121,7 @@ that produced it.
 (python-run "print((1)[0])")
 ```
 ---
-    Error: #<err:type object is not subscriptable>
+    Error: type: object is not subscriptable
 
 ## lists len
 

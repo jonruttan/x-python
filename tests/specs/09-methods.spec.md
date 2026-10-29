@@ -95,7 +95,7 @@ would print `[1]`.
 (python-run "x = []\nprint(x.pop())")
 ```
 ---
-    Error: #<err:index pop from empty list>
+    Error: index: pop from empty list
 
 ## methods errors
 
@@ -105,7 +105,7 @@ would print `[1]`.
 (python-run "x = [1]\nx.nosuch(1)")
 ```
 ---
-    Error: #<err:attribute 'list' object has no attribute 'nosuch'>
+    Error: attribute: 'list' object has no attribute 'nosuch'
 
 ### attribute access on a non-object raises
 
@@ -113,7 +113,7 @@ would print `[1]`.
 (python-run "x = 1\nprint(x.bit_length())")
 ```
 ---
-    Error: #<err:attribute 'int' object has no attribute 'bit_length'>
+    Error: attribute: 'int' object has no attribute 'bit_length'
 
 ### a name is required after the dot
 
@@ -121,4 +121,4 @@ would print `[1]`.
 (python-run "x = [1]\nprint(x.)")
 ```
 ---
-    Error: #<err:syntax expected a name after .>
+    Error: syntax: expected a name after .

@@ -61,7 +61,7 @@ so this tracks the parameter rather than assuming the convention.
 (python-run "class A:\n    def hi(self):\n        return super().hi()\nprint(A().hi())")
 ```
 ---
-    Error: #<err:attribute 'super' object has no attribute 'hi'>
+    Error: attribute: 'super' object has no attribute 'hi'
 
 ### super() outside a class is refused at parse time
 
@@ -72,4 +72,4 @@ run-time failure somewhere else.
 (python-run "print(super())")
 ```
 ---
-    Error: #<err:syntax super() outside a class>
+    Error: syntax: super() outside a class

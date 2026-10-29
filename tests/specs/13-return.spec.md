@@ -114,7 +114,7 @@ which the parser counts its way into and out of.
 (python-run "return 1")
 ```
 ---
-    Error: #<err:syntax 'return' outside function>
+    Error: syntax: 'return' outside function
 
 ### in a class body, under an if, and through exec; a nested def's return still answers
 

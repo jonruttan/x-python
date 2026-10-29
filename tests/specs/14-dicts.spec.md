@@ -205,7 +205,7 @@ b
 (python-run "print({}.nosuch())")
 ```
 ---
-    Error: #<err:attribute 'dict' object has no attribute 'nosuch'>
+    Error: attribute: 'dict' object has no attribute 'nosuch'
 
 ### a key must be followed by a colon
 
@@ -216,7 +216,7 @@ the SECOND entry's for this to still be a dict.
 (python-run "print({'a': 1, 'b' 2})")
 ```
 ---
-    Error: #<err:syntax expected : after a dict key>
+    Error: syntax: expected : after a dict key
 
 ## dicts together
 
