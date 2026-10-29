@@ -23,7 +23,7 @@ registry.
 ---
     ('keyword 'bool 'builtin 'class 'name)
 
-### the scan cuts a line into classed spans, brackets on their own
+### the lexer cuts a line into classed tokens, a bracket or an operator one byte
 
 ```python
 (%seq
@@ -33,7 +33,7 @@ registry.
   (newline))
 ```
 ---
-    (('keyword . "if") ('plain . " ") ('name . "x") ('plain . ": ") ('builtin . "print") ('bracket . "(") ('string . "\"hi\"") ('bracket . ")") ('plain . " ") ('comment . "# c"))
+    (('keyword . "if") ('blank . " ") ('name . "x") ('plain . ":") ('blank . " ") ('builtin . "print") ('plain . "(") ('string . "\"hi\"") ('plain . ")") ('blank . " ") ('comment . "# c"))
 
 ### string prefixes and triple quotes are one string; numbers keep their layout
 
@@ -45,9 +45,9 @@ registry.
   (newline))
 ```
 ---
-    (('string . "f\"a{b}\"") ('plain . " + ") ('string . "rb\"\"\"x\"\"\"") ('plain . " + ") ('number . "1_000") ('plain . " + ") ('number . "0x1f") ('plain . " + ") ('number . "1.5e-3") ('plain . " + ") ('number . ".5"))
+    (('string . "f\"a{b}\"") ('blank . " ") ('plain . "+") ('blank . " ") ('string . "rb\"\"\"x\"\"\"") ('blank . " ") ('plain . "+") ('blank . " ") ('number . "1_000") ('blank . " ") ('plain . "+") ('blank . " ") ('number . "0x1f") ('blank . " ") ('plain . "+") ('blank . " ") ('number . "1.5e-3") ('blank . " ") ('plain . "+") ('blank . " ") ('number . ".5"))
 
-### a decorator is one span, and an unterminated string runs to the end
+### a decorator is one token, and an unterminated string runs to the end
 
 ```python
 (%seq
@@ -57,7 +57,7 @@ registry.
   (newline))
 ```
 ---
-    ((('decorator . "@property")) (('name . "s") ('plain . " = ") ('string . "'abc")))
+    ((('decorator . "@property")) (('name . "s") ('blank . " ") ('plain . "=") ('blank . " ") ('string . "'abc")))
 
 ### with colour off the painter answers its argument
 

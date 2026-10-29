@@ -23,20 +23,24 @@
 ; The platform painter (x/repl/paint) asks the x reader what an atom is.
 ; Python's tokenizer is a second base: it answers tokens, not spans, and it
 ; stops at an unterminated string, which is the normal state of a line
-; being typed.  So this file scans spans itself -- comments, strings with
-; their prefixes and triple quotes, numbers, names, decorators and brackets
-; -- and classifies a name lexically: the keyword list the tokenizer reads,
-; the builtin table the parser reads, True/False/None, a leading capital.
-; The answer for a name is memoised.
+; being typed.  So this file colours a line by the tokens of a Lexer
+; (x/reader/lexer) of its own whose rules read every byte, through the
+; platform's (Paint lexer): comments, strings with their prefixes and triple
+; quotes, numbers, names, decorators, and every other byte as itself.  The
+; bracket marks are read from the same tokens.  A name is classified
+; lexically: the keyword list the tokenizer reads, the builtin table the
+; parser reads, True/False/None, a leading capital.  The answer for a name
+; is memoised.
 ;
 ; The colours are repl/ansi.x's, in the labels the platform painter uses
 ; for the same things, so a keyword, a literal and a class look the same
 ; being typed in either language.  A colourless terminal short-circuits the
-; scan, and the last line painted is kept by identity, since a redraw whose
-; text has not changed asks for the same bytes again.
+; paint, and the last line painted is kept by the platform painter, since a
+; redraw whose text has not changed asks for the same bytes again.
 ;
-; The scan runs on every keystroke, so it is %-private functions over cached
-; prims -- the rule x/repl/paint states -- and the palette is built once.
+; The lexer is made on its first use, a prompt's redraw: a script, a pipe or
+; an image write never pays for it.  The Lexer remakes its own states after
+; an image load.
 ;
 ; A module of its own: its names are its own, and only what the provide list
 ; at the end names leaves it, for an importer to take by name.
@@ -48,7 +52,9 @@
 (import x/type/dict)
 (import x/type/str)
 (import x/type/list)
+(import x/reader/lexer)
 (import x/repl/ansi)
+(import x/repl/paint)
 ; The editor.  Imported here rather than left to the launcher so that its
 ; Line class exists when the completer is installed below.
 (import x/repl/line)
@@ -73,7 +79,6 @@
 (def %pp-bsub   (prim-ref (lit str)  (lit byte-sub)))
 (def %pp-append (prim-ref (lit str)  (lit append)))
 (def %pp-cint   (prim-ref (lit char) (lit ->int)))
-(def %pp-same?  (prim-ref (lit obj)  (lit same?)))
 
 ; --- byte classes ------------------------------------------------------------
 (def %pp-byte (fn (_ s i) (%pp-cint (%pp-bref s i))))
@@ -86,99 +91,8 @@
       ((if (>= b 97) (<= b 122) #f) #t)
       (#t (>= b 128)))))
 (def %pp-ident? (fn (_ b) (if (%pp-ident-start? b) #t (%pp-digit? b))))
-(def %pp-quote? (fn (_ b) (if (= b 34) #t (= b 39))))
 (def %pp-open? (fn (_ b) (if (= b 40) #t (if (= b 91) #t (= b 123)))))
 (def %pp-close? (fn (_ b) (if (= b 41) #t (if (= b 93) #t (= b 125)))))
-(def %pp-bracket? (fn (_ b) (if (%pp-open? b) #t (%pp-close? b))))
-; A byte that starts a token the scan colours; everything else joins a plain
-; run.  `.` starts a number only before a digit, which the scan checks.
-(def %pp-starter?
-  (fn (_ b)
-    (match
-      ((= b 35) #t)
-      ((%pp-quote? b) #t)
-      ((%pp-digit? b) #t)
-      ((%pp-ident-start? b) #t)
-      ((= b 64) #t)
-      ((= b 46) #t)
-      (#t (%pp-bracket? b)))))
-
-; --- span ends ---------------------------------------------------------------
-(def %pp-to-eol
-  (fn (self s i n)
-    (if (>= i n) i (if (= 10 (%pp-byte s i)) i (self s (+ i 1) n)))))
-
-; To the closing quote q, honouring backslash escapes; an unterminated string
-; runs to the end of the line, the optimistic answer a half-typed line needs.
-(def %pp-str-end
-  (fn (self s i n q)
-    (if (>= i n) n
-      (let ((b (%pp-byte s i)))
-        (if (= b 92) (self s (+ i 2) n q)
-          (if (= b q) (+ i 1) (self s (+ i 1) n q)))))))
-
-; To the closing triple quote, or the end of the line.
-(def %pp-str3-end
-  (fn (self s i n q)
-    (if (>= (+ i 2) n) n
-      (let ((b (%pp-byte s i)))
-        (match
-          ((= b 92) (self s (+ i 2) n q))
-          ((if (= b q) (if (= (%pp-byte s (+ i 1)) q) (= (%pp-byte s (+ i 2)) q) #f) #f)
-            (+ i 3))
-          (#t (self s (+ i 1) n q)))))))
-
-; The end of a string whose opening quote is at i: triple or single.
-(def %pp-string-end
-  (fn (_ s i n)
-    (let ((q (%pp-byte s i)))
-      (if (if (< (+ i 2) n) (if (= (%pp-byte s (+ i 1)) q) (= (%pp-byte s (+ i 2)) q) #f) #f)
-        (%pp-str3-end s (+ i 3) n q)
-        (%pp-str-end s (+ i 1) n q)))))
-
-; A number's end: digits, letters, underscores and dots, plus a sign right
-; after an exponent letter, so 1.5e-3 is one token.
-(def %pp-num-end
-  (fn (self s i n prev)
-    (if (>= i n) i
-      (let ((b (%pp-byte s i)))
-        (match
-          ((%pp-ident? b) (self s (+ i 1) n b))
-          ((= b 46) (self s (+ i 1) n b))
-          ((if (if (= b 43) #t (= b 45)) (if (= prev 101) #t (= prev 69)) #f)
-            (self s (+ i 1) n b))
-          (#t i))))))
-
-(def %pp-ident-end
-  (fn (self s i n)
-    (if (>= i n) i (if (%pp-ident? (%pp-byte s i)) (self s (+ i 1) n) i))))
-
-; To the end of a run of bytes that start no token.
-(def %pp-plain-end
-  (fn (self s i n)
-    (if (>= i n) i
-      (let ((b (%pp-byte s i)))
-        (if (%pp-starter? b)
-          (if (if (= b 46) (not (if (< (+ i 1) n) (%pp-digit? (%pp-byte s (+ i 1))) #f)) #f)
-            (self s (+ i 1) n)
-            i)
-          (self s (+ i 1) n))))))
-
-; Whether the name in [i, e) is a string prefix -- r, b, u, f, rb, br, fr, rf
-; in either case -- with a quote right after it.
-(def %pp-prefix?
-  (fn (_ s i e n)
-    (if (if (< e n) (%pp-quote? (%pp-byte s e)) #f)
-      (let ((len (- e i)))
-        (if (if (>= len 1) (<= len 2) #f)
-          (let ((ok? (fn (_ b)
-                       (let ((c (if (>= b 97) (- b 32) b)))
-                         (if (= c 82) #t (if (= c 66) #t (if (= c 85) #t (= c 70))))))))
-            (if (ok? (%pp-byte s i))
-              (if (= len 2) (ok? (%pp-byte s (+ i 1))) #t)
-              #f))
-          #f))
-      #f)))
 
 (python-sweep!)
 ; --- classifying a name ------------------------------------------------------
@@ -209,45 +123,115 @@
           cls)
         hit))))
 
-; --- the palette -------------------------------------------------------------
-(def %pp-labels
-  (list (lit keyword) (lit bool) (lit builtin) (lit class) (lit name)
-        (lit number) (lit string) (lit comment) (lit decorator) (lit plain)))
-(def %pp-pal ())
-(def %pp-rst "")
-(def %pp-depth ())
-(def %pp-depth-n 3)
-(def %pp-lone "")
-(def %pp-focus "")
-(def %pp-last-in ())
-(def %pp-last-out ())
-(def %pp-last-marks ())
+; --- the codes ---------------------------------------------------------------
+;
+; Read from the Ansi statics once per install rather than once per token:
+; whether there is a terminal is a fact of the process, so the install runs
+; again after a state image is loaded.
+(def %pp-c-keyword "")
+(def %pp-c-bool "")
+(def %pp-c-builtin "")
+(def %pp-c-class "")
+(def %pp-c-number "")
+(def %pp-c-string "")
+(def %pp-c-comment "")
+(def %pp-c-decorator "")
 
-(def %pp-code
-  (fn (_ cls)
-    (let ((go (fn (self names codes)
-                (match
-                  ((null? names) "")
-                  ((eq? cls (first names)) (first codes))
-                  (#t (self (rest names) (rest codes)))))))
-      (go %pp-labels %pp-pal))))
+; A name's code by its label; a plain name has none.
+(def %pp-name-code
+  (fn (_ text)
+    (let ((cls (%py-paint-label text)))
+      (match
+        ((eq? cls (lit keyword)) %pp-c-keyword)
+        ((eq? cls (lit bool)) %pp-c-bool)
+        ((eq? cls (lit builtin)) %pp-c-builtin)
+        ((eq? cls (lit class)) %pp-c-class)
+        (#t ())))))
 
-(def %pp-depth-code
-  (fn (_ depth focused)
-    (let ((base (if (< depth 0) %pp-lone
-                  (let ((go (fn (self k codes)
-                              (if (null? codes) ""
-                                (if (= k 0) (first codes) (self (- k 1) (rest codes)))))))
-                    (go (% depth %pp-depth-n) %pp-depth)))))
-      (if focused (%pp-append base %pp-focus) base))))
+; --- the lexer ---------------------------------------------------------------
+;
+; Every byte of a line is some token's: blanks a run, a bracket or an
+; operator one byte under `plain`, so the painter draws the line byte for
+; byte with the author's spacing.  A string is one token with its prefix: a
+; single-quoted one a nested span whose body takes a backslash escape, a
+; triple-quoted one an until span, which ends at its first whole `"""` or
+; `'''`.  Both run to the end of the text while unclosed, the normal state
+; of a line being typed, and so does a comment.  A Lexer literal is bytes,
+; so each prefix Python takes -- r, b, u, f, rb, br, fr and rf, in either
+; case -- opens with a literal of its own, and a prefix with no quote after
+; it is a name.
+(def %pp-ident-start (list 95 (pair 65 90) (pair 97 122) (pair 128 255) (pair -128 -1)))
+(def %pp-ident (list 95 (pair 48 57) (pair 65 90) (pair 97 122) (pair 128 255) (pair -128 -1)))
+(def %pp-digits (list (pair 48 57)))
+; a number's body: digits, letters, underscores and dots, so 0x1f, 1_000,
+; 1e5j and 1.5 are each one token
+(def %pp-num-body (list 46 95 (pair 48 57) (pair 65 90) (pair 97 122)))
+; the body before an exponent letter, so the sign after it is read as well
+(def %pp-num-mantissa (list 46 95 (pair 48 57)))
 
-; The painter's answer for a token: its label's code, or a bracket's depth
-; code.  The scan takes this as a function so a spec can ask for labels
-; instead of codes (%py-paint-tokens).
-(def %pp-painter
-  (fn (_ cls depth focused)
-    (if (eq? cls (lit bracket)) (%pp-depth-code depth focused) (%pp-code cls))))
-(def %pp-labeler (fn (_ cls depth focused) cls))
+(def %pp-prefixes
+  (list "" "r" "R" "b" "B" "u" "U" "f" "F"
+        "rb" "rB" "Rb" "RB" "br" "bR" "Br" "BR"
+        "fr" "fR" "Fr" "FR" "rf" "rF" "Rf" "RF"))
+
+(def %pp-string-rules
+  (fn (_)
+    (List flat-map
+      (fn (_ p)
+        (List flat-map
+          (fn (_ q)
+            (let ((q3 (Str8 append q q q)))
+              (list (Lexer until (lit string) (Str8 append p q3) q3 (lit to-end))
+                    (Lexer nested (lit string) (Str8 append p q) (lit body)
+                      (list (list (lit body) (%pp-byte q 0) 92 ())) (lit to-end)))))
+          (list "\"" "'")))
+      %pp-prefixes)))
+
+; A number is digits, or a dot before a digit, then its body; the second
+; pattern of each pair reads an exponent's sign, which the body alone would
+; leave, and wins by length when there is one.
+(def %pp-rules
+  (fn (_)
+    (List append
+      (list (Lexer run (lit blank) " \t\r\n" " \t\r\n")
+            (Lexer until (lit comment) "#" "\n" (lit to-end)))
+      (%pp-string-rules)
+      (list
+        (Lexer pattern (lit number)
+          (list (list %pp-digits 1 1) (list %pp-num-body 0 ())))
+        (Lexer pattern (lit number)
+          (list (list %pp-digits 1 1) (list %pp-num-mantissa 0 ()) (list "eE" 1 1)
+                (list "+-" 1 1) (list %pp-num-body 0 ())))
+        (Lexer pattern (lit number)
+          (list (list "." 1 1) (list %pp-digits 1 1) (list %pp-num-body 0 ())))
+        (Lexer pattern (lit number)
+          (list (list "." 1 1) (list %pp-digits 1 1) (list %pp-num-mantissa 0 ()) (list "eE" 1 1)
+                (list "+-" 1 1) (list %pp-num-body 0 ())))
+        (Lexer run (lit name) %pp-ident-start %pp-ident)
+        (Lexer pattern (lit decorator)
+          (list (list "@" 1 1) (list %pp-ident-start 1 1) (list %pp-ident 0 ())))
+        (Lexer any (lit plain))))))
+
+(def %pp-lexer ())
+(def %pp-lex
+  (fn (_)
+    (if (null? %pp-lexer) (set! %pp-lexer (Lexer make (%pp-rules))) ())
+    %pp-lexer))
+
+; Each tag's colour: the code strings above, read when a token is painted.
+(def %pp-colours
+  (fn (_)
+    (list (pair (lit comment) (fn (_ t) %pp-c-comment))
+          (pair (lit string) (fn (_ t) %pp-c-string))
+          (pair (lit number) (fn (_ t) %pp-c-number))
+          (pair (lit decorator) (fn (_ t) %pp-c-decorator))
+          (pair (lit name) %pp-name-code))))
+
+(def %pp-painter ())
+(def %pp-paint
+  (fn (_)
+    (if (null? %pp-painter) (set! %pp-painter (Paint lexer (%pp-lex) (%pp-colours))) ())
+    %pp-painter))
 
 ; --- bracket marks -----------------------------------------------------------
 ;
@@ -255,8 +239,8 @@
 ; answers for parens.  Depth is the nesting level from 0, shared by the two
 ; halves of a pair; a close with nothing to close is -1.  Focused is true on
 ; the pair the cursor is beside: a close just before the cursor first, then
-; an open under it, a close under it, an open before it.  Strings and
-; comments are stepped over with the scan's own rules.
+; an open under it, a close under it, an open before it.  A bracket is a
+; `plain` token of the lexer, so one inside a string or a comment is none.
 (def %pp-depths
   (fn (_ s at)
     (let ((n (%pp-blen s)))
@@ -273,124 +257,48 @@
                           (if (= (first (first ms)) off)
                             (pair (list off (first (rest (first ms))) #t) (rest ms))
                             (pair (first ms) (self (rest ms) off)))))))
-            (let ((go (fn (self i open depth acc)
-                        (if (>= i n) (List reverse acc)
-                          (let ((b (%pp-byte s i)))
-                            (match
-                              ((= b 35) (self (%pp-to-eol s i n) open depth acc))
-                              ((%pp-quote? b) (self (%pp-string-end s i n) open depth acc))
-                              ((%pp-open? b)
-                                (self (+ i 1) (pair (pair i depth) open) (+ depth 1)
-                                      (pair (list i depth #f) acc)))
-                              ((%pp-close? b)
-                                (if (null? open)
-                                  (self (+ i 1) () 0 (pair (list i -1 (= i target)) acc))
-                                  (let ((o (first (first open))) (d (rest (first open))))
-                                    (let ((hit (if (= i target) #t (= o target))))
-                                      (self (+ i 1) (rest open) d
-                                            (pair (list i d hit)
-                                                  (if hit (flag acc o) acc)))))))
-                              (#t (self (+ i 1) open depth acc))))))))
-              (go 0 () 0 ()))))))))
-
-(def %pp-marks-from
-  (fn (self marks i)
-    (if (null? marks) ()
-      (if (< (first (first marks)) i) (self (rest marks) i) marks))))
-
-(def %pp-same-marks?
-  (fn (self a b)
-    (if (null? a) (null? b)
-      (if (null? b) #f
-        (let ((x (first a)) (y (first b)))
-          (if (if (= (first x) (first y))
-                (if (= (first (rest x)) (first (rest y)))
-                  (eq? (first (rest (rest x))) (first (rest (rest y)))) #f) #f)
-            (self (rest a) (rest b))
-            #f))))))
-
-; --- the scan ----------------------------------------------------------------
-;
-; Builds the segment list reversed: (code . text) pairs, where code is
-; whatever `code-of` answers for the token's class.  A plain run -- spaces,
-; operators, brackets nobody marked -- goes out as one segment, cut where a
-; mark falls so the marked bracket gets its own.
-(def %pp-scan
-  (fn (self s i n segs marks code-of)
-    (if (>= i n) segs
-      (let ((b (%pp-byte s i)))
-        (match
-          ((= b 35)
-            (let ((e (%pp-to-eol s i n)))
-              (self s e n (pair (pair (code-of (lit comment) 0 #f) (%pp-bsub s i (- e i))) segs)
-                    marks code-of)))
-          ((%pp-quote? b)
-            (let ((e (%pp-string-end s i n)))
-              (self s e n (pair (pair (code-of (lit string) 0 #f) (%pp-bsub s i (- e i))) segs)
-                    marks code-of)))
-          ((if (%pp-digit? b) #t (if (= b 46) (if (< (+ i 1) n) (%pp-digit? (%pp-byte s (+ i 1))) #f) #f))
-            (let ((e (%pp-num-end s (+ i 1) n b)))
-              (self s e n (pair (pair (code-of (lit number) 0 #f) (%pp-bsub s i (- e i))) segs)
-                    marks code-of)))
-          ((%pp-ident-start? b)
-            (let ((e (%pp-ident-end s (+ i 1) n)))
-              (if (%pp-prefix? s i e n)
-                (let ((e2 (%pp-string-end s e n)))
-                  (self s e2 n (pair (pair (code-of (lit string) 0 #f) (%pp-bsub s i (- e2 i))) segs)
-                        marks code-of))
-                (let ((text (%pp-bsub s i (- e i))))
-                  (self s e n (pair (pair (code-of (%py-paint-label text) 0 #f) text) segs)
-                        marks code-of)))))
-          ((if (= b 64) (if (< (+ i 1) n) (%pp-ident-start? (%pp-byte s (+ i 1))) #f) #f)
-            (let ((e (%pp-ident-end s (+ i 1) n)))
-              (self s e n (pair (pair (code-of (lit decorator) 0 #f) (%pp-bsub s i (- e i))) segs)
-                    marks code-of)))
-          (#t
-            (let ((e (%pp-plain-end s (+ i 1) n))
-                  (ms (%pp-marks-from marks i)))
-              (if (if (null? ms) #t (>= (first (first ms)) e))
-                (self s e n (pair (pair (code-of (lit plain) 0 #f) (%pp-bsub s i (- e i))) segs)
-                      ms code-of)
-                (let ((m (first ms)))
-                  (let ((c (first m)))
-                    (self s (+ c 1) n
-                      (pair (pair (code-of (lit bracket) (first (rest m)) (first (rest (rest m))))
-                                  (%pp-bsub s c 1))
-                            (if (> c i) (pair (pair (code-of (lit plain) 0 #f) (%pp-bsub s i (- c i))) segs) segs))
-                      (rest ms) code-of)))))))))))
-
-; Segments to text: a code wraps its text and is followed by a reset; an
-; empty code -- a class with no colour, or colour off -- emits bare text.
-(def %pp-join
-  (fn (self segs acc)
-    (if (null? segs) acc
-      (let ((code (first (first segs))) (text (rest (first segs))))
-        (self (rest segs)
-              (if (= 0 (%pp-blen code)) (%pp-append text acc)
-                (%pp-append code (%pp-append text (%pp-append %pp-rst acc)))))))))
+            (let ((go (fn (self toks i open depth acc)
+                        (if (null? toks) (List reverse acc)
+                          (let ((text (first (rest (first toks)))))
+                            (let ((b (if (eq? (first (first toks)) (lit plain)) (%pp-byte text 0) 0))
+                                  (next (+ i (%pp-blen text))))
+                              (match
+                                ((%pp-open? b)
+                                  (self (rest toks) next (pair (pair i depth) open) (+ depth 1)
+                                        (pair (list i depth #f) acc)))
+                                ((%pp-close? b)
+                                  (if (null? open)
+                                    (self (rest toks) next () 0 (pair (list i -1 (= i target)) acc))
+                                    (let ((o (first (first open))) (d (rest (first open))))
+                                      (let ((hit (if (= i target) #t (= o target))))
+                                        (self (rest toks) next (rest open) d
+                                              (pair (list i d hit)
+                                                    (if hit (flag acc o) acc)))))))
+                                (#t (self (rest toks) next open depth acc)))))))))
+              (go ((%pp-lex) read-str s) 0 () 0 ()))))))))
 
 (python-sweep!)
 ; --- the three answers the editor asks for ----------------------------------
 
+; The seam the editor calls: (%repl-paint window marks before).
 (def python-paint
-  (fn (_ s . marks)
+  (fn (_ s . more)
     (if (not (Ansi enabled?)) s
-      (let ((ms (if (null? marks) () (first marks))))
-        (if (if (%pp-same? s %pp-last-in) (%pp-same-marks? ms %pp-last-marks) #f)
-          %pp-last-out
-          (let ((out (%pp-join (%pp-scan s 0 (%pp-blen s) () ms %pp-painter) "")))
-            (set! %pp-last-in s)
-            (set! %pp-last-marks ms)
-            (set! %pp-last-out out)
-            out))))))
+      ((%pp-paint) s
+        (if (null? more) () (first more))
+        (if (if (null? more) #t (null? (rest more))) () (first (rest more)))))))
 
 (def python-marks (fn (_ s at) (%pp-depths s at)))
 
-; The scan's tokens as (class . text), brackets marked with no cursor -- what
-; a spec checks, colour or no colour.
+; The lexer's tokens as (class . text), a name's class its label -- what a
+; spec checks, colour or no colour.
 (def %py-paint-tokens
   (fn (_ s)
-    (List reverse (%pp-scan s 0 (%pp-blen s) () (%pp-depths s -1) %pp-labeler))))
+    (List map
+      (fn (_ tok)
+        (let ((tag (first tok)) (text (first (rest tok))))
+          (pair (if (eq? tag (lit name)) (%py-paint-label text) tag) text)))
+      ((%pp-lex) read-str s))))
 
 ; --- completion --------------------------------------------------------------
 ;
@@ -434,7 +342,7 @@
 ; --- installation ------------------------------------------------------------
 ;
 ; The colours are strings of this process -- a state image loaded elsewhere
-; may have a terminal the writer did not -- so the palette is built by a
+; may have a terminal the writer did not -- so the codes are read by a
 ; function the image recache hook calls again, and the memo with it.  The
 ; three seams are set here as well as registered by python/repl.x, to the
 ; values the lang "python" carries.
@@ -450,25 +358,14 @@
     (set! %pp-memo-get (method-ref %pp-memo get-or))
     (set! %pp-memo-set (method-ref %pp-memo set!))
     (set! %pp-names (List append python-keywords (List map (fn (_ row) (first row)) python-builtins)))
-    (set! %pp-rst (Ansi reset))
-    (set! %pp-pal
-      (list (%pp-append (Ansi bold) (Ansi magenta)) ; keyword, as x's constructs
-            (Ansi bold-red)                         ; bool: True False None
-            (Ansi blue)                             ; builtin, as x's symbols
-            (Ansi bold-cyan)                        ; class: a capitalised name
-            ""                                      ; name
-            (Ansi yellow)                           ; number
-            (Ansi green)                            ; string
-            (Ansi dim)                              ; comment
-            (Ansi magenta)                          ; decorator
-            ""))                                    ; plain
-    (set! %pp-depth (list (Ansi yellow) (Ansi magenta) (Ansi cyan)))
-    (set! %pp-lone (Ansi bold-red))
-    ; inverse video
-    (set! %pp-focus (Ansi inverse))
-    (set! %pp-last-in ())
-    (set! %pp-last-out ())
-    (set! %pp-last-marks ())
+    (set! %pp-c-keyword (%pp-append (Ansi bold) (Ansi magenta))) ; as x's constructs
+    (set! %pp-c-bool (Ansi bold-red))                            ; True False None
+    (set! %pp-c-builtin (Ansi blue))                             ; as x's symbols
+    (set! %pp-c-class (Ansi bold-cyan))                          ; a capitalised name
+    (set! %pp-c-number (Ansi yellow))
+    (set! %pp-c-string (Ansi green))
+    (set! %pp-c-comment (Ansi dim))
+    (set! %pp-c-decorator (Ansi magenta))
     (guard (_ ()) (set! %repl-paint python-paint))
     (guard (_ ()) (set! %repl-marks python-marks))
     (guard (_ ()) (Line completer python-complete))
