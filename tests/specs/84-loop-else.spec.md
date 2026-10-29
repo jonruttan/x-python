@@ -202,7 +202,7 @@ own words and at the same moment.
 ```
 ---
 ```output
-Error: #<err:syntax 'break' outside loop>
+Error: syntax: 'break' outside loop
 ```
 
 ### elif is not a loop clause
@@ -216,7 +216,7 @@ is refused as the statement it then has to be.
 ```
 ---
 ```output
-Error: #<err:syntax unexpected token in expression>
+Error: syntax: unexpected token in expression
 ```
 
 ## the escape the else reads is still an escape

@@ -94,7 +94,7 @@ input the program supplied. Truncation is toward zero, which is Python's.
 (python-run "print(int('abc'))")
 ```
 ---
-    Error: #<err:value invalid literal for int() with base 10: 'abc'>
+    Error: value: invalid literal for int() with base 10: 'abc'
 
 ### float
 
@@ -118,7 +118,7 @@ strictness fails loudly where the alternative was silent.
 (python-run "print(float('abc'))")
 ```
 ---
-    Error: #<err:value could not convert string to float: 'abc'>
+    Error: value: could not convert string to float: 'abc'
 
 ### bool is Python's truthiness
 

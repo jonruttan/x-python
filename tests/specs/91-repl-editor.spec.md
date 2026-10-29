@@ -181,7 +181,7 @@ left of the cursor, so a stand-in with that method serves here as it does in
 ```
 ---
 ```output
-Error: #<err:syntax unexpected end of input in expression>
+Error: syntax: unexpected end of input in expression
 still here
 ```
 
