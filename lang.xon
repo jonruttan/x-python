@@ -60,6 +60,6 @@
 ; v0.35.0 is what this bundle and its siblings are green against, and the row
 ; tracks that rather than the floor.  This bundle has no claim to anything
 ; older.
-(requires-release "v0.39.1")
+(requires-release "v0.42.0")
 
 (entry "run.x")
