@@ -98,7 +98,7 @@ a
 (python-run "print(','.join(5))")
 ```
 ---
-    Error: #<err:type can only join an iterable of str>
+    Error: type: can only join an iterable of str
 
 ### split then join round-trips
 
@@ -188,7 +188,7 @@ as in Python.
 (python-run "print('abc'[9])")
 ```
 ---
-    Error: #<err:index string index out of range>
+    Error: index: string index out of range
 
 ### len of a string
 
@@ -206,7 +206,7 @@ as in Python.
 (python-run "print('a'.nosuch())")
 ```
 ---
-    Error: #<err:attribute 'str' object has no attribute 'nosuch'>
+    Error: attribute: 'str' object has no attribute 'nosuch'
 
 ## strings together
 

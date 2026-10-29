@@ -141,7 +141,7 @@ special case anywhere.
 (python-run "raise Frobnicate('x')")
 ```
 ---
-    Error: #<err:name name 'Frobnicate' is not defined>
+    Error: name: name 'Frobnicate' is not defined
 
 ### raising a non-exception is a TypeError
 
@@ -149,4 +149,4 @@ special case anywhere.
 (python-run "class NotAnError:\n    pass\nraise NotAnError()")
 ```
 ---
-    Error: #<err:type exceptions must derive from BaseException>
+    Error: type: exceptions must derive from BaseException

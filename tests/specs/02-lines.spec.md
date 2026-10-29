@@ -194,7 +194,7 @@ and `(Indent make)`'s default is Python's answer.
 (%seq (write (python-lex "a\n    b\n  c")) (newline))
 ```
 ---
-    Error: #<err:indent unindent does not match any outer indentation level>
+    Error: indent: unindent does not match any outer indentation level
 
 ## lines together
 

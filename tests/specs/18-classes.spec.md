@@ -70,7 +70,7 @@ a method special.
 (python-run "class C:\n    pass\nprint(C().nope)")
 ```
 ---
-    Error: #<err:attribute 'C' object has no attribute 'nope'>
+    Error: attribute: 'C' object has no attribute 'nope'
 
 ## methods
 
@@ -178,4 +178,4 @@ names the token rather than the structure.
 (python-run "class C:\n    if 1:\n        pass\nprint(C())")
 ```
 ---
-    Error: #<err:syntax unexpected token in expression>
+    Error: syntax: unexpected token in expression

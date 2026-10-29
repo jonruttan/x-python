@@ -48,7 +48,7 @@ item assignment, and a list of targets unpacks the value into each in turn.
 (python-run "x = [1]\nx[5] = 0")
 ```
 ---
-    Error: #<err:index list assignment index out of range>
+    Error: index: list assignment index out of range
 
 ### the index may be an expression
 
@@ -220,7 +220,7 @@ ValueError too many values to unpack (expected 2)
 (python-run "def f():\n    return 1\nf() = 2")
 ```
 ---
-    Error: #<err:syntax cannot assign to this target>
+    Error: syntax: cannot assign to this target
 
 ### a wrong count is refused in CPython's words
 

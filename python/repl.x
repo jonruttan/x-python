@@ -239,7 +239,7 @@
                 (%seq
                   (display "Error: ")
                   (%seq
-                    (display (if (str? %py-err) %py-err (Io write-to-str %py-err)))
+                    (display %py-err)
                     (newline))))
               (let ((entry (%py-read-entry line %py-more-from-loop)))
                 (unless (eq? entry (lit cancel)) (%py-repl-eval entry))))
@@ -268,7 +268,7 @@
                 (%seq
                   (display "Error: ")
                   (%seq
-                    (display (if (str? %py-err) %py-err (Io write-to-str %py-err)))
+                    (display %py-err)
                     (newline))))
               (%py-repl-eval entry))))))))
 

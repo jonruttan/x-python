@@ -282,7 +282,7 @@ the line); the refusal, and its timing, do not.
 ```
 ---
 ```output
-Error: #<err:syntax 'break' outside loop>
+Error: syntax: 'break' outside loop
 ```
 
 ### continue at module level
@@ -292,7 +292,7 @@ Error: #<err:syntax 'break' outside loop>
 ```
 ---
 ```output
-Error: #<err:syntax 'continue' not properly in loop>
+Error: syntax: 'continue' not properly in loop
 ```
 
 ### the refusal comes before the module runs
@@ -302,7 +302,7 @@ Error: #<err:syntax 'continue' not properly in loop>
 ```
 ---
 ```output
-Error: #<err:syntax 'break' outside loop>
+Error: syntax: 'break' outside loop
 ```
 
 ### a break in a def inside a loop belongs to no loop
@@ -314,7 +314,7 @@ The def is its own scope: the loop around it is not around the `break`.
 ```
 ---
 ```output
-Error: #<err:syntax 'break' outside loop>
+Error: syntax: 'break' outside loop
 ```
 
 ### a continue under an if, still outside a loop
@@ -324,5 +324,5 @@ Error: #<err:syntax 'break' outside loop>
 ```
 ---
 ```output
-Error: #<err:syntax 'continue' not properly in loop>
+Error: syntax: 'continue' not properly in loop
 ```

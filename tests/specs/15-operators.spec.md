@@ -34,7 +34,7 @@ platform's included. `'ab' * 2` is handled in the runtime behind a `str?` test.
 (python-run "print([1] + 1)")
 ```
 ---
-    Error: #<err:type can only concatenate list (not "int") to list>
+    Error: type: can only concatenate list (not "int") to list
 
 ### and so is a number and a string
 
@@ -45,7 +45,7 @@ raises, and so does this now.
 (python-run "print(1 + 'a')")
 ```
 ---
-    Error: #<err:type unsupported operand type(s) for +: 'int' and 'str'>
+    Error: type: unsupported operand type(s) for +: 'int' and 'str'
 
 ## repetition
 
