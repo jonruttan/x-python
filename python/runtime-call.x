@@ -190,6 +190,9 @@
 (def %py-kwcall
   (fn (_ f pos kws)
     (match
+      ; a `**` that spread nothing leaves a plain call: f(*a, **{}) is f(*a),
+      ; and a callee that takes no keywords still takes it
+      ((null? kws) (%py-apply-any f pos))
       ((same? f %py-print) (%py-print-kw pos kws))
       ((if (same? f %py-min) #t (same? f %py-max)) (%py-minmax-kw f pos kws))
       ; dict(a=1): the keywords are the entries.  A subclass whose constructor
@@ -243,6 +246,8 @@
   (fn (_ obj name pos kws)
     ; d.update(a=1) merges the keywords
     (match
+      ; nothing spread is a plain call, as in %py-kwcall
+      ((null? kws) (%py-apply-any (%py-getattr obj name) pos))
       ((if (python-dict? obj) (Str8 =? name "update") #f)
         (let ((d obj))
           (%seq (if (null? pos) () (%py-dict-merge! d (first pos)))

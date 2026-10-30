@@ -636,15 +636,22 @@
                (%py-exc-class-of e) (%py-exc-instance-of e) ())))
       (if (%py-truthy r) () (error e)))))
 
-; the exception as Python hands it to __exit__: an instance, whether it was
-; raised from Python source (already one) or by this runtime (an Err, whose
-; label names the class it would have been -- the same bridge the except
-; matcher walks, and Err carries its text as the SUBJECT).
+; the exception as Python hands it to __exit__ and to `except ... as NAME`: an
+; instance, whether it was raised from Python source (already one) or by this
+; runtime (an Err, whose label names the class it would have been -- the same
+; bridge the except matcher walks).  Its one argument is the error's text as a
+; str: an Err the library raised carries it as its message, an engine error
+; as its subject (the unbound name), and a bare string error is its text.
 (def %py-exc-instance-of
   (fn (_ e)
     (if (python-obj-is e)
       e
-      (python-instantiate (%py-exc-class-of e) (list (Err subject-of e))))))
+      (python-instantiate (%py-exc-class-of e)
+        (list (python-str-of-x
+                (match
+                  ((Err err? e) (e msg))
+                  ((str? e) e)
+                  (#t (Err subject-of e)))))))))
 
 ; The float a math function reads: an int converts, a float is itself, an
 ; instance answers through __float__, and anything else is Python's TypeError.
@@ -1653,15 +1660,32 @@
 ; throw(type, value): a value that is already an instance of the type is
 ; the exception itself, not a constructor argument
 (def %py-exc-instance
-  (fn (_ e args)
+  (fn (_ e args) (%py-exc-instance-by e args #f)))
+; THROWN? is throw()'s, which words its refusal below differently
+(def %py-exc-instance-by
+  (fn (_ e args thrown?)
     (if (%py-class-is e)
       (if (if (null? args) #f
             (if (null? (rest args))
               (if (python-obj-is (first args)) (python-subclass? (python-obj-class (first args)) e) #f)
               #f))
         (first args)
-        (python-instantiate e args))
+        (%py-exc-made e (python-instantiate e args) thrown?))
       e)))
+; A class whose __new__ answers something other than an exception has made
+; nothing to raise, and Python says which class did it and what came back:
+; `not <class 'int'>` from a raise, `not int` from a generator's throw().
+(def %py-exc-made
+  (fn (_ cls v thrown?)
+    (if (if (python-obj-is v) (python-subclass? (python-obj-class v) %py-exc-BaseException) #f)
+      v
+      (let ((got (python-class-qualname (python-type-of v))))
+        (Err raise (lit type)
+          (Str8 append "calling <class '"
+            (Str8 append (python-class-qualname cls)
+              (Str8 append "'> should have returned an instance of BaseException, not "
+                (if thrown? got (Str8 append "<class '" (Str8 append got "'>"))))))
+          ())))))
 ; No exception is active outside a handler: the name every compiled handler
 ; binds to the one it caught is nil here, and a bare `raise` finds it so.
 (def %py-exc ())
@@ -1680,6 +1704,15 @@
       (%py-exc-instance e ())
       (Err raise (lit type) "exceptions must derive from BaseException" ()))))
 (def %py-raise-any (fn (_ e) (error (%py-exc-value e))))
+; A value thrown into a generator is made an exception only where it is
+; raised in a frame: a delegating yield from hands a duck iterator the
+; class itself, as Python does.  A class whose __new__ answers no
+; exception is refused here in throw()'s own words.
+(def %py-raise-thrown
+  (fn (_ e)
+    (error (if (%py-class-is e)
+             (if (%py-thrown-is? e %py-exc-BaseException) (%py-exc-instance-by e () #t) (%py-exc-value e))
+             (%py-exc-value e)))))
 ; `raise X from Y` records the cause on the instance: None, or an exception
 ; class or instance; anything else is Python's TypeError
 (def %py-raise-from
@@ -1729,7 +1762,7 @@
                    (%py-gen-set-status! g (lit suspended))
                    ((%py-gen-ck g) (list (lit yield) v))))))
       (if (eq? (first msg) (lit throw))
-        (%py-raise-any (first (rest msg)))
+        (%py-raise-thrown (first (rest msg)))
         (first (rest msg))))))
 
 ; First entry: run the body to its end under the forwarding guard.
@@ -1748,7 +1781,7 @@
   (fn (_ g label v)
     (def st (%py-gen-status g))
     (if (eq? st (lit done))
-      (if (eq? label (lit throw)) (%py-raise-any v) (python-raise-stop ()))
+      (if (eq? label (lit throw)) (%py-raise-thrown v) (python-raise-stop ()))
     (if (eq? st (lit running))
       (Err raise (lit value) "generator already executing" ())
       (do
@@ -1756,7 +1789,7 @@
           (Err raise (lit type) "can't send non-None value to a just-started generator" ())
           ())
         (if (if (eq? st (lit created)) (eq? label (lit throw)) #f)
-          (do (%py-gen-set-status! g (lit done)) (%py-raise-any v))
+          (do (%py-gen-set-status! g (lit done)) (%py-raise-thrown v))
           ; ACROSS THE BOUNDARY THE WIND STACK IS SWAPPED, not shared: the body
           ; runs owing what the body owes, and hands it back unpaid when it
           ; suspends.  Without this a `yield` out of a try/finally would leave
@@ -1814,9 +1847,12 @@
       ((Str8 =? name "__next__") (fn (_) (%py-gen-resume g (lit send) ())))
       ((Str8 =? name "send") (fn (_ v) (%py-gen-resume g (lit send) v)))
       ((Str8 =? name "throw")
+        ; a bare class goes through as it is: it is made an exception where
+        ; it is raised (%py-raise-thrown), not before a delegate sees it
         (fn (_ e . a)
           (%py-gen-resume g (lit throw)
-            (if (if (null? a) #t (if (null? (rest a)) (null? (first a)) #f)) e (%py-exc-instance e a)))))
+            (if (if (null? a) #t (if (null? (rest a)) (null? (first a)) #f)) e
+              (%py-exc-instance-by e a #t)))))
       ((Str8 =? name "close") (fn (_) (%py-gen-close g)))
       ((Str8 =? name "__iter__") (fn (_) g))
       ((Str8 =? name "__name__") (python-str-of-x (%py-gen-name g)))
@@ -1867,7 +1903,7 @@
                                      (error e)))
                            (list (lit got)
                              (if (eq? label (lit throw))
-                               (if (null? thr) (%py-raise-any v) (thr v))
+                               (if (null? thr) (%py-raise-thrown v) (thr v))
                                (if (if (null? v) #t (null? snd)) (nx) (snd v)))))))
                   (if (eq? (first r) (lit stop))
                     (first (rest r))
