@@ -3437,10 +3437,13 @@
                   (if (null? var)
                     body
                     ; `as NAME` binds the exception for the handler, and unbinds
-                    ; it after -- however the handler is left, as Python does
+                    ; it after -- however the handler is left, as Python does.
+                    ; What it binds is an instance: an error this runtime
+                    ; raised by label becomes one of the class it names, so
+                    ; e.args reads as it would in Python.
                     (let ((sym (%py-name->sym var)))
                       (list (lit %seq)
-                        (list (lit set!) sym (lit %py-exc))
+                        (list (lit set!) sym (list (lit %py-exc-instance-of) (lit %py-exc)))
                         (%py-finally-form body
                           (list (lit set!) sym (lit %py-deleted))))))))
             (if (null? matcher)
