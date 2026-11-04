@@ -42,7 +42,7 @@
 ; works and `'a'` loses its accumulator -- and it allocates a fresh closure per
 ; character inside a reader callback, which is the one place allocation is a
 ; hazard.  Here `analyse` only finds the closing quote; `read` slices
-; `%buffer-token` and unescapes.  No shared state, no per-character allocation.
+; `buf-tok` and unescapes.  No shared state, no per-character allocation.
 ;
 ; A module of its own: only what the provide list at the end names leaves it,
 ; for an importer to take by name.
@@ -79,12 +79,10 @@
 ; The platform owns the tokenizer intrinsics (lib/x/reader/intrinsics.x); these
 ; run per character, so they are the platform's own tested versions rather than
 ; a second copy of the same contract.
-(def %py-token-read-string (prim-ref (lit tok) (lit read-str)))
+(import x/core/doors tok-read-str buf-tok char->int int->char)
 ; %buffer-len / %buffer-unread / %score-set are globals from
 ; lib/x/reader/intrinsics.x; the token accessor is not, and every module that
 ; wants it fetches it the same way (num/bigint.x, num/complex.x).
-(def %buffer-token (prim-ref (lit buf) (lit tok)))
-(def %py-char->int (prim-ref (lit char) (lit ->int)))
 
 ; --- The number-label channel ---------------------------------------------------
 ; A NUMBER TOKEN CARRIES ITS LABEL, decided where it is known.  The analyser's
@@ -109,7 +107,7 @@
 (def %py-read-number-label
   (guard (e (fn (_ args) ())) %read-label))
 
-(def python-code-at (fn (_ s i) (%py-char->int (%str-ref s i))))
+(def python-code-at (fn (_ s i) (char->int (%str-ref s i))))
 
 ; 0x 0o 0b at i, in either case
 (def %py-based-at?
@@ -415,7 +413,7 @@
           ; inside brackets: whitespace, and the group reader drops it
           (mk-tok-newline)
           (do
-        (def col (first (%py-indent-scan (%buffer-token buffer) 1 8)))
+        (def col (first (%py-indent-scan (buf-tok buffer) 1 8)))
         (def evs
           (guard (_ (%seq (%py-note-ind-error!) (list (lit same))))
             ((first %py-ind) feed col)))
@@ -493,7 +491,7 @@
 (def %py-kw-codes
   (fn (self s i acc)
     (if (< i 0) acc
-      (self s (- i 1) (pair (%py-char->int (Str8 ref i s)) acc)))))
+      (self s (- i 1) (pair (char->int (Str8 ref i s)) acc)))))
 
 (def %py-kw-trie
   ((fn (self ks node)
@@ -530,7 +528,7 @@
   (list
     (pair (lit analyse) %py-kw-entry)
     (pair (lit read)
-      (fn (_ . args) (mk-tok-kw (%buffer-token (first args)))))))
+      (fn (_ . args) (mk-tok-kw (buf-tok (first args)))))))
 (%py-tok-type! "PY-KEYWORD" %py-t-kw)
 
 ; The compiled states: the same trie, one native state per node, generated
@@ -637,7 +635,7 @@
     (pair (lit read)
       (fn (_ . args)
         (%seq (%py-number-run-into! (first args))
-          (mk-tok-name (%buffer-token (first args))))))))
+          (mk-tok-name (buf-tok (first args))))))))
 (%py-tok-type! "PY-NAME" %py-t-name)
 
 ; --- PY-NUMBER: integers and floats ------------------------------------------
@@ -775,7 +773,7 @@
           (#t ()))))
     (pair (lit read)
       (fn (_ . args)
-        (let ((text (%buffer-token (first args))))
+        (let ((text (buf-tok (first args))))
           (let ((k (%py-read-number-label args)))
             (let ((v (if (null? k) (%py-number-label-of-text text) k)))
               (%seq (%py-leading-zeros! text v)
@@ -845,7 +843,7 @@
 ; the engine's int->char door so \xff is the two-byte character it is, not
 ; a stray byte.  An escape Python does not know (\z) is kept verbatim,
 ; backslash and all, which is Python's rule too.
-(def %py-int->char (prim-ref (lit int) (lit ->char)))
+(def %py-int->char int->char)
 ; THE CONVERSION CANNOT RUN INSIDE A READ HANDLER -- (%cvt l %string) hands
 ; back nil there (the reason the old decoder was built on Str8 appends) --
 ; so the 256 one-character strings a byte-sized code point can name are
@@ -925,10 +923,10 @@
       (fn (self i acc)
         (if (>= i len)
           (List reverse acc)
-          (if (if (= (%py-char->int (Str8 ref i s)) 92) (< (+ i 1) len) #f)
+          (if (if (= (char->int (Str8 ref i s)) 92) (< (+ i 1) len) #f)
             (let ((r (%py-esc-at s i len raw?)))
               (self (first r) (%py-piece-onto (rest r) acc)))
-            (self (+ i 1) (pair (%py-char->int (Str8 ref i s)) acc))))))
+            (self (+ i 1) (pair (char->int (Str8 ref i s)) acc))))))
     (%go 0 ())))
 
 (def %py-piece-onto
@@ -941,7 +939,7 @@
 (def %py-str-onto
   (fn (self s i n acc)
     (if (>= i n) acc
-      (self s (+ i 1) n (pair (%py-char->int (Str8 ref i s)) acc)))))
+      (self s (+ i 1) n (pair (char->int (Str8 ref i s)) acc)))))
 
 (def %py-unescape
   (fn (_ s raw?)
@@ -950,7 +948,7 @@
       (fn (self i acc)
         (if (>= i len)
           acc
-          (if (if (= (%py-char->int (Str8 ref i s)) 92) (< (+ i 1) len) #f)
+          (if (if (= (char->int (Str8 ref i s)) 92) (< (+ i 1) len) #f)
             (let ((r (%py-esc-at s i len raw?)))
               (self (first r) (Str8 append acc (rest r))))
             (self (+ i 1) (Str8 append acc (Str8 sub i 1 s)))))))
@@ -964,7 +962,7 @@
       ((= k 0) acc)
       ((>= j end) ())
       (#t
-        (let ((d (python-hexval (%py-char->int (Str8 ref j s)))))
+        (let ((d (python-hexval (char->int (Str8 ref j s)))))
           (if (null? d) () (self s (+ j 1) end (- k 1) (+ (* acc 16) d))))))))
 
 ; \u or \U at i: the escape's code point and where the literal resumes, or the
@@ -999,7 +997,7 @@
 
 (def %py-esc-at
   (fn (_ s i len raw?)
-    (def at (fn (_ k) (%py-char->int (Str8 ref k s))))
+    (def at (fn (_ k) (char->int (Str8 ref k s))))
     (def code (at (+ i 1)))
     (def simple
       (fn (_ t) (pair (+ i 2) t)))
@@ -1044,7 +1042,7 @@
       (#t (pair (+ i 2) (Str8 sub i 2 s))))))
 (def %py-string-read
   (fn (_ . args)
-    (def raw (%buffer-token (first args)))
+    (def raw (buf-tok (first args)))
     (def len (Str8 length raw))
     ; Drop the opening and closing quote; an unterminated string never reaches
     ; here, because its state never accepted.
@@ -1153,21 +1151,21 @@
   (fn (self s n lo up)
     (if (= n 0)
       #f
-      (let ((c (%py-char->int (Str8 ref (- n 1) s))))
+      (let ((c (char->int (Str8 ref (- n 1) s))))
         (if (if (= c lo) #t (= c up)) #t (self s (- n 1) lo up))))))
 
 (def %py-prefixed-read
   (fn (_ . args)
-    (def raw (%buffer-token (first args)))
+    (def raw (buf-tok (first args)))
     (def len (Str8 length raw))
     ; one prefix letter or two, and everything after it is measured from there
-    (def n (if (%py-prefix-char? (%py-char->int (Str8 ref 1 raw))) 2 1))
+    (def n (if (%py-prefix-char? (char->int (Str8 ref 1 raw))) 2 1))
     ; one quote or three: a triple-quoted lexeme is six quotes longer than its
     ; prefix and opens with three of the same
     (def triple
       (if (>= len (+ n 6))
-        (if (= (%py-char->int (Str8 ref n raw)) (%py-char->int (Str8 ref (+ n 1) raw)))
-          (= (%py-char->int (Str8 ref (+ n 1) raw)) (%py-char->int (Str8 ref (+ n 2) raw)))
+        (if (= (char->int (Str8 ref n raw)) (char->int (Str8 ref (+ n 1) raw)))
+          (= (char->int (Str8 ref (+ n 1) raw)) (char->int (Str8 ref (+ n 2) raw)))
           #f)
         #f))
     (def body
@@ -1238,16 +1236,16 @@
       (fn (self i acc)
         (if (>= i n)
           acc
-          (let ((c (%py-char->int (Str8 ref i s))))
+          (let ((c (char->int (Str8 ref i s))))
             (if (= c 13)
-              (self (if (if (< (+ i 1) n) (= (%py-char->int (Str8 ref (+ i 1) s)) 10) #f) (+ i 2) (+ i 1))
+              (self (if (if (< (+ i 1) n) (= (char->int (Str8 ref (+ i 1) s)) 10) #f) (+ i 2) (+ i 1))
                 (Str8 append acc "\n"))
               (self (+ i 1) (Str8 append acc (Str8 sub i 1 s))))))))
     (if (null? (Str8 index-of (%py-cp->str 13) s)) s (go 0 ""))))
 
 (def %py-triple-read
   (fn (_ . args)
-    (def raw (%buffer-token (first args)))
+    (def raw (buf-tok (first args)))
     (def len (Str8 length raw))
     (mk-tok-string (%py-unescape-cps (%py-crlf->lf (Str8 sub 3 (- len 6) raw))))))
 
@@ -1410,7 +1408,7 @@
             (%score-set score 1 buffer))
           ())))
     (pair (lit read)
-      (fn (_ . args) (mk-tok-op (%buffer-token (first args)))))))
+      (fn (_ . args) (mk-tok-op (buf-tok (first args)))))))
 (%py-tok-type! "PY-OP" %py-t-op)
 
 ; --- Compiled analysers ------------------------------------------------------
@@ -1798,7 +1796,7 @@
     (%py-ind-reset!)
     (%set-first! %py-lex-error ())
     (%set-first! %py-number-end -1)
-    (let ((toks (%py-token-read-string (first %py-active-raw)
+    (let ((toks (tok-read-str (first %py-active-raw)
                   (Str8 append (%py-source-lf input) " "))))
       ; Reading is over and x is driving again, so this is where a parked
       ; error can finally be raised: an indentation error, or a refusal a read
@@ -1837,7 +1835,7 @@
       (fn (_ buffer score chr)
         (if (%py-close? chr) (%score-set score 1 buffer) ())))
     (pair (lit read)
-      (fn (_ . args) (list (lit tok-close) (%buffer-token (first args)))))))
+      (fn (_ . args) (list (lit tok-close) (buf-tok (first args)))))))
 (%py-tok-type! "PY-CLOSE" %py-t-close)
 
 (def %py-group-close? (fn (_ t) (if (pair? t) (eq? (first t) (lit tok-close)) #f)))
@@ -1854,7 +1852,7 @@
     (pair (lit read)
       (fn (_ . args)
         (def buffer (first args))
-        (def open (%buffer-token buffer))
+        (def open (buf-tok buffer))
         (%set-first! %py-in-group (+ (first %py-in-group) 1))
         ; Answers (elems . closer): the tokens, and the bracket that ended
         ; them -- nil when the run ended at EOF instead.
@@ -1897,7 +1895,7 @@
         (if (= chr 10) () (%score-set score (- 0 1) buffer))))
     (pair (lit read)
       (fn (_ . args)
-        (let ((c (%py-char->int (Str8 ref 0 (%buffer-token (first args))))))
+        (let ((c (char->int (Str8 ref 0 (buf-tok (first args))))))
           (%seq (%py-lex-refuse! (%py-bad-char c)) (mk-tok-op "?")))))))
 (%py-tok-type! "PY-BAD" %py-t-bad)
 

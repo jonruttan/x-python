@@ -499,7 +499,8 @@
       (list (python-str-new (first t)) (python-str-new (first (rest t)))
             (python-str-new (first (rest (rest t))))))))
 
-(def %py-int->char (prim-ref (lit int) (lit ->char)))
+(import x/core/doors int->char)
+(def %py-int->char int->char)
 ; %c and {:c}: the character a code point names, refused past U+10FFFF as the
 ; OverflowError both formats raise, in their own words -- where chr() says
 ; ValueError about the same number.

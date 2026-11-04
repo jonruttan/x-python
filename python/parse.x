@@ -60,10 +60,8 @@
 ; child was also why a float or a bigint could not be read there: the tower
 ; is a library, loaded on the ambient base, and a child has none of it.
 (module python/core)
-(def %py-intern (prim-ref (lit str) (lit ->sym)))
-(def %py-str-append (prim-ref (lit str) (lit append)))
+(import x/core/doors str->sym str-append char->int)
 
-(def %py-char->int (prim-ref (lit char) (lit ->int)))
 
 ; A FLOAT LITERAL IS READ IN THE AMBIENT BASE, by `Float from`: float is a
 ; LIBRARY type registered on whichever base loaded it, and a child base has
@@ -93,7 +91,7 @@
         ((fn (go i acc)
            (if (>= i n) acc
              (go (+ i 1)
-               (if (= (python-code-at s i) 95) acc (%py-str-append acc (Str8 sub i 1 s))))))
+               (if (= (python-code-at s i) 95) acc (str-append acc (Str8 sub i 1 s))))))
          0 "")))))
 
 ; 0x 0o 0b literals: the base from the second character, digits after it.
@@ -198,7 +196,7 @@
       (if (eq? (%py-label t) (lit tok-number))
         (let ((v (%py-val t)))
           (if (> (Str8 length v) 1)
-            (let ((c (%py-char->int (Str8 ref 0 v))))
+            (let ((c (char->int (Str8 ref 0 v))))
               (if (= c 43) #t (= c 45)))
             #f))
         #f))))
@@ -357,7 +355,7 @@
 ; comparison's left operand names the outer level's binding
 (def %py-cmp-sym
   (fn (_ which k)
-    (%py-intern (Str8 append "%py-c" (Str8 append which (%number->str k))))))
+    (str->sym (Str8 append "%py-c" (Str8 append which (%number->str k))))))
 (set! %py-bor  (fn (_ toks) (%py-left toks %py-bor-ops %py-bxor)))
 (set! %py-bxor (fn (_ toks) (%py-left toks %py-bxor-ops %py-band)))
 (set! %py-band (fn (_ toks) (%py-left toks %py-band-ops %py-shift)))
@@ -450,7 +448,7 @@
           (%py-op-is? (if (null? (rest toks)) () (first (rest toks))) "**")
           #f)
       (let ((r (%py-power (pair (%py-signed-num %head) (rest toks)))))
-        (if (= (%py-char->int (Str8 ref 0 (%py-val %head))) 45)
+        (if (= (char->int (Str8 ref 0 (%py-val %head))) 45)
           (pair (list (lit %py-neg) (first r)) (rest r))
           r))
       (%py-power-tail toks))))
@@ -1413,7 +1411,7 @@
 ; form whose EXPR is the field's source re-tokenized and parsed right here,
 ; and whose SPEC is a plain string or -- when it holds fields of its own, the
 ; nested-replacement case -- another expansion.  {{ and }} are literal braces.
-(def %py-fs-code (fn (_ s i) (%py-char->int (Str8 ref i s))))
+(def %py-fs-code (fn (_ s i) (char->int (Str8 ref i s))))
 
 (def %py-fs-open?  (fn (_ c) (if (= c 40) #t (if (= c 91) #t (= c 123)))))
 (def %py-fs-shut?  (fn (_ c) (if (= c 41) #t (if (= c 93) #t (= c 125)))))
@@ -2043,7 +2041,7 @@
     (def %look
       (fn (self rows)
         (if (null? rows)
-          (%py-intern (%py-str-append "py-" s))
+          (str->sym (str-append "py-" s))
           (if (str=? s (first (first rows)))
             (first (rest (first rows)))
             (self (rest rows))))))

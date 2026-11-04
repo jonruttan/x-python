@@ -44,7 +44,7 @@
 (import x/sys/posix)
 ; Catalog fetches, once at load.
 (def %py-repl-cvt (prim-ref (lit convert) (lit to)))
-(def %py-repl-ch->int (prim-ref (lit char) (lit ->int)))
+(import x/core/doors char->int)
 (def %py-repl-str-t ((prim-ref (lit type) (lit of)) "s"))
 
 ; --- one line from stdin, or 'eof --------------------------------------------
@@ -63,7 +63,7 @@
         (let ((c (Io read-char)))
           (if (null? c)
             (if (null? acc) (lit eof) (%line-of acc))
-            (if (= (%py-repl-ch->int c) 10)
+            (if (= (char->int c) 10)
               (%line-of acc)
               (self (pair c acc)))))))
     (go ())))
