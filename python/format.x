@@ -33,8 +33,6 @@
 ; rather than mis-consume arguments.
 
 (module python/core)
-; The limb base the base conversion below chunks by: sized to the word.
-(import x/num/bigint bigint-base)
 (def %py-fmt-code (fn (_ s i) (python-char-code (%str-ref s i))))
 (def %py-fmt-digit? (fn (_ c) (if (>= c 48) (<= c 57) #f)))
 
@@ -104,12 +102,23 @@
       (fn (self p k)
         (if (> p (/ (- bigint-base 1) base)) (pair p k) (self (* p base) (+ k 1)))))
     (go base 1)))
-(def %py-fmt-chunk-2 (%py-fmt-chunk-of 2))
-(def %py-fmt-chunk-8 (%py-fmt-chunk-of 8))
-(def %py-fmt-chunk-16 (%py-fmt-chunk-of 16))
+; Made at first use, not at load: bigint-base is runtime-num.x's import into
+; this module, bound by the time a program formats and not before, and the
+; load order stays what the sweeps were placed for.
+(def %py-fmt-chunk-2 ())
+(def %py-fmt-chunk-8 ())
+(def %py-fmt-chunk-16 ())
+(def %py-fmt-chunks!
+  (fn (_)
+    (if (null? %py-fmt-chunk-16)
+      (do (set! %py-fmt-chunk-2 (%py-fmt-chunk-of 2))
+          (set! %py-fmt-chunk-8 (%py-fmt-chunk-of 8))
+          (set! %py-fmt-chunk-16 (%py-fmt-chunk-of 16)))
+      ())))
 (def %py-fmt-base
   (fn (_ v0 base upper)
     (def v (python-boolnorm v0))
+    (%py-fmt-chunks!)
     (def ck
       (match
         ((= base 2) %py-fmt-chunk-2)
