@@ -24,7 +24,7 @@
 ; Python's tokenizer is a second base: it answers tokens, not spans, and it
 ; stops at an unterminated string, which is the normal state of a line
 ; being typed.  So this file colours a line by the tokens of a Lexer
-; (x/reader/lexer) of its own whose rules read every byte, through the
+; (x/reader/lexer) made from python/lexer's rules, which read every byte, through the
 ; platform's (Paint lexer): comments, strings with their prefixes and triple
 ; quotes, numbers, names, decorators, and every other byte as itself.  The
 ; bracket marks are read from the same tokens.  A name is classified
@@ -53,6 +53,7 @@
 (import x/type/str)
 (import x/type/list)
 (import x/reader/lexer)
+(import python/lexer python-lexer-rules)
 (import x/repl/ansi)
 (import x/repl/paint)
 ; The editor.  Imported here rather than left to the launcher so that its
@@ -150,72 +151,11 @@
 
 ; --- the lexer ---------------------------------------------------------------
 ;
-; Every byte of a line is some token's: blanks a run, a bracket or an
-; operator one byte under `plain`, so the painter draws the line byte for
-; byte with the author's spacing.  A string is one token with its prefix: a
-; single-quoted one a nested span whose body takes a backslash escape, a
-; triple-quoted one an until span, which ends at its first whole `"""` or
-; `'''`.  Both run to the end of the text while unclosed, the normal state
-; of a line being typed, and so does a comment.  A Lexer literal is bytes,
-; so each prefix Python takes -- r, b, u, f, rb, br, fr and rf, in either
-; case -- opens with a literal of its own, and a prefix with no quote after
-; it is a name.
-(def %pp-ident-start (list 95 (pair 65 90) (pair 97 122) (pair 128 255) (pair -128 -1)))
-(def %pp-ident (list 95 (pair 48 57) (pair 65 90) (pair 97 122) (pair 128 255) (pair -128 -1)))
-(def %pp-digits (list (pair 48 57)))
-; a number's body: digits, letters, underscores and dots, so 0x1f, 1_000,
-; 1e5j and 1.5 are each one token
-(def %pp-num-body (list 46 95 (pair 48 57) (pair 65 90) (pair 97 122)))
-; the body before an exponent letter, so the sign after it is read as well
-(def %pp-num-mantissa (list 46 95 (pair 48 57)))
-
-(def %pp-prefixes
-  (list "" "r" "R" "b" "B" "u" "U" "f" "F"
-        "rb" "rB" "Rb" "RB" "br" "bR" "Br" "BR"
-        "fr" "fR" "Fr" "FR" "rf" "rF" "Rf" "RF"))
-
-(def %pp-string-rules
-  (fn (_)
-    (List flat-map
-      (fn (_ p)
-        (List flat-map
-          (fn (_ q)
-            (let ((q3 (Str8 append q q q)))
-              (list (Lexer until (lit string) (Str8 append p q3) q3 (lit to-end))
-                    (Lexer nested (lit string) (Str8 append p q) (lit body)
-                      (list (list (lit body) (%pp-byte q 0) 92 ())) (lit to-end)))))
-          (list "\"" "'")))
-      %pp-prefixes)))
-
-; A number is digits, or a dot before a digit, then its body; the second
-; pattern of each pair reads an exponent's sign, which the body alone would
-; leave, and wins by length when there is one.
-(def %pp-rules
-  (fn (_)
-    (List append
-      (list (Lexer run (lit blank) " \t\r\n" " \t\r\n")
-            (Lexer until (lit comment) "#" "\n" (lit to-end)))
-      (%pp-string-rules)
-      (list
-        (Lexer pattern (lit number)
-          (list (list %pp-digits 1 1) (list %pp-num-body 0 ())))
-        (Lexer pattern (lit number)
-          (list (list %pp-digits 1 1) (list %pp-num-mantissa 0 ()) (list "eE" 1 1)
-                (list "+-" 1 1) (list %pp-num-body 0 ())))
-        (Lexer pattern (lit number)
-          (list (list "." 1 1) (list %pp-digits 1 1) (list %pp-num-body 0 ())))
-        (Lexer pattern (lit number)
-          (list (list "." 1 1) (list %pp-digits 1 1) (list %pp-num-mantissa 0 ()) (list "eE" 1 1)
-                (list "+-" 1 1) (list %pp-num-body 0 ())))
-        (Lexer run (lit name) %pp-ident-start %pp-ident)
-        (Lexer pattern (lit decorator)
-          (list (list "@" 1 1) (list %pp-ident-start 1 1) (list %pp-ident 0 ())))
-        (Lexer any (lit plain))))))
-
+; python/lexer's rules, the ones the highlighting grammar reads too.
 (def %pp-lexer ())
 (def %pp-lex
   (fn (_)
-    (if (null? %pp-lexer) (set! %pp-lexer (Lexer make (%pp-rules))) ())
+    (if (null? %pp-lexer) (set! %pp-lexer (Lexer make (python-lexer-rules))) ())
     %pp-lexer))
 
 ; Each tag's colour: the code strings above, read when a token is painted.
