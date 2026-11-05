@@ -83,22 +83,44 @@
 (def %py-env-def!
   (fn (_ env sym v) (eval (list (lit def) sym (list (lit lit) v)) env)))
 
-; ENV's own (SYM . VALUE) cell, or (), from the list of cells that is a
-; module's bindings; a parent's cell is never an answer.
+; Whether ENV keeps its own bindings as a tree of (entry . (left . right))
+; nodes, each entry a (SYM . VALUE) cell, rather than a list of cells.  The
+; root does, and so does an environment whose spine the language made with
+; pair, a program's or a module's (x-lang docs/engine-laws.md, law 10); a
+; call's frame, which the engine makes, keeps a list.  pair? tells the two
+; apart, and the root is the one with no parent.
+(def %py-env-tree? (fn (_ env) (if (null? (rest env)) #t (pair? env))))
+
+; ENV's own (SYM . VALUE) cell, or (); a parent's cell is never an answer.
+; The cell is the live one, so setting its rest rebinds SYM.
 (def %py-env-cell
+  (fn (_ env sym)
+    (if (%py-env-tree? env)
+      (%py-tree-cell (first env) sym)
+      (%py-list-cell (first env) sym))))
+(def %py-list-cell
   (fn (self cells sym)
     (match
       ((null? cells) ())
       ((eq? (first (first cells)) sym) (first cells))
       (#t (self (rest cells) sym)))))
+; A tree is walked whole: its order is the engine's, not one a walk can use.
+(def %py-tree-cell
+  (fn (self node sym)
+    (match
+      ((null? node) ())
+      ((eq? (first (first node)) sym) (first node))
+      (#t
+        (let ((c (self (first (rest node)) sym)))
+          (if (null? c) (self (rest (rest node)) sym) c))))))
 
-; Whether ENV itself binds SYM.  The root's bindings are a tree rather than a
-; list, and the root has no parent, so there a lookup is the answer.
+; Whether ENV itself binds SYM.  The root has no parent, so there a lookup
+; is the answer, and one is quicker than a walk of the root's tree.
 (def %py-env-has?
   (fn (_ env sym)
     (if (null? (rest env))
       (guard (_ #f) (%seq (eval sym env) #t))
-      (not (null? (%py-env-cell (first env) sym))))))
+      (not (null? (%py-env-cell env sym))))))
 
 ; A program's names are bound before its first statement runs, each to
 ; DEFAULT (python/parse.x, %py-decls and %py-shims) -- unless the
@@ -195,7 +217,7 @@
 (def %py-mod-own
   (fn (_ m name)
     (let ((sym (%py-name->sym name)))
-      (let ((c (if (symbol? sym) (%py-env-cell (first (%py-mod-env m)) sym) ())))
+      (let ((c (if (symbol? sym) (%py-env-cell (%py-mod-env m) sym) ())))
         (if (if (null? c) #t (same? (rest c) %py-deleted)) %py-mod-missing (rest c))))))
 
 (def %py-mod-no-attr
@@ -239,14 +261,14 @@
       (#t (%seq (%py-env-def! (%py-mod-env m) (%py-name->sym name) %py-deleted) ())))))
 
 (python-sweep!)
-; The module's names with their values, ("name" . value) rows in the order
-; the module bound them, the deleted ones left out; the builtins module's are
+; The module's names with their values, ("name" . value) rows in its
+; frame's order, the deleted ones left out; the builtins module's are
 ; the builtins'.
 (def %py-mod-rows
   (fn (_ m)
     (if (%py-mod-builtins? m)
       (%py-builtins-rows m python-builtins)
-      (%py-env-rows (first (%py-mod-env m)) ()))))
+      (%py-env-rows (%py-mod-env m)))))
 
 ; --- the builtins module ------------------------------------------------------
 ;
@@ -278,32 +300,49 @@
       ()
       (pair (pair (first (first rows)) (%py-builtins-attr m (first (first rows))))
         (self m (rest rows))))))
+; ENV's own names with their values, ("name" . value) rows, the deleted and
+; the runtime's own left out.
 (def %py-env-rows
+  (fn (_ env)
+    (if (%py-env-tree? env)
+      (%py-tree-rows (first env) ())
+      (%py-list-rows (first env) ()))))
+(def %py-cell-row
+  (fn (_ c acc)
+    (let ((n (%py-sym->name (first c))))
+      (if (if (null? n) #t (same? (rest c) %py-deleted))
+        acc
+        (pair (pair n (rest c)) acc)))))
+(def %py-list-rows
   (fn (self cells acc)
     (if (null? cells)
       acc
-      (self (rest cells)
-        (let ((n (%py-sym->name (first (first cells)))))
-          (if (if (null? n) #t (same? (rest (first cells)) %py-deleted))
-            acc
-            (pair (pair n (rest (first cells))) acc)))))))
+      (self (rest cells) (%py-cell-row (first cells) acc)))))
+(def %py-tree-rows
+  (fn (self node acc)
+    (if (null? node)
+      acc
+      (self (rest (rest node))
+        (self (first (rest node)) (%py-cell-row (first node) acc))))))
 
-; A module this runtime writes: an environment made from its rows, its
-; __name__ bound first, as a module's is before its first statement runs, and
-; a scope that holds its namespace dict, as a program's does (python/base.x).
+; A module this runtime writes: an environment its rows are bound in, its
+; __name__ first, as a module's is before its first statement runs, and a
+; scope that holds its namespace dict, as a program's does (python/base.x).
+; The environment is made empty and bound with def: one made with pair keeps
+; a tree (%py-env-tree?), which a list of cells handed to pair is not.
 (def python-module-new
   (fn (_ name rows)
-    (def env
-      (pair (%py-rows->cells (pair (pair "__name__" (python-str-of-x name)) rows) ())
-        (pair () %py-base-env)))
+    (def env (pair () (pair () %py-base-env)))
+    (%py-rows-def! env (pair (pair "__name__" (python-str-of-x name)) rows))
     (%py-env-def! (rest env) (lit %py-ns) (%py-ns-new env))
     (%py-mod-new env)))
-(def %py-rows->cells
-  (fn (self rows acc)
+(def %py-rows-def!
+  (fn (self env rows)
     (if (null? rows)
-      acc
-      (self (rest rows)
-        (pair (pair (%py-name->sym (first (first rows))) (rest (first rows))) acc)))))
+      ()
+      (%seq
+        (%py-env-def! env (%py-name->sym (first (first rows))) (rest (first rows)))
+        (self env (rest rows))))))
 
 ; A module prints as its name and where it came from.
 (set! %py-module
@@ -359,10 +398,10 @@
   (fn (_ env)
     (if (python-obj-is env)
       (%py-attr-entries (python-obj-attrs env))
-      (%py-attr-entries (%py-env-rows (first env) ())))))
+      (%py-attr-entries (%py-env-rows env)))))
 (def %py-env-ns
   (fn (_ env)
-    (let ((c (%py-env-cell (first (rest env)) (lit %py-ns))))
+    (let ((c (%py-env-cell (rest env) (lit %py-ns))))
       (if (null? c) (%py-ns-new env) (rest c)))))
 
 ; K, a str, bound to V in ENV.
@@ -386,7 +425,7 @@
         (%py-append (%py-own-rows (python-obj-attrs env)) (%py-entry-rows entries)))
       (%seq
         (%py-ns-put-all! env entries)
-        (%py-ns-drop-others! env (%py-env-rows (first env) ()) entries)))))
+        (%py-ns-drop-others! env (%py-env-rows env) entries)))))
 ; an instance's rows the runtime keeps for itself, keyed with a %
 (def %py-own-rows
   (fn (self rows)
@@ -492,7 +531,7 @@
   (fn (self env top)
     (match
       ((same? env top) #f)
-      ((null? (%py-env-cell (first env) (lit %py-fn))) (self (rest env) top))
+      ((null? (%py-env-cell env (lit %py-fn))) (self (rest env) top))
       (#t #t))))
 
 (def %py-here-rows
@@ -507,9 +546,9 @@
 (def %py-frame-rows
   (fn (self env top acc)
     (if (same? env top)
-      (%py-env-rows (first env) ())
-      (let ((rows (%py-append (%py-rows-not-in (%py-env-rows (first env) ()) acc) acc)))
-        (if (null? (%py-env-cell (first env) (lit %py-fn)))
+      (%py-env-rows env)
+      (let ((rows (%py-append (%py-rows-not-in (%py-env-rows env) acc) acc)))
+        (if (null? (%py-env-cell env (lit %py-fn)))
           (self (rest env) top rows)
           rows)))))
 (def %py-rows-not-in
@@ -1293,7 +1332,7 @@
           (if (null? c) (%py-env-def! env sym v) (%seq (%set-rest! c v) ())))))))
 (def %py-cell-out
   (fn (self env top sym)
-    (let ((c (%py-env-cell (first env) sym)))
+    (let ((c (%py-env-cell env sym)))
       (match
         ((not (null? c)) c)
         ((same? env top) ())
