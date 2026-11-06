@@ -45,9 +45,9 @@
 
 ; Fetch the type prims from the catalog (ns `type` is de-registered, R5).
 (module python/core)
-(def make-type (prim-ref (lit type) (lit make)))
-(def %type-by-atom (prim-ref (lit type) (lit by-atom)))
-(def %type-push-op (prim-ref (lit type) (lit push-op)))
+(import x/core/doors type-make type-by-atom type-push-op type-make-instance type? type-of)
+(def make-type type-make)
+(def %type-push-op type-push-op)
 (def %i-make (prim-ref (lit iter) (lit make)))
 
 ; EXHAUSTION RIDES THE STATE, NOT THE VALUE.  A step answers
@@ -63,8 +63,7 @@
 ; list; only the yielded value differs.
 (def %py-dict-step
   (fn (_ st) (if (null? st) () (pair (first (first st)) (rest st)))))
-(def make-instance (prim-ref (lit type) (lit make-instance)))
-(def type? (prim-ref (lit type) (lit ?)))
+(def make-instance type-make-instance)
 
 ; Forward declaration, the way x/num/rational.x forward-declares its reader.
 ; runtime.x owns Python's repr -- a string prints as 'a' inside a list and as a
@@ -78,9 +77,8 @@
 
 ; A float index is a TypeError, so the subscript handler needs to recognise a
 ; machine float; the type handle compare is the same check runtime.x uses.
-(def %py-t-typeof (prim-ref (lit type) (lit of)))
-(def %py-t-th-float (%py-t-typeof 1.5))
-(def %py-t-float? (fn (_ v) (eq? (%py-t-typeof v) %py-t-th-float)))
+(def %py-t-th-float (type-of 1.5))
+(def %py-t-float? (fn (_ v) (eq? (type-of v) %py-t-th-float)))
 
 (def python-list-elems (fn (_ v) (rest (first (python-native-of v)))))
 (def %py-list-set! (fn (_ v new) (%seq (%set-rest! (first (python-native-of v)) new) ())))
@@ -296,8 +294,8 @@
 ; `1 == 1.0`, come out right.
 (def %py-equal ())
 
-(def %py-list-type (%type-by-atom %py-list))
-(def %py-dict-type (%type-by-atom %py-dict))
+(def %py-list-type (type-by-atom %py-list))
+(def %py-dict-type (type-by-atom %py-dict))
 
 (def %py-concat
   (fn (self a b) (if (null? a) b (pair (first a) (self (rest a) b)))))
@@ -766,7 +764,7 @@
             (List ref k l))))
       (pair (lit iter) (fn (_ self) (%i-make %py-tuple-step (first self)))))))
 
-(def %py-tuple-type (%type-by-atom %py-tuple))
+(def %py-tuple-type (type-by-atom %py-tuple))
 
 (%type-push-op %py-tuple-type (lit +)
   (fn (_ a b)

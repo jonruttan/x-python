@@ -446,7 +446,8 @@
 ; Python's repr uses single, and its str uses none at all.  That difference is
 ; the whole distinction between the two builtins, so it is stated here rather
 ; than pushed into the writer.
-(def %py-write-to-str (prim-ref (lit io) (lit write-to-str)))
+(import x/core/doors io-write-to-str)
+(def %py-write-to-str io-write-to-str)
 
 ; THE INTERNAL str, AND IT ALWAYS ANSWERS A PLATFORM STRING.  Every caller is
 ; measuring or appending with Str8 -- an error message, a format field's

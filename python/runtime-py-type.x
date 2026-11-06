@@ -36,7 +36,8 @@
 ; the handles compare.  bool's base is int, which is Python's own arrangement
 ; and the reason isinstance(True, int) is True while isinstance(1, bool) is not.
 
-(def python-char-code (prim-ref (lit char) (lit ->int)))
+(import x/core/doors char->int)
+(def python-char-code char->int)
 
 (python-sweep!)
 ; --- constructors ------------------------------------------------------------
