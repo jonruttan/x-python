@@ -17,9 +17,12 @@
 ; whose body takes a backslash escape, a triple-quoted one an until span,
 ; which ends at its first whole `"""` or `'''`.  Both run to the end of the
 ; text while unclosed, and so does a comment.  A Lexer literal is bytes, so
-; each prefix Python takes -- r, b, u, f, rb, br, fr and rf, in either case
-; -- opens with a literal of its own, and a prefix with no quote after it is
-; a name.
+; each prefix -- r, b, u, f, rb, br, fr and rf -- opens with a literal of its
+; own, and a prefix with no quote after it is a name.  Lowercase only: every
+; literal adds string states, and the plan the Lexer records for its cache
+; group is quadratic in the states.  The 25 prefixes of both cases made 686
+; states and a 3.0 GB first prompt on an empty code cache; these 9 make 254
+; and 0.73 GB.  An uppercase prefix paints as a name, then its string.
 ;
 ; The tags: blank, comment, string, number, name, decorator and plain.  The
 ; module imports x-lang libraries only, so a process colouring a file loads
@@ -39,9 +42,7 @@
 (def %py-lex-num-mantissa (list 46 95 (pair 48 57)))
 
 (def %py-lex-prefixes
-  (list "" "r" "R" "b" "B" "u" "U" "f" "F"
-        "rb" "rB" "Rb" "RB" "br" "bR" "Br" "BR"
-        "fr" "fR" "Fr" "FR" "rf" "rF" "Rf" "RF"))
+  (list "" "r" "b" "u" "f" "rb" "br" "fr" "rf"))
 
 (def %py-lex-bref (prim-ref (lit str) (lit byte-ref)))
 (def %py-lex-cint (prim-ref (lit char) (lit ->int)))
