@@ -11,6 +11,7 @@
 ;   (dialect NAME)              he | xe | rn -- a REQUIREMENT, not a taste
 ;   (requires-release "TAG")    the x-lang this bundle was built against
 ;   (entry "FILE")              loaded AFTER the dialect, not instead of it
+;   (grammar NAME (module M) ...) a highlighting grammar x/tool/syntax loads
 
 (lang "python")
 
@@ -60,6 +61,10 @@
 ; v0.35.0 is what this bundle and its siblings are green against, and the row
 ; tracks that rather than the floor.  This bundle has no claim to anything
 ; older.
-(requires-release "v0.44.0")
+(requires-release "v0.46.0")
 
 (entry "run.x")
+
+; The Python grammar, for any process that colours a file: python/syntax
+; imports x-lang libraries and python/lexer only, never the interpreter.
+(grammar python (module python/syntax) (files ".py" ".pyw" ".pyi") (interpreters "python" "python3"))

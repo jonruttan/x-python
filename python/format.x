@@ -87,23 +87,38 @@
 
 ; Base conversion for %o %x %X and bin/hex/oct.  The digits are the platform's
 ; own (%number->str with a radix).  A bigint's limbs are decimal, so it gives
-; up its low chunk to a division by the largest base^k under 10^9 -- inside one
-; limb, a division in one pass -- until what is left is a machine int, the top
-; chunk.  A chunk below the top is exactly k digits: those of base^k + r, less
-; the leading 1.
+; up its low chunk to a division by the largest base^k under the limb base --
+; inside one limb, a division in one pass -- until what is left is a machine
+; int, the top chunk.  A chunk below the top is exactly k digits: those of
+; base^k + r, less the leading 1.
+;   The limb base is bigint's, sized to the word: 10^9 on an 8-byte word, 10^4
+; on a 4-byte one.  The bound is tested by division, never by the product:
+; 16^8 is 2^32, which a 4-byte word multiplies to zero, and a zero never
+; reaches a bound.
 (def %py-fmt-chunk-of
   (fn (_ base)
     ; (pow . k)
     (def go
       (fn (self p k)
-        (if (>= (* p base) 1000000000) (pair p k) (self (* p base) (+ k 1)))))
+        (if (> p (/ (- bigint-base 1) base)) (pair p k) (self (* p base) (+ k 1)))))
     (go base 1)))
-(def %py-fmt-chunk-2 (%py-fmt-chunk-of 2))
-(def %py-fmt-chunk-8 (%py-fmt-chunk-of 8))
-(def %py-fmt-chunk-16 (%py-fmt-chunk-of 16))
+; Made at first use, not at load: bigint-base is runtime-num.x's import into
+; this module, bound by the time a program formats and not before, and the
+; load order stays what the sweeps were placed for.
+(def %py-fmt-chunk-2 ())
+(def %py-fmt-chunk-8 ())
+(def %py-fmt-chunk-16 ())
+(def %py-fmt-chunks!
+  (fn (_)
+    (if (null? %py-fmt-chunk-16)
+      (do (set! %py-fmt-chunk-2 (%py-fmt-chunk-of 2))
+          (set! %py-fmt-chunk-8 (%py-fmt-chunk-of 8))
+          (set! %py-fmt-chunk-16 (%py-fmt-chunk-of 16)))
+      ())))
 (def %py-fmt-base
   (fn (_ v0 base upper)
     (def v (python-boolnorm v0))
+    (%py-fmt-chunks!)
     (def ck
       (match
         ((= base 2) %py-fmt-chunk-2)
