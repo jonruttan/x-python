@@ -59,6 +59,11 @@
 ; The editor.  Imported here rather than left to the launcher so that its
 ; Line class exists when the completer is installed below.
 (import x/repl/line)
+; The first Lexer make in a process imports the asm cache.  Left to that make,
+; it is read from source at a session's first prompt, under the numeric
+; tower's reader: in a container of 4 GB that prompt never drew.  Imported
+; here, it is in the image.
+(import x/tool/asm-cache)
 
 ; --- reading one line ---------------------------------------------------------
 ;
