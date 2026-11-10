@@ -56,12 +56,12 @@
 ; mark it sets is never in an image, and the writer's child, which loads
 ; from source, sweeps like any other source boot.
 (module python/core)
-(def %py-image-collect (prim-ref (lit heap) (lit collect)))
+(import x/core/doors heap-collect int+ int- int< int* str-byte-len)
 (def %py-from-image (pair () ()))
 (set! %image-recache-hooks
   (pair (fn (_) (%set-first! %py-from-image #t)) %image-recache-hooks))
 (def python-sweep!
-  (fn (_) (if (first %py-from-image) () (%py-image-collect))))
+  (fn (_) (if (first %py-from-image) () (heap-collect))))
 
 ; Reverse-prepend: the accumulate-and-reverse list builder.  Every walk in the bundle
 ; accumulates front-to-back and reverses once, so this is the pattern underneath
@@ -79,10 +79,10 @@
 ; call where the platform's + is ~90 and - ~110, and it neither checks its
 ; operands (nil segfaults) nor promotes past a word, so a value a program
 ; supplied never reaches one.
-(def %py-fx+ (prim-ref (lit int) (lit +)))
-(def python-fx- (prim-ref (lit int) (lit -)))
-(def python-fx< (prim-ref (lit int) (lit <)))
-(def %py-fx* (prim-ref (lit int) (lit *)))
+(def %py-fx+ int+)
+(def python-fx- int-)
+(def python-fx< int<)
+(def %py-fx* int*)
 
 (def %py-count-from
   (fn (self xs n)
@@ -101,7 +101,7 @@
 ; A string's length through the raw byte door, not the Str8 class: the class
 ; call is ~15,000 objects, the primitive is at the floor, and the number
 ; converters ask it once per literal.
-(def python-byte-len (prim-ref (lit str) (lit byte-len)))
+(def python-byte-len str-byte-len)
 
 ; The implementation version, here rather than in python/sys: python-version
 ; reads it when the core loads, before the libraries.

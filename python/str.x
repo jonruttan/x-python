@@ -312,8 +312,8 @@
   (fn (_ fd bs)
     (let ((n (List length bs)))
       (unless (= n 0)
-        (let ((region (%ps-make n)))
-          (%seq (%ps-fill (%ps->ptr region) bs 0)
+        (let ((region (str-make n)))
+          (%seq (%ps-fill (str->ptr region) bs 0)
                 (File write fd region n)))))))
 
 (def %ps-write-bytes (fn (_ bs) (ps-write-bytes-to 1 bs)))
@@ -321,9 +321,7 @@
 (def %ps-fill
   (fn (self p bs i)
     (unless (null? bs)
-      (%seq (%ps-pset p i (first bs) 1)
+      (%seq (ptr-set! p i (first bs) 1)
             (self p (rest bs) (+ i 1))))))
 
-(def %ps-make (prim-ref (lit str) (lit make)))
-(def %ps->ptr (prim-ref (lit str) (lit ->ptr)))
-(def %ps-pset (prim-ref (lit ptr) (lit set!)))
+(import x/core/doors str-make str->ptr ptr-set!)

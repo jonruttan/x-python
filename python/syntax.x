@@ -58,10 +58,8 @@
         "UnboundLocalError" "TypeError" "ValueError" "AssertionError"
         "RuntimeError" "SyntaxError"))
 
-(def %py-syntax-bref (prim-ref (lit str) (lit byte-ref)))
-(def %py-syntax-cint (prim-ref (lit char) (lit ->int)))
-(def %py-syntax-blen (prim-ref (lit str) (lit byte-len)))
-(def %py-syntax-byte (fn (_ s i) (%py-syntax-cint (%py-syntax-bref s i))))
+(import x/core/doors str-byte-ref char->int str-byte-len)
+(def %py-syntax-byte (fn (_ s i) (char->int (str-byte-ref s i))))
 (def %py-syntax-upper? (fn (_ b) (if (>= b 65) (<= b 90) #f)))
 (def %py-syntax-lower? (fn (_ b) (if (>= b 97) (<= b 122) #f)))
 
@@ -94,7 +92,7 @@
 ; do.
 (def %py-syntax-sync
   (fn (_ s ls)
-    (if (>= ls (%py-syntax-blen s)) #f
+    (if (>= ls (str-byte-len s)) #f
       (let ((b (%py-syntax-byte s ls)))
         (match
           ((List includes? b (list 35 64 95)) #t)

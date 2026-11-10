@@ -53,14 +53,11 @@
 ; the other (docs and the spec-crash signatures both say so).
 
 (module python/core)
-(def %pb-code (prim-ref (lit char) (lit ->int)))
-(def %pb-char (prim-ref (lit int) (lit ->char)))
+(import x/core/doors char->int int->char str-byte-ref str-byte-len)
 ; The engine's byte packer: the low byte of each character goes into the string.
 ; list->string is not that door, because the platform's str-utf8 type makes it
 ; encode each character, which writes a byte of 128 or more as two.
 (def %pb-pack (prim-ref (lit bytes) (lit ->str)))
-(def %pb-bref (prim-ref (lit str) (lit byte-ref)))
-(def %pb-blen (prim-ref (lit str) (lit byte-len)))
 
 ; --- the two conversions -----------------------------------------------------
 ;
@@ -69,10 +66,10 @@
 ; and never asks the utf-8 layer what a character is.
 (def pb-of-str
   (fn (self s)
-    (%pb-of-str-go s (- (%pb-blen s) 1) ())))
+    (%pb-of-str-go s (- (str-byte-len s) 1) ())))
 (def %pb-of-str-go
   (fn (self s i acc)
-    (if (< i 0) acc (self s (- i 1) (pair (%pb-code (%pb-bref s i)) acc)))))
+    (if (< i 0) acc (self s (- i 1) (pair (char->int (str-byte-ref s i)) acc)))))
 
 ; TRUE WHEN A ZERO IS IN THERE -- the one question the string layer cannot be
 ; asked politely.
@@ -96,7 +93,7 @@
 ; The bytes as characters, for %pb-pack to put one low byte each into the string.
 (def %pb-chars
   (fn (self l acc)
-    (if (null? l) (List reverse acc) (self (rest l) (pair (%pb-char (first l)) acc)))))
+    (if (null? l) (List reverse acc) (self (rest l) (pair (int->char (first l)) acc)))))
 
 ; --- the sequence ------------------------------------------------------------
 (def pb-len (fn (_ l) (List length l)))

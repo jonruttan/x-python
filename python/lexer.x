@@ -44,8 +44,7 @@
 (def %py-lex-prefixes
   (list "" "r" "b" "u" "f" "rb" "br" "fr" "rf"))
 
-(def %py-lex-bref (prim-ref (lit str) (lit byte-ref)))
-(def %py-lex-cint (prim-ref (lit char) (lit ->int)))
+(import x/core/doors str-byte-ref char->int)
 
 (def %py-lex-string-rules
   (fn (_)
@@ -56,7 +55,7 @@
             (let ((q3 (Str8 append q q q)))
               (list (Lexer until (lit string) (Str8 append p q3) q3 (lit to-end))
                     (Lexer nested (lit string) (Str8 append p q) (lit body)
-                      (list (list (lit body) (%py-lex-cint (%py-lex-bref q 0)) 92 ())) (lit to-end)))))
+                      (list (list (lit body) (char->int (str-byte-ref q 0)) 92 ())) (lit to-end)))))
           (list "\"" "'")))
       %py-lex-prefixes)))
 

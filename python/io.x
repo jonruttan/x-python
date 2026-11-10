@@ -62,14 +62,12 @@
 ; asked of it.  An in-memory stream has neither field, and its buffer starts
 ; at 0.
 (def %py-io-chunk 8192)
-(def %py-io-make (prim-ref (lit str) (lit make)))
-(def %py-io-bref (prim-ref (lit str) (lit byte-ref)))
-(def %py-io-code (prim-ref (lit char) (lit ->int)))
+(import x/core/doors str-make str-byte-ref char->int)
 (def %py-io-file-new
   (fn (_ text? info fd decode reads? writes? at)
     (make-instance %py-io
       (list text? (list ()) (list at) (list #f) info
-        (list fd () #f at #f decode (%py-io-make %py-io-chunk) reads? writes?)))))
+        (list fd () #f at #f decode (str-make %py-io-chunk) reads? writes?)))))
 (def %py-io-info
   (fn (_ v)
     (let ((r (rest (rest (rest (rest (first v)))))))
@@ -188,7 +186,7 @@
 
 (def %py-io-bytes
   (fn (self s i acc)
-    (if (python-fx< i 0) acc (self s (python-fx- i 1) (pair (%py-io-code (%py-io-bref s i)) acc)))))
+    (if (python-fx< i 0) acc (self s (python-fx- i 1) (pair (char->int (str-byte-ref s i)) acc)))))
 
 ; One read of the descriptor: its bytes, none at the end.
 (def %py-io-read-fd

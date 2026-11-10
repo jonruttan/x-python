@@ -191,7 +191,8 @@
 ; python-f-2p64 is computed through python-mul at LOAD time -- so these must be
 ; bound before the first seam runs, not where the constructors that also
 ; use them happen to live.
-(def %py-typeof-prim (prim-ref (lit type) (lit of)))
+(import x/core/doors type-of int& int| int>>)
+(def %py-typeof-prim type-of)
 (def %py-th-int (%py-typeof-prim 1))
 (def %py-th-big (%py-typeof-prim 99999999999999999999))
 (def python-th-float (%py-typeof-prim 1.5))
@@ -760,11 +761,8 @@
 ; a negative operand is cut as its complement, -1 - v, with each chunk
 ; flipped.  Only the final value is rebuilt through the tower.
 (import x/num/bigint big-limbs bigint-base)
-(def %py-bit-and (prim-ref (lit int) (lit &)))
-(def %py-bit-or (prim-ref (lit int) (lit |)))
 (def %py-bit-xor (prim-ref (lit int) (lit ^)))
 (def %py-bit-not (prim-ref (lit int) (lit ~)))
-(def %py-bit-shr (prim-ref (lit int) (lit >>)))
 (def %py-bit-mask 16777215)
 (def %py-bit-width 16777216)
 
@@ -772,7 +770,7 @@
 (def %py-bit-fix
   (fn (self v acc)
     (if (= v 0) (python-reverse acc)
-      (self (%py-bit-shr v 24) (pair (%py-bit-and v %py-bit-mask) acc)))))
+      (self (int>> v 24) (pair (int& v %py-bit-mask) acc)))))
 
 ; Limbs, most significant first, divided by 2^24: (remainder . quotient), the
 ; quotient's limbs most significant first with no leading zero.
@@ -780,8 +778,8 @@
   (fn (self ls r q)
     (if (null? ls) (pair r (python-reverse q))
       (let ((t (%py-fx+ (%py-fx* r bigint-base) (first ls))))
-        (let ((d (%py-bit-shr t 24)))
-          (self (rest ls) (%py-bit-and t %py-bit-mask)
+        (let ((d (int>> t 24)))
+          (self (rest ls) (int& t %py-bit-mask)
             (if (if (= d 0) (null? q) #f) q (pair d q))))))))
 (def %py-bit-limbs
   (fn (self ls acc)
@@ -857,7 +855,7 @@
       ((if (python-obj-is a) #t (python-obj-is b))
         (%py-binop a b "__or__" "__ror__" "|"))
       ((if (python-set-is a) #t (python-set-is b)) (%py-set-or a b))
-      (#t (%py-bit2 a b "|" %py-bit-or)))))
+      (#t (%py-bit2 a b "|" int|)))))
 (def %py-bitxor
   (fn (_ a b)
     (if (if (python-obj-is a) #t (python-obj-is b))
@@ -871,7 +869,7 @@
       (%py-binop a b "__and__" "__rand__" "&")
     (if (if (python-set-is a) #t (python-set-is b))
       (%py-set-and a b)
-      (%py-bit2 a b "&" %py-bit-and)))))
+      (%py-bit2 a b "&" int&)))))
 
 (python-sweep!)
 ; --- Membership --------------------------------------------------------------
