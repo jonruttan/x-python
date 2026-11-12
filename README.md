@@ -22,56 +22,41 @@ string. The terms are in x-lang's
 
 ## Status
 
-**Early, and the two numbers disagree on purpose.**
+Two suites measure it.
 
-The bundle's own suite is green: **351 tests, 0 failed** across 21 spec files
-covering the tokenizer, INDENT/DEDENT, expressions, statements, scope, lists,
-dicts, tuples, strings, methods, iteration, classes and exceptions.
+**The bundle's own suite**: 1,198 tests, 0 failed, 2 pending, across 129
+spec files (CI on `main`, 2026-11-10, against x-lang v0.46.0 and against
+x-lang `main`). It covers the tokenizer and line structure, expressions and
+statements, scope, the operator protocol, exact integers, floats and complex
+numbers, `str` and its methods, f-strings and `%` formatting, `bytes`,
+`bytearray` and `memoryview`, lists, tuples, dicts and sets, slicing,
+comprehensions, functions, keyword arguments and decorators, generators and
+`yield from`, classes with multiple bases, `super`, descriptors and the
+special-method hooks, exceptions, `with`, `import`, `eval` and `exec`, and
+the interactive session.
 
-The conformance suite is not, and it is the one that counts:
+**The conformance suite**: 592 of 646 cases pass (last recorded 2026-10-17).
+Each case is a whole Python program from MicroPython's test corpus, compared
+on its whole stdout against a CPython 3.14 run. CI does not run it: the run
+is serial and takes about an hour. `make score` prints the table by group,
+worst first.
 
-```
-$ make score
-GROUP                        PASS     OF   RATE
-basics/builtin                  0     58     0.0%
-basics/string                   0     49     0.0%
-basics/class                    0     36     0.0%
-basics/int                      0     34     0.0%
-basics/bytes                    0     28     0.0%
-basics/fun                      3     25    12.0%
-basics/set                      0     21     0.0%
-basics/dict                     0     19     0.0%
-basics/try                      5     23    21.7%
-basics/list                     1     18     5.6%
-...
-TOTAL                          21    657     3.2%
-```
+The built-in modules a program can import are `array`, `builtins`, `cmath`,
+`collections`, `errno`, `gc`, `io`, `math`, `os`, `struct`, `sys` and
+`types`. The rest of the standard library is absent.
 
-657 whole Python programs, each compared on its whole stdout against a real
-CPython 3.14 run, ranked by how much of it is red.
+It is paired with x-lang v0.46.0; `lang.xon` is the row that says so. No
+release has been cut.
 
-**3.2% is the honest headline, not 100%.** A hand-written suite measures what
-its author thought to ask; `basics/class` is 0 of 36 while `18-classes.spec.md`
-is green, because the conformance programs reach for `__init__` arguments,
-inheritance, `repr` and attribute errors in combinations nobody sat down and
-enumerated. The scoreboard was built before the language for exactly this
-reason: it turns "what should a Python implementation do next" from a taste
-question into a sorted list, and it does not let a green local suite feel like
-progress it is not.
+## The conformance suite
 
-## The suite, and why it is this one
+Python has no vendor-neutral conformance suite. The de-facto standard is
+CPython's `Lib/test`, which is unittest-based, so `unittest`, `io` and much
+of the standard library must work before the first assertion runs; it is
+dense with `@cpython_only` and `impl_detail`; and it is PSF-licensed rather
+than MIT.
 
-**Python has no test262.** There is no vendor-neutral conformance suite. The
-de-facto standard is CPython's `Lib/test`, and it is unusable to a young
-implementation: unittest-based, so `unittest`, `io` and a slab of stdlib must
-work before the first assertion runs; dense with `@cpython_only` and
-`impl_detail`; and PSF-licensed rather than MIT.
-(`MalloyPower/python-compliance` surfaces in searches and is a research corpus
-for an ESEM 2017 paper, with no tests in it.)
-
-**MicroPython's `tests/` was written by people implementing a subset**, which
-is this bundle's position exactly. Measured against v1.29.0 rather than
-assumed:
+MicroPython's `tests/` was written for a subset implementation. At v1.29.0:
 
 | suite | `.py` files | run under CPython 3.14 unmodified |
 |---|---:|---:|
@@ -79,28 +64,23 @@ assumed:
 | `float/` | 69 | 69 |
 | `import/` | 30 | 30 |
 | `unicode/` | 25 | 21 |
-| | | **682** |
+| | 700 | 682 |
 
-The files are tiny, import nothing, and assert by printing — one program, one
-stdout blob, which is the same layout a `.spec.md` case is. Only 65 of the 576
-in `basics/` carry a `.exp` file; the rest are *differential*, meaning upstream
-generates the expectation by running CPython. So does this bundle.
+The files are small, import nothing, and assert by printing: one program,
+one stdout blob, which is the layout of a `.spec.md` case. Only 65 of the
+576 in `basics/` carry a `.exp` file; for the rest upstream generates the
+expectation by running CPython, and so does this bundle.
 
-**CPython is the oracle, not MicroPython.** Where CPython refuses a file — 15
-of them, `builtin_help`, `memoryerror`, the `*_micropython` ones — upstream's
-`.exp` records MicroPython's own deviation, and x-python has no business chasing
-that. Those are excluded and counted, never silently adopted. Upstream's
-`cpydiff/` is the same idea from the other side: 82 documented, sanctioned
-places a subset is allowed to differ.
-
-682 programs have an oracle; 657 became spec cases. The 43 that did not are
-listed by name and reason in `tests/conformance/SKIPPED.md`, because a score's
-denominator is only honest if the exclusions are auditable.
+CPython is the oracle, not MicroPython. Where CPython refuses a file,
+upstream's `.exp` records MicroPython's own behaviour, and those files are
+excluded. Of the 700, 646 become spec cases. The 54 that do not are listed
+by name and reason in `tests/conformance/SKIPPED.md`, which `make gen`
+writes.
 
 ## Install
 
-**No releases are cut yet**, so there is no pin to fetch and
-`x --install-lang` has nothing to point at. From a clone:
+No release has been cut, so there is no pin for `x --install-lang` to
+fetch. From a clone:
 
 ```bash
 make install                      # into the x on your PATH
@@ -108,31 +88,16 @@ PREFIX=$HOME/.local make install  # or a particular prefix
 ```
 
 `make uninstall` removes it again. An installed x searches
-`<share>/langs/*/lang.xon`, so a lang is installed when its files are there —
-no registry, no database.
+`<share>/langs/*/lang.xon`, so a lang is installed when its files are there.
 
-**One trap, and it is the one you will hit.** `x` decides where to look for
-langs from the directory you run it *in*. Inside an **x-lang checkout** it
-searches `deps/langs/` and an installed lang is invisible, however correctly it
-was installed:
-
-```
-$ cd path/to/x-lang && x -l python
-Error: no library, app or lang named 'python'
-  searched lib/python.x, apps/python/run.x
-      and deps/langs/*/lang.xon
-```
-
-Run it from anywhere else, or name the bundles explicitly — `X_LANG_DIR` wins
-in both modes:
+Inside an x-lang checkout, `x` searches that checkout's `deps/langs/` and
+does not see an installed lang. `X_LANG_DIR` names the bundles explicitly in
+either case:
 
 ```bash
 X_LANG_DIR=$HOME/.local/share/x/langs/ x -l python   # the installed one
 X_LANG_DIR=/path/to/x-python/.. x -l python          # a checkout, uninstalled
 ```
- Once a `v*` tag is pushed, the release workflow
-publishes the tarball, its `.sha256` and a `lang.pin.xon`, and the usual
-`x --install-lang …/releases/latest/download/lang.pin.xon` starts working.
 
 ## Running it
 
@@ -142,22 +107,12 @@ x -l python -f program.py    # batch
 ```
 
 x-lang boots the dialect `lang.xon` declares, arms this bundle's module root,
-and loads `run.x` on top — which is why nothing here needs to know a path.
+and loads `run.x` on top.
 
-**It boots from a state image when one is present.** `make install` ends with
-`x --image -l python`, which writes the booted lang to `.images/` beside the
-bundle; `x -l python` then loads that instead of re-reading the sources (0.9s
-against 10.8s here) for as long as the image's key still matches the library
-and engine. Two things in this bundle are process state and cannot travel in
-an image — the tokenizer base and the parser's sexp base, each `(Base make)`d
-on a chain of its own — so `python/tokens.x` and `python/parse.x` name them as
-transients and remake them after a load. `x --no-image -l python` boots from
-source, sweeping the heap between its files as it loads (a load that never
-sweeps holds 734M objects).
-
-**Xenon boots slower than the light dialects**, and that is a deliberate cost:
-eight runtime `cc` compilations for the numeric analysers, bought so that
-`2 ** 200` is right. See [Why xenon](#why-xenon).
+`make install` ends with `x --image -l python`, which writes the booted lang
+to a state image; `x -l python` then loads the image instead of reading the
+sources, for as long as the image's key matches the library and engine.
+`x --no-image -l python` boots from source.
 
 ## The prompt
 
@@ -191,158 +146,106 @@ same registry.
 Without a terminal — a pipe — there is no editor, and the bundle's own loop
 reads Python from stdin, block by block, as before.
 
+
 ## Development
 
 ```bash
-X=/path/to/x-lang/x.sh make test   # the bundle's own suite -- 21 spec files
+X=/path/to/x-lang/x.sh make test        # the bundle's own suite
 X=/path/to/x-lang/x.sh make test-boot   # one program through `x -l python`
-make gen                           # fetch the pinned corpus, generate tests/conformance/
-make score                         # pass/total per group, worst first
-make conformance                   # the same run, case by case
-make clean                         # drop deps/ and tests/conformance/
+make gen                                # fetch the pinned corpus, generate tests/conformance/
+make score                              # pass/total per group, worst first
+make conformance                        # the same run, case by case
+make clean                              # drop deps/ and tests/conformance/
 ```
 
-**Pass `X` explicitly.** Without it the suite takes the `x` on your PATH, and an
-installed x that trails the checkout reports failures the platform has already
-fixed.
+Without `X` the suite takes the `x` on `PATH`. An installed x older than the
+checkout reports failures the platform has since fixed.
 
-**`make test-boot` takes the path the suite does not.** The suite loads the
-bundle on the full-tower amalgam, which binds more platform names than the
-dialect `lang.xon` declares. `test-boot` boots through the wrapper on that
-dialect, from source, and runs a short program, so a platform name the bundle
-reads and never binds stops it with `Unbound SYMBOL`.
+`make test-boot` boots through the wrapper on the dialect `lang.xon`
+declares, from source, and runs a short program. The suite loads the bundle
+on the full-tower amalgam, which binds more platform names than that dialect
+does, so a name the bundle reads and never imports shows only under
+`test-boot`, as `Unbound SYMBOL`.
 
-**Do not `make install` into an x-lang checkout.** The Makefile asks
-`$(X) --share-dir` where to put the bundle, and a checkout answers with its own
-root — so the files land in `<checkout>/langs/NAME`, which is not one of the
-three paths `-l` searches there. It reports success and the lang stays
-invisible. Install into a real `<share>` tree, or use `X_LANG_DIR`.
+`make install` asks `$(X) --share-dir` where to put the bundle. A checkout
+answers with its own root, which is not a path `-l` searches there: install
+into a `<share>` tree, or use `X_LANG_DIR`.
 
+The conformance run is serial: `score.sh` sets `PARALLEL=1`, because the
+per-process allocation ceiling bounds one interpreter and the platform
+runner would otherwise start one per CPU. It wants a machine running no
+other x suite; under memory pressure cases fail that pass alone. A single
+group runs with
+`sh tests/spec-runner.sh tests/conformance/GROUP.spec.md`.
 
-**The conformance run is serial, and it must stay that way.** It is 112 spec
-files each booting a full xenon tower; the platform runner defaults
-`PARALLEL_JOBS` to the CPU count, and the per-process allocation ceiling bounds
-*one* interpreter, not twelve. `score.sh` forces `PARALLEL=1` for that reason.
+`make gen` runs CPython twice over every program in the corpus, at
+`PYTHONHASHSEED=0` and at `1`, and excludes any whose output differs.
 
-**Give it a quiet machine, and distrust a score taken without one.** Serial is
-not enough on its own: with other x-lang suites running alongside it, this
-scoreboard has reported 1/657 where a quiet run reports 21/657, and the
-individual files still score their real numbers when run alone. It does not
-crash or warn — it just reports a lower score, which is the worst possible
-failure mode for a number whose whole job is to rank what to do next. If a run
-disagrees with the last one, re-run a single group with
-`sh tests/spec-runner.sh tests/conformance/GROUP.spec.md` before believing it.
-
-`make gen` takes about a minute: it runs CPython twice over every program in
-the corpus — once at `PYTHONHASHSEED=0` and once at `1`, so anything whose
-output is not reproducible is caught and excluded rather than becoming a test
-nothing could ever pass.
-
-Nothing generated is committed. `deps/` is the fetched corpus, verified against
-the digest in `tools/conformance/upstream.pin.xon`; `tests/conformance/` is
-derived from it and from whichever CPython was the oracle. `make clean` drops
-both.
+Nothing generated is committed. `deps/` is the fetched corpus, verified
+against the digest in `tools/conformance/upstream.pin.xon`;
+`tests/conformance/` is derived from it and from the CPython that was the
+oracle. `make clean` drops both.
 
 ## Design notes
 
-- [Python values want x's type system, not labelled pairs](docs/values-on-the-type-system.md)
-  — why containers are labelled pairs today, the constraint that decides how they
-  stop being (`make-instance` resolves the type in the *calling* base), and the
-  design that follows. Designed and proved, not built.
-- [A NUL byte is refused, not carried](docs/nul-and-the-string-layer.md)
-  — a string here is a C string by an engine *guarantee*, so a NUL used to
-  shorten a value silently: `len(b'\x00')` was 0. Why every spelling now
-  raises instead, and why fixing `bytes` alone would have moved the loss to
-  `.decode()` rather than removed it. Decided and built.
+- [Python values on x's type system](docs/values-on-the-type-system.md):
+  Python's values are x types, registered on the running base.
+- [NUL bytes and the string layer](docs/nul-and-the-string-layer.md): how a
+  `str` and a `bytes` carry a NUL.
 
 ## Layout
 
 ```
 docs/                        design notes
-lang.xon                     name, dialect, release pairing
-run.x                        THE entry -- and it knows no paths at all
-python/base.x                the load order, and python-run
-python/tokens.x              the tokenizer, on its own base
-python/indent.x              INDENT/DEDENT, driving x/reader/indent
-python/parse.x               the parser
+lang.xon                     name, dialect, release pairing, grammar
+run.x                        the entry
+python/base.x                the language, assembled
+python/core.x                the core: one module in several files
+python/tokens.x              the lexical layer, on its own tokenizer base
+python/parse.x               tokens to forms
 python/types.x               Python's values, as x types
-python/runtime.x             what the parser emits calls to
+python/str.x                 the code point sequence, and the codec under it
+python/bytes.x               the byte sequence, and the algorithms over it
+python/memoryview.x          memoryview
+python/format.x              the % string-formatting operator
+python/runtime-num.x         arithmetic, the operator protocol, numeric builtins
+python/runtime-seq.x         comparison, lists, dicts and iteration
+python/runtime-str.x         attributes, str's methods, the format-spec language
+python/runtime-obj.x         print, float repr, complex, exceptions and classes
+python/runtime-call.x        keyword calls, super, sets, the rendering builtins
+python/runtime-flow.x        modules, with, tuples and generators
+python/runtime-py-type.x     type objects, constructors and slicing
+python/util.x                list walks the bundle shares
+python/array.x  cmath.x  collections.x  deque.x  io.x  os.x  struct.x  sys.x
+                             the importable modules
+python/repl.x                the interactive session
+python/line.x                the line editor's seams
+python/lexer.x  syntax.x     the highlighting grammar
 tests/spec-runner.sh         sources the platform's shared runner
 tests/gen-harness.sh         writes tests/lib/harness.gen.x (generated)
-tests/specs/                 the bundle's own suite -- the pipeline
+tests/boot.sh                what `make test-boot` runs
+tests/specs/                 the bundle's own suite
 tests/modules/               the modules and files the import and io specs read
 tools/conformance/
   upstream.pin.xon           the corpus: commit, digest, licence, suites
   fetch.sh                   fetch, verify, unpack into deps/
-  gen-specs.py               corpus -> .spec.md, with CPython as oracle
+  gen-specs.sh  gen-specs.py corpus -> .spec.md, with CPython as oracle
   score.sh                   the ranked table
+tools/check/                 the if-ladder check CI runs
 ```
 
-## Why xenon
+## Dialect
 
-Derived from Python's data model, not from convenience:
+`lang.xon` declares helium, and the bundle imports the libraries Python's
+data model needs:
 
-- Python 3 has **one** integer type and it is arbitrary-precision. `2 ** 200`
-  is not an error and not a float. That is `x/num/bigint.x`.
-- `1 / 2` is `0.5`. True division always produces a float, so float is
-  reachable from the first arithmetic expression anyone types.
-- `dict` is syntax, and `x/type/dict.x` loads by default in the tower dialects
-  and in neither light one.
+- Python 3 has one integer type and it is arbitrary-precision: `2 ** 200` is
+  neither an error nor a float. That is `x/num/bigint`.
+- `1 / 2` is `0.5`: true division always produces a float. That is
+  `x/num/tower`.
 
-The cost is real: xenon's boot runs eight runtime `cc` compilations for the
-numeric analysers, so `x -l python` starts slower than `x -l krn`. Declaring `he`
-would buy that back by making `2 ** 200` wrong, which is not a trade.
-
-Not radon. ash needs `rn` for fork/exec/dup2; a Python whose library is `print`
-and `len` reaches nothing raw. When `os` and `socket` arrive that gets
-revisited — as a decision, which is why it is written down in `lang.xon`.
-
-## The reader, which is done
-
-Both halves of it, and they are why anything scores at all:
-
-- **a tokenizer on its own base** — `(Base make-tok)` / `(Base make-type)`, the
-  way `ash/prims.x` does it, so Python's `#` is a comment and its `'` opens a
-  string without competing with the sexp reader's types by score.
-  `python/tokens.x`.
-- **INDENT/DEDENT** — x-lang#520 is closed and `lib/x/reader/indent.x` holds the
-  stack discipline that Logo and x-sweet each used to own a copy of. x-python
-  does not write a third one: `python/indent.x` constructs an `Indent` and
-  drives it.
-
-  Its policy is the module's default, because the defaults were chosen to be
-  SRFI-110's, and Python agrees with SRFI-110 on both questions: a tab advances
-  to the next multiple of 8, and a dedent matching no open level raises rather
-  than opening a block there. `(Indent make)` is already a Python indenter.
-
-  What is x-python's own is everything above the stack: explicit and implicit
-  line joining, brackets suppressing indentation entirely, and the tabs-versus-
-  spaces ambiguity check that turns into `TabError`. Those are surface facts,
-  and the module is deliberately silent about them.
-
-## What is next
-
-The scoreboard ranks it, and the ranking is not what a taste-driven order would
-have picked:
-
-| group | of | why it is where it is |
-|---|---:|---|
-| `basics/builtin` | 58 | the built-in namespace, and it is mostly absent |
-| `basics/string` | 49 | `str` methods and formatting, well past `split`/`join` |
-| `basics/class` | 36 | green locally, 0 here — `__init__` args, inheritance, `repr` |
-| `basics/int` | 34 | the bigint path, and int/float boundaries |
-| `basics/bytes` | 28 | `bytes` is a type this bundle does not have |
-
-`basics/fun` (3 of 25) and `basics/try` (5 of 23) are the two already moving,
-which makes them the cheapest evidence that the parser and the exception layer
-are built right rather than merely passing their own specs.
-
-**The thing worth deciding early** is still the one the design note names:
-Python's containers are labelled pairs today, and
-[`docs/values-on-the-type-system.md`](docs/values-on-the-type-system.md) works
-out what it costs to move them onto x's type system instead. `basics/class`
-scoring 0 with a green local class suite is the first real evidence that the
-question is not academic.
+The numeric tower loads with its analysers compiled
+(`x/boot/tower-compiled`), through x-lang's own assembler.
 
 ## Background
 
