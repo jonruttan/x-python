@@ -24,6 +24,19 @@
 ; between two sweeps (117M objects under x-lang 0.14.0 on x86-64), and
 ; a section boundary is a quiet point.  See python/util.x.
 (module python/core)
+
+; THE FLOAT A STRING'S TEXT SPELLS, as strtod reads it: "1e3", "1.", ".5",
+; "inf" and "nan" included.  Every caller has checked the text against
+; Python's own grammar first -- a literal by the tokenizer, float('...') by
+; %py-float-str-ok? -- so what is wanted here is the C library's reading, not
+; x's: `Float from` reads a string as x source (x-lang #1322), where 1e3 is no
+; float and inf no number.  The door is x/num/float's export str->float, taken
+; by a selective import inside a call, as %py-libm-fn takes libm-fn -- here,
+; after python/core.x has imported the tower: python/types.x loads ahead of
+; it, and an import of x/num/float there loads it on the bare dialect.
+(def %py-str->float ((fn (_) (import x/num/float str->float) str->float)))
+(def python-strtod
+  (fn (_ s) (type-make-instance (type-of 1.0) (%py-str->float s))))
 (python-sweep!)
 ; --- Arithmetic --------------------------------------------------------------
 ; `+` dispatches on the operands, and the string case is not an extra: Python
@@ -983,14 +996,14 @@
   (fn (_ sgn D x10 p)
     (def keep (+ (+ x10 1) p))
     (if (< keep 0)
-      (Float from (Str8 append sgn "0"))
+      (python-strtod (Str8 append sgn "0"))
       (do
         (def z (if (= keep 0) 1 0))
         (def k (+ keep z))
         (def R0 (%py-f-round (Str8 append (%py-fmt-zeros z) D) k))
         (def R
           (if (< (Str8 length R0) k) (Str8 append R0 (%py-fmt-zeros (- k (Str8 length R0)))) R0))
-        (Float from (Str8 append sgn (Str8 append R (%py-fmt-zeros (- 0 p)))))))))
+        (python-strtod (Str8 append sgn (Str8 append R (%py-fmt-zeros (- 0 p)))))))))
 
 ; round() of an infinity or a NaN: to an int it is refused as CPython refuses
 ; the conversion, and to places it is the value itself
@@ -1036,7 +1049,7 @@
                   (let ((n (%py-int-of-str (first f))))
                     (if (Str8 =? sgn "-") (- 0 n) n)
                   )
-                  (Float from
+                  (python-strtod
                     (Str8 append sgn
                       (if (= p 0)
                         (first f)

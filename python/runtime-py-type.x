@@ -101,7 +101,7 @@
             (digits 1 0 #f)
             (digits 0 0 #f)))))))
 
-; float('...') is structure-checked before Float from sees it: sign, digits, one
+; float('...') is structure-checked before python-strtod sees it: sign, digits, one
 ; dot, one exponent.  Stricter than CPython (no inf/nan, no surrounding
 ; spaces), and strictness fails LOUDLY where the alternative answered 0.0.
 (def %py-float-str-ok?
@@ -205,12 +205,12 @@
     (let ((sp (signed)))
       (let ((low (%py-f-lower (rest sp))))
         (if (if (Str8 =? low "inf") #t (Str8 =? low "infinity"))
-          (Float from (Str8 append (first sp) "inf"))
+          (python-strtod (Str8 append (first sp) "inf"))
           (if (Str8 =? low "nan")
-            (Float from "nan")
+            (python-strtod "nan")
             (let ((t (%py-f-strip-us s)))
               (if (%py-float-str-ok? t)
-                (Float from t)
+                (python-strtod t)
                 (bad)))))))))
 
 (python-sweep!)
