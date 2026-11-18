@@ -219,3 +219,29 @@ debug
 7 89
 x 10 ['é', 'a'] φ
 ```
+
+### a module's name is not in globals() until it is assigned
+
+```python
+(python-run "x: int\nprint(\"x\" in globals(), \"y\" in globals())\nx = 1\ny = 2\nprint(\"x\" in globals(), \"y\" in globals(), x, y)")
+```
+---
+```output
+False False
+True True 1 2
+```
+
+### a read of a module's name before its assignment is a NameError
+
+```python
+(python-run "try:\n    print(z)\nexcept NameError as e:\n    print(e)\nif False:\n    w = 1\ntry:\n    w\nexcept NameError as e:\n    print(e)\ndef f():\n    return v\ntry:\n    f()\nexcept NameError as e:\n    print(e)\nv = 3\nprint(f())\nn = 0\nfor i in range(3):\n    n = n + v\nprint(n)\nz = 5\nprint(z)")
+```
+---
+```output
+name 'z' is not defined
+name 'w' is not defined
+name 'v' is not defined
+3
+9
+5
+```

@@ -1859,6 +1859,11 @@
 ; statements after it in its block; and in a nested def or lambda, what was
 ; bound where it is written, as only `del` unbinds a name.
 (def %py-bound-now (pair () ()))
+; THE NAMES THE MODULE ASSIGNS, as symbols.  Each starts unbound, as
+; %py-deleted, as CPython's does: `"x" in globals()` is False and a read is a
+; NameError until the first assignment runs.  A read of one is a check where
+; it is not bound for certain (%py-bound-now) and the bare symbol where it is.
+(def %py-module-names (pair () ()))
 
 ; How many def bodies the compile is inside: `return` is a statement only
 ; inside one.  The count comes back down however the compile ends.
@@ -1927,15 +1932,17 @@
 ; syms bound for certain from here to the end of the block
 (def %py-bound!
   (fn (_ syms) (%set-first! %py-bound-now (%py-bound-plus syms))))
-; the names bound for certain with syms added; only a def's names are read
-; through the check, so only they are kept, once each
+; the names bound for certain with syms added; only a def's names and the
+; module's are read through the check, so only they are kept, once each
 (def %py-bound-plus
   (fn (self syms)
     (match
       ((null? syms) (first %py-bound-now))
       ((%py-seen? (first syms) (first %py-bound-now)) (self (rest syms)))
-      ((if (%py-seen? (first syms) (first %py-own-names)) #t
-          (%py-seen? (first syms) (first %py-free-names)))
+      ((match
+         ((%py-seen? (first syms) (first %py-own-names)) #t)
+         ((%py-seen? (first syms) (first %py-free-names)) #t)
+         (#t (%py-seen? (first syms) (first %py-module-names))))
         (pair (first syms) (self (rest syms))))
       (#t (self (rest syms))))))
 
@@ -1975,8 +1982,9 @@
     (%seq (%set-first! %py-comp-iter-syms outer) r)))
 
 ; A read of a def's name where it may be unbound (%py-own-names), of a
-; deleted-name candidate, or of a name the program never binds and no enclosing
-; scope binds either, goes through a check; every other name is the bare
+; deleted-name candidate, of a name the program never binds and no enclosing
+; scope binds either, or of a module's name where it may be unbound
+; (%py-module-names), goes through a check; every other name is the bare
 ; symbol it always was.
 ; The names the class body being compiled binds at its own level, as text
 ; (%py-class-level-names), or nil: outside a class body, and inside a def or
@@ -2007,6 +2015,11 @@
             (if (%py-del-member? s (first %py-undef-names))
               (not (%py-seen? sym (first %py-scope-syms)))
               #f))
+          (list (lit %py-name-live) s sym))
+        ((match
+           ((not (%py-seen? sym (first %py-module-names))) #f)
+           ((%py-seen? sym (first %py-scope-syms)) #f)
+           (#t (not (%py-seen? sym (first %py-bound-now)))))
           (list (lit %py-name-live) s sym))
         (#t sym)))))
 
@@ -4616,6 +4629,16 @@
     (if (null? lst) #f
       (if (eq? x (first lst)) #t (self x (rest lst))))))
 
+; The symbols of a target list.  `None += 1` names None, which reads as its
+; value (%py-target-sym), and the assignment refuses it when it is compiled;
+; until then it is no name to bind unbound -- hoisting it as one unbinds None
+; itself.
+(def %py-syms-only
+  (fn (self xs)
+    (match
+      ((null? xs) ())
+      ((symbol? (first xs)) (pair (first xs) (self (rest xs))))
+      (#t (self (rest xs))))))
 (def %py-dedupe
   (fn (self seen syms acc)
     (if (null? syms)
@@ -4731,7 +4754,8 @@
     (%set-first! %py-free-names ())
     (%set-first! %py-bound-now ())
     (%set-first! %py-fn-depth 0)
-    (def %targets (%py-dedupe () (%py-assign-targets %toks ()) ()))
+    (def %targets (%py-dedupe () (%py-syms-only (%py-assign-targets %toks ())) ()))
+    (%set-first! %py-module-names %targets)
     (def %undef
       (%py-undefined (%py-mentioned %toks ())
                      (%py-append (%py-bound-names %toks ()) (%py-param-names %toks ()))
@@ -4784,11 +4808,12 @@
         (self (rest toks) acc)))))
 
 ; Conditional for the same REPL reason as %py-shims: an unconditional
-; (def py-x ()) at the head of every line's program would reset x each line,
-; so `x = 5` then `x = x + 1` computed from nil.
+; (def py-x ...) at the head of every line's program would reset x each line,
+; so `x = 5` then `x = x + 1` lost the 5.  Each starts unbound
+; (%py-module-names).
 (def %py-decls
   (fn (self syms acc)
     (if (null? syms)
       (python-reverse acc)
       (self (rest syms)
-        (pair (list (lit %py-hoist) (first syms) ()) acc)))))
+        (pair (list (lit %py-hoist) (first syms) (lit %py-deleted)) acc)))))
