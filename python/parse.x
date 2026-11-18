@@ -63,7 +63,7 @@
 (import x/core/doors str->sym str-append char->int)
 
 
-; A FLOAT LITERAL IS READ IN THE AMBIENT BASE, by `Float from`: float is a
+; A FLOAT LITERAL IS READ IN THE AMBIENT BASE, by python-strtod: float is a
 ; LIBRARY type registered on whichever base loaded it, and a child base has
 ; none of the tower.  When this file kept a (Base make) child for interning,
 ; reading a literal there let the int type accept the "1" of "1.5" and drop
@@ -110,7 +110,7 @@
 ; channel): 1 integer, 2 float, 3 imaginary, 4 based.  Nothing here rescans
 ; the text to find out what it is; each arm converts what it was told.
 ; ONLY A BASED LITERAL HAS ITS SIGN TAKEN OFF (-0x10 is the sign applied to
-; 0x10): the integer loop and Float from read a signed text themselves, and
+; 0x10): the integer loop and python-strtod read a signed text themselves, and
 ; a float must, or -0.0 -- negated after the fact -- comes back as 0.0.
 (def %py-num
   (fn (self text label)
@@ -122,8 +122,8 @@
               (if (= c0 45) (%py-neg v) v)))
           ((= label 4) (%py-int-of-based (%py-num-tail (%py-num-tail t)) (%py-num-base-of t)))
           ; complex parts are always floats in Python, so `2j` is 0.0+2.0j
-          ((= label 3) (Complex make 0.0 (Float from (%py-num-init t))))
-          ((= label 2) (Float from t))
+          ((= label 3) (Complex make 0.0 (python-strtod (%py-num-init t))))
+          ((= label 2) (python-strtod t))
           ; THE HAND PARSER for the integer: bigint is a library type, and
           ; %py-int-of-str promotes through the tower digit by digit.
           (#t (%py-int-of-str t)))))))
