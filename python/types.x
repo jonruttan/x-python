@@ -65,17 +65,6 @@
   (fn (_ st) (if (null? st) () (pair (first (first st)) (rest st)))))
 (def make-instance type-make-instance)
 
-; THE FLOAT A STRING'S TEXT SPELLS, as strtod reads it: "1e3", "1.", ".5",
-; "inf" and "nan" included.  Every caller has checked the text against
-; Python's own grammar first -- a literal by the tokenizer, float('...') by
-; %py-float-str-ok? -- so what is wanted here is the C library's reading, not
-; x's: `Float from` reads a string as x source (x-lang #1322), where 1e3 is no
-; float and inf no number.  The door is x/num/float's export str->float, taken
-; by a selective import inside a call, as %py-libm-fn takes libm-fn.
-(def %py-str->float ((fn (_) (import x/num/float str->float) str->float)))
-(def python-strtod
-  (fn (_ s) (type-make-instance (type-of 1.0) (%py-str->float s))))
-
 ; Forward declaration, the way x/num/rational.x forward-declares its reader.
 ; runtime.x owns Python's repr -- a string prints as 'a' inside a list and as a
 ; here at the top level -- and this file is loaded first, so the write handler

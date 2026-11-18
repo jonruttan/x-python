@@ -24,6 +24,19 @@
 ; between two sweeps (117M objects under x-lang 0.14.0 on x86-64), and
 ; a section boundary is a quiet point.  See python/util.x.
 (module python/core)
+
+; THE FLOAT A STRING'S TEXT SPELLS, as strtod reads it: "1e3", "1.", ".5",
+; "inf" and "nan" included.  Every caller has checked the text against
+; Python's own grammar first -- a literal by the tokenizer, float('...') by
+; %py-float-str-ok? -- so what is wanted here is the C library's reading, not
+; x's: `Float from` reads a string as x source (x-lang #1322), where 1e3 is no
+; float and inf no number.  The door is x/num/float's export str->float, taken
+; by a selective import inside a call, as %py-libm-fn takes libm-fn -- here,
+; after python/core.x has imported the tower: python/types.x loads ahead of
+; it, and an import of x/num/float there loads it on the bare dialect.
+(def %py-str->float ((fn (_) (import x/num/float str->float) str->float)))
+(def python-strtod
+  (fn (_ s) (type-make-instance (type-of 1.0) (%py-str->float s))))
 (python-sweep!)
 ; --- Arithmetic --------------------------------------------------------------
 ; `+` dispatches on the operands, and the string case is not an extra: Python
