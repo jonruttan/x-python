@@ -983,14 +983,14 @@
   (fn (_ sgn D x10 p)
     (def keep (+ (+ x10 1) p))
     (if (< keep 0)
-      (Float from (Str8 append sgn "0"))
+      (python-strtod (Str8 append sgn "0"))
       (do
         (def z (if (= keep 0) 1 0))
         (def k (+ keep z))
         (def R0 (%py-f-round (Str8 append (%py-fmt-zeros z) D) k))
         (def R
           (if (< (Str8 length R0) k) (Str8 append R0 (%py-fmt-zeros (- k (Str8 length R0)))) R0))
-        (Float from (Str8 append sgn (Str8 append R (%py-fmt-zeros (- 0 p)))))))))
+        (python-strtod (Str8 append sgn (Str8 append R (%py-fmt-zeros (- 0 p)))))))))
 
 ; round() of an infinity or a NaN: to an int it is refused as CPython refuses
 ; the conversion, and to places it is the value itself
@@ -1036,7 +1036,7 @@
                   (let ((n (%py-int-of-str (first f))))
                     (if (Str8 =? sgn "-") (- 0 n) n)
                   )
-                  (Float from
+                  (python-strtod
                     (Str8 append sgn
                       (if (= p 0)
                         (first f)
