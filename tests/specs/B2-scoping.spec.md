@@ -25,16 +25,15 @@ UnboundLocalError
 
 ### a bare annotation does not put a name in globals
 
-DIVERGENCE: a module's names are bound before its first statement runs, so a
-name the module assigns anywhere is in `globals()` from the start; CPython
-lists it once the assignment has run.
+A name the module assigns is in `globals()` once the assignment has run, and
+not before.
 
 ```python
 (python-run "x: int\nprint('x' in globals())\nx = 1\nprint('x' in globals())")
 ```
 ---
 ```output
-True
+False
 True
 ```
 
