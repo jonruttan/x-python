@@ -1442,6 +1442,21 @@
             (if (= depth 0) i (self s (+ i 1) (- depth 1)))
             (self s (+ i 1) depth)))))))
 
+; AN f-STRING IN A FIELD (Python 3.12, PEP 701) may use the field's own
+; quote, f"a{f"b{x}c"}d", so its end is not the next quote: its fields are
+; skipped whole, each by %py-fs-expr-close, as the tokenizer's body does
+; (python/tokens.x, %py-fb-step).  Is the quote at i an f-string's -- f or F
+; before it, or r or R after one?
+(def %py-fs-f-quote?
+  (fn (_ s i)
+    (def f? (fn (_ c) (if (= c 102) #t (= c 70))))
+    (def at (fn (_ j) (if (< j 0) 0 (%py-fs-code s j))))
+    (match
+      ((f? (at (- i 1))) #t)
+      ((if (= (at (- i 1)) 114) #t (= (at (- i 1)) 82)) (f? (at (- i 2))))
+      (#t #f))))
+(def %py-fs-fstring-end ())
+
 ; The same question for an F-STRING field, whose contents are an EXPRESSION --
 ; and that is the whole difference.  Answers the index of the closing }, given
 ; the brackets still open (innermost first, as their own text).
@@ -1462,7 +1477,12 @@
       (Err raise (lit syntax) "f-string: expecting '}'" ())
       (let ((c (%py-fs-code s i)))
         (match
-          ((%py-fs-quote? c) (self s (%py-fs-string-end s (+ i 1) c) open))
+          ((%py-fs-quote? c)
+            (self s
+              (if (%py-fs-f-quote? s i)
+                (%py-fs-fstring-end s (+ i 1) c)
+                (%py-fs-string-end s (+ i 1) c))
+              open))
           ((%py-fs-open? c) (self s (+ i 1) (pair (Str8 sub i 1 s) open)))
           ((%py-fs-shut? c)
             (let ((shut (Str8 sub i 1 s)))
@@ -1477,6 +1497,22 @@
                 (%seq (%py-pair-ok (first open) shut)
                       (self s (+ i 1) (rest open))))))
           (#t (self s (+ i 1) open)))))))
+
+; Past the f-string whose opening quote q is at i - 1: `{{` is text, a `{`
+; opens a field that runs to its own `}`.
+(set! %py-fs-fstring-end
+  (fn (self s i q)
+    (if (>= i (Str8 length s))
+      i
+      (let ((c (%py-fs-code s i)))
+        (match
+          ((= c 92) (self s (+ i 2) q))
+          ((= c q) (+ i 1))
+          ((= c 123)
+            (if (if (< (+ i 1) (Str8 length s)) (= (%py-fs-code s (+ i 1)) 123) #f)
+              (self s (+ i 2) q)
+              (self s (+ (%py-fs-expr-close s (+ i 1) ()) 1) q)))
+          (#t (self s (+ i 1) q)))))))
 
 ; The first ! or : at nesting depth zero inside a field, or nil.
 ;

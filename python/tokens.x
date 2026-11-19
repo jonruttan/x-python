@@ -1062,6 +1062,98 @@
     (pair (lit read) %py-string-read)))
 (%py-tok-type! "PY-DQ" %py-t-dq)
 
+; --- an f-string's body: PEP 701 nesting ------------------------------------
+; Since Python 3.12 a replacement field may hold any expression, a string in
+; the f-string's own quote included: f"a{f"b{x}c"}d" is one literal.  So an
+; f-string's body is not the plain body's run to the first quote: it is a
+; stack of what the scan is inside, top first --
+;   (L q)    the literal text of an f-string quoted by q; q ends it
+;   (E p1 p2) a replacement field, p1 and p2 the last two codes seen;
+;            `}` ends it, `{` opens a bracket, a quote opens a string
+;   (B)      a brace inside a field (a dict, a set); `}` ends it
+;   (S q)    a plain string inside a field; q ends it
+;   (X)      the character after a backslash, whatever it is
+; A quote in a field opens an f-string when the code before it is f or F, or
+; r or R after f or F, and a plain string otherwise.  `{{` is the literal
+; brace: a field whose first code is `{` is that escape, and the scan goes
+; back to the text.  The literal is accepted when its own L is closed.  A
+; triple-quoted f-string keeps the triple body, and a string inside a field
+; is taken as single-quoted.
+; THE CODE IS COPIED before a frame keeps it: the reader hands every state
+; the one integer object, set afresh for each character (x-engine-c
+; x-token.c, arg_chr), so a quote kept as that object would be the next
+; character by the time it is compared.
+(def %py-fb-step ())
+(def %py-fb (fn (_ frames) (fn (_ buffer score chr) (%py-fb-step frames buffer score (+ chr 0)))))
+(def %py-fb-quote? (fn (_ c) (if (= c 34) #t (= c 39))))
+(def %py-fb-f? (fn (_ c) (if (= c 102) #t (= c 70))))
+(def %py-fb-r? (fn (_ c) (if (= c 114) #t (= c 82))))
+(def %py-fb-field (fn (_ p1 p2) (list (lit E) p1 p2)))
+; Do the codes before a quote, last first, make it an f-string's?  The first
+; of a field is the mark `new`, no code.
+(def %py-fb-f-before?
+  (fn (_ p1 p2)
+    (match
+      ((eq? p1 (lit new)) #f)
+      ((%py-fb-f? p1) #t)
+      ((%py-fb-r? p1) (%py-fb-f? p2))
+      (#t #f))))
+; FRAMES with a field on top remembering CHR as the last code seen
+(def %py-fb-mark
+  (fn (_ frames k chr p1)
+    (if (eq? k (lit E))
+      (pair (%py-fb-field chr (if (eq? p1 (lit new)) 0 p1)) (rest frames))
+      frames)))
+
+; The quote of the outermost f-string: its L is the bottom frame
+(def %py-fb-outer
+  (fn (_ frames) (if (null? (rest frames)) (first (rest (first frames))) (%py-fb-outer (rest frames)))))
+; A quote in a field that is the outer f-string's own is the one place a
+; pre-3.12 reader would have closed the literal.  If the input then ends
+; before the literal closes, the literal is taken to the end anyway, so the
+; field scanner reports f"{(1" as CPython does, "f-string: expecting '}'",
+; not as an unreadable token.  A score set without returning it is what the
+; reader takes at the end of input (x-token.c, EOF auto-score).
+(def %py-fb-hold
+  (fn (_ frames buffer score chr next)
+    (if (= chr (%py-fb-outer frames)) (%seq (%score-set score 1 buffer) next) next)))
+
+(set! %py-fb-step
+  (fn (_ frames buffer score chr)
+    (let ((top (first frames)) (below (rest frames)))
+      (let ((k (first top)))
+        (match
+          ((eq? k (lit X)) (%py-fb below))
+          ((eq? k (lit L))
+            (match
+              ((= chr (first (rest top)))
+                (if (null? below) (%score-set score 1 buffer) (%py-fb below)))
+              ((= chr 92) (%py-fb (pair (list (lit X)) frames)))
+              ((= chr 123) (%py-fb (pair (list (lit E) (lit new) 0) frames)))
+              (#t (%py-fb frames))))
+          ((eq? k (lit S))
+            (match
+              ((= chr (first (rest top))) (%py-fb below))
+              ((= chr 92) (%py-fb (pair (list (lit X)) frames)))
+              (#t (%py-fb frames))))
+          ; a field or a brace in one
+          (#t
+            (let ((p1 (if (eq? k (lit E)) (first (rest top)) 0))
+                  (p2 (if (eq? k (lit E)) (first (rest (rest top))) 0)))
+              (match
+                ; `{{`: the field never opened
+                ((if (eq? p1 (lit new)) (= chr 123) #f) (%py-fb below))
+                ((= chr 123) (%py-fb (pair (list (lit B)) (%py-fb-mark frames k 123 p1))))
+                ((= chr 125) (%py-fb below))
+                ((%py-fb-quote? chr)
+                  (%py-fb-hold frames buffer score chr
+                    (%py-fb
+                      (pair
+                        (if (%py-fb-f-before? p1 p2)
+                          (list (lit L) chr)
+                          (list (lit S) chr))
+                        (%py-fb-mark frames k chr p1)))))
+                (#t (%py-fb (%py-fb-mark frames k chr p1)))))))))))
 ; --- PY-PSQ / PY-PDQ: prefixed literals, r u b f in either case ---------------
 ; ONE type per quote for every prefix: the prefix letters and the quote are
 ; matched here, the BODY is the string types' own states reused as-is --
@@ -1084,6 +1176,12 @@
     (if (= chr 39) %py-tsq-body (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
 (def %py-psq-q1
   (fn (_ buffer score chr) (if (= chr 39) %py-psq-q2 (%py-sq-body buffer score chr))))
+; an f-string's: the empty one, a triple, or the nesting body
+(def %py-psq-fq1
+  (fn (_ buffer score chr)
+    (if (= chr 39) %py-psq-q2 ((%py-fb (list (list (lit L) 39))) buffer score chr))))
+(def %py-psq-fquote
+  (fn (_ buffer score chr) (if (= chr 39) %py-psq-fq1 ())))
 (def %py-psq-quote
   (fn (_ buffer score chr) (if (= chr 39) %py-psq-q1 ())))
 (def %py-psq-after-bf
@@ -1092,15 +1190,23 @@
       ((= chr 39) %py-psq-q1)
       ((%py-prefix-r? chr) %py-psq-quote)
       (#t ()))))
+(def %py-psq-after-f
+  (fn (_ buffer score chr)
+    (match
+      ((= chr 39) %py-psq-fq1)
+      ((%py-prefix-r? chr) %py-psq-fquote)
+      (#t ()))))
 (def %py-psq-after-r
   (fn (_ buffer score chr)
     (match
       ((= chr 39) %py-psq-q1)
+      ((%py-fb-f? chr) %py-psq-fquote)
       ((%py-prefix-bf? chr) %py-psq-quote)
       (#t ()))))
 (def %py-psq-start
   (fn (_ buffer score chr)
     (match
+      ((%py-fb-f? chr) %py-psq-after-f)
       ((%py-prefix-bf? chr) %py-psq-after-bf)
       ((%py-prefix-r? chr) %py-psq-after-r)
       ((%py-prefix-u? chr) %py-psq-quote)
@@ -1110,6 +1216,11 @@
     (if (= chr 34) %py-tdq-body (%seq (%buffer-unread buffer) (%score-set score 1 buffer)))))
 (def %py-pdq-q1
   (fn (_ buffer score chr) (if (= chr 34) %py-pdq-q2 (%py-dq-body buffer score chr))))
+(def %py-pdq-fq1
+  (fn (_ buffer score chr)
+    (if (= chr 34) %py-pdq-q2 ((%py-fb (list (list (lit L) 34))) buffer score chr))))
+(def %py-pdq-fquote
+  (fn (_ buffer score chr) (if (= chr 34) %py-pdq-fq1 ())))
 (def %py-pdq-quote
   (fn (_ buffer score chr) (if (= chr 34) %py-pdq-q1 ())))
 (def %py-pdq-after-bf
@@ -1118,15 +1229,23 @@
       ((= chr 34) %py-pdq-q1)
       ((%py-prefix-r? chr) %py-pdq-quote)
       (#t ()))))
+(def %py-pdq-after-f
+  (fn (_ buffer score chr)
+    (match
+      ((= chr 34) %py-pdq-fq1)
+      ((%py-prefix-r? chr) %py-pdq-fquote)
+      (#t ()))))
 (def %py-pdq-after-r
   (fn (_ buffer score chr)
     (match
       ((= chr 34) %py-pdq-q1)
+      ((%py-fb-f? chr) %py-pdq-fquote)
       ((%py-prefix-bf? chr) %py-pdq-quote)
       (#t ()))))
 (def %py-pdq-start
   (fn (_ buffer score chr)
     (match
+      ((%py-fb-f? chr) %py-pdq-after-f)
       ((%py-prefix-bf? chr) %py-pdq-after-bf)
       ((%py-prefix-r? chr) %py-pdq-after-r)
       ((%py-prefix-u? chr) %py-pdq-quote)
