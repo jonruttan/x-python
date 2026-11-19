@@ -61,3 +61,16 @@ x=1   'q'
   3.1
 ```
 
+
+### a field may hold an f-string in the outer quote, nested to any depth
+
+```python
+(python-run "x = 1\nprint(f\"a{f\"b{f\"c{f\"d{x}e\"}f\"}g\"}h\")\nprint(f'{f'{x}'}', f\"{\"q\" + \"r\"}\", f\"{f\"{x:>{3}}\"}|\")\nprint(f\"{\"}\"}\", f\"{{x}} {f\"{{}}\"}\", f\"{ {\"k\": 2}[\"k\"] }\")\nprint(rf\"{x}\\n{f\"{x}\"}\", fR\"{x}\")")
+```
+---
+```output
+abcd1efgh
+1 qr   1|
+} {x} {} 2
+1\n1 1
+```
