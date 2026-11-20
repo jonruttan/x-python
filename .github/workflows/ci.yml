@@ -128,6 +128,24 @@ jobs:
       # not fit this runner.
       - name: Run a program through x -l python
         run: X="$PWD/.x-lang/x.sh" /usr/bin/time -v sh tests/boot.sh
+      # docs/card.md (x-lang docs/contributing.md, "The card").  The card runs
+      # from the bundle's root and a checkout's wrapper runs only from its own,
+      # so the platform is installed first; X_LANG_DIR is the directory that
+      # holds this bundle's checkout.  The check itself is x-lang main's on both
+      # legs: the format is the platform's, and the bundle does not move its
+      # release to follow it.
+      - name: Check out the card check
+        uses: actions/checkout@v4
+        with:
+          repository: jonruttan/x-lang
+          ref: main
+          path: .x-kit
+          sparse-checkout: tools/lang-kit
+      - name: Check the card
+        run: |
+          make -C .x-lang install PREFIX="$RUNNER_TEMP/x"
+          X_LANG_DIR="$PWD/.." BUNDLE=. X="$RUNNER_TEMP/x/bin/x" \
+            sh .x-kit/tools/lang-kit/card.sh
 
   if-ladders:
     # `match` IS THE PRIMITIVE, and a decision with four or more arms written

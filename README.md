@@ -156,7 +156,11 @@ make gen                                # fetch the pinned corpus, generate test
 make score                              # pass/total per group, worst first
 make conformance                        # the same run, case by case
 make clean                              # drop deps/ and tests/conformance/
+make card                               # docs/card.md: its format, and every program run
 ```
+
+[docs/card.md](docs/card.md) is the reference page: the language in tables,
+and programs that are run, each line beside what it prints.
 
 Without `X` the suite takes the `x` on `PATH`. An installed x older than the
 checkout reports failures the platform has since fixed.
