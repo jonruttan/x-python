@@ -87,6 +87,7 @@ def fact(n):
 
 fact(3)
 print(fact(20))
+print([7, 8, 9][1], [7, 8, 9][-1])
 EOX
 
 cat > "$_TMP/want" <<'EOX'
@@ -95,6 +96,7 @@ Ab
 True
 ['a', 'b']
 2432902008176640000
+8 9
 EOX
 
 cat > "$_TMP/raises.py" <<'EOX'

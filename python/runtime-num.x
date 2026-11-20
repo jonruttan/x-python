@@ -209,6 +209,9 @@
 (def %py-th-int (%py-typeof-prim 1))
 (def %py-th-big (%py-typeof-prim 99999999999999999999))
 (def python-th-float (%py-typeof-prim 1.5))
+; the list subscript's float check (python/types.x), which loads before the
+; tower and cannot take the handle itself
+(set! %py-t-th-float python-th-float)
 (def %py-th-complex (%py-typeof-prim (Complex make 0.0 1.0)))
 (def python-complex-is
   (fn (_ v) (eq? (%py-typeof-prim v) %py-th-complex)))
