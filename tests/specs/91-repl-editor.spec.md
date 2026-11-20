@@ -181,8 +181,84 @@ left of the cursor, so a stand-in with that method serves here as it does in
 ```
 ---
 ```output
+  File "<stdin>", line 1
+    1 +
+    ^^^
 Error: syntax: unexpected end of input in expression
 still here
+```
+
+## where an entry failed
+
+An error is reported against the entry that raised it: the line the entry
+began on, its text, and a caret under each character of it. The entry is the
+whole of what is known, so a block is shown by its header and carries no
+carets.
+
+### an error raised while the line runs is marked the same way
+
+```python
+(do
+  (%py-eval-line "q91 = [1, 2][7]")
+  (display "still here") (newline))
+```
+---
+```output
+  File "<stdin>", line 1
+    q91 = [1, 2][7]
+    ^^^^^^^^^^^^^^^
+Error: index: list index out of range
+still here
+```
+
+### indentation and trailing blanks are not marked, and a character is one caret
+
+```python
+(%py-entry-run "é91 = 1 +  " (fn (_) (lit eof)))
+```
+---
+```output
+  File "<stdin>", line 1
+    é91 = 1 +
+    ^^^^^^^^^
+Error: syntax: unexpected end of input in expression
+```
+
+### a block is shown by its header, with no carets
+
+```python
+(do
+  (def %more91 (pair (list "    1 +" "") ()))
+  (%py-entry-run "for i91 in [1]:"
+    (fn (_)
+      (let ((l (first (first %more91))))
+        (do (%set-first! %more91 (rest (first %more91))) l)))))
+```
+---
+```output
+  File "<stdin>", line 1
+    for i91 in [1]:
+Error: syntax: unexpected end of input in expression
+```
+
+### a program on standard input is reported by its own line
+
+The byte loop counts the lines it reads, and an entry begins on the line it
+read last.
+
+```python
+(do
+  (%set-first! %py-lines-read 6)
+  (%py-entry-run "1 +" (fn (_) (lit eof)))
+  (%set-first! %py-lines-read 0)
+  ())
+```
+---
+```output
+  File "<stdin>", line 6
+    1 +
+    ^^^
+Error: syntax: unexpected end of input in expression
 ```
 
 ## the registry

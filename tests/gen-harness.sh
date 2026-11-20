@@ -74,6 +74,7 @@ cat > "$OUT" <<EOX
 ; The privates the specs read, each through its module.
 (def %py-class-of (eval (lit %py-class-of) (module python/core)))
 (def %py-dset (eval (lit %py-dset) (module python/core)))
+(def %py-entry-run (eval (lit %py-entry-run) (module python/core)))
 (def %py-eval-line (eval (lit %py-eval-line) (module python/core)))
 (def %py-f-exact (eval (lit %py-f-exact) (module python/core)))
 (def %py-fmtfield (eval (lit %py-fmtfield) (module python/core)))
@@ -85,6 +86,7 @@ cat > "$OUT" <<EOX
 (def %py-jit-compile! (eval (lit %py-jit-compile!) (module python/tokens)))
 (def %py-jit-number-labels (eval (lit %py-jit-number-labels) (module python/tokens)))
 (def %py-jit-threshold (eval (lit %py-jit-threshold) (module python/tokens)))
+(def %py-lines-read (eval (lit %py-lines-read) (module python/core)))
 (def %py-mkclass (eval (lit %py-mkclass) (module python/core)))
 (def %py-number-label! (eval (lit %py-number-label!) (module python/tokens)))
 (def %py-opens-block? (eval (lit %py-opens-block?) (module python/core)))

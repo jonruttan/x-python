@@ -203,10 +203,104 @@
         (if (eq? lines (lit cancel)) lines (Str8 join "\n" lines)))
       first-line)))
 
+; --- where an entry failed ---------------------------------------------------
+;
+; An error is reported against the entry that raised it, in the layout of a
+; CPython traceback's last frame: the line the entry began on, its text, and
+; a caret under each character of it, ahead of the error's own line.  The
+; entry is the whole of what is known: a token carries no position and an
+; emitted form no line.  So an entry of one line is marked, and a block is
+; shown by its header with no carets, since they would point at a line that
+; may not be the one that failed.
+;
+; Lines are counted where they are read with no editor -- a program on
+; standard input -- so the number is the program's own.  An entry typed at
+; the editor is line 1, as each is at CPython's prompt.
+(def %py-lines-read (pair 0 ()))
+(def %py-entry-line (pair 1 ()))
+(def %py-entry-now (pair "" ()))
+
+(def %py-read-counted
+  (fn (_ prompt)
+    (let ((line (python-read prompt)))
+      (if (if (symbol? line) #f (not (guard (_ #f) (Line available?))))
+        (%set-first! %py-lines-read (+ (first %py-lines-read) 1))
+        ())
+      line)))
+
+; An entry begins: its first line, and the line it is on.
+(def %py-entry-begin!
+  (fn (_ line)
+    (%set-first! %py-entry-now line)
+    (%set-first! %py-entry-line
+      (if (= (first %py-lines-read) 0) 1 (first %py-lines-read)))))
+
+; Past the last byte of S's first N that is not a blank or a carriage return.
+(def %py-text-end
+  (fn (self s n)
+    (if (> n 0)
+      (let ((b (python-code-at s (- n 1))))
+        (if (match ((= b 32) #t) ((= b 9) #t) (#t (= b 13))) (self s (- n 1)) n))
+      0)))
+
+; The characters in bytes I to N of S: every byte but a UTF-8 continuation.
+(def %py-chars
+  (fn (self s i n acc)
+    (if (>= i n)
+      acc
+      (let ((b (python-code-at s i)))
+        (self s (+ i 1) n (if (if (>= b 128) (< b 192) #f) acc (+ acc 1)))))))
+
+(def %py-carets
+  (fn (self n acc) (if (> n 0) (self (- n 1) (Str8 append acc "^")) acc)))
+
+(def %py-entry-report
+  (fn (_ entry)
+    (let ((nl (Str8 index-of "\n" entry)))
+      (let ((text (if (null? nl) entry (Str8 sub 0 nl entry))))
+        (let ((n (%py-text-end text (python-byte-len text))))
+          (let ((i (%py-past-blanks text 0 n)))
+            (do
+              (display "  File \"<stdin>\", line ")
+              (display (first %py-entry-line))
+              (newline)
+              (display "    ")
+              (display (Str8 sub i (- n i) text))
+              (newline)
+              (if (null? nl)
+                (do
+                  (display "    ")
+                  (display (%py-carets (%py-chars text i n 0) ""))
+                  (newline))
+                ()))))))))
+
+; What both loops print for an error: where, then what.  A report that
+; cannot be drawn does not take the error's own line with it.
+(def %py-entry-error
+  (fn (_ err)
+    (do
+      (guard (_ ()) (%py-entry-report (first %py-entry-now)))
+      (display "Error: ")
+      (display err)
+      (newline))))
+
+; One entry, from its first line: the rest of it read, then evaluated, and
+; an error from either reported where the entry is (%py-entry-error).
+(def %py-entry-run
+  (fn (_ line more)
+    (do
+      (%py-entry-begin! line)
+      (guard (%py-err (%py-entry-error %py-err))
+        (let ((entry (%py-read-entry line more)))
+          (unless (eq? entry (lit cancel))
+            (do
+              (%set-first! %py-entry-now entry)
+              (%py-repl-eval entry))))))))
+
 ; The loop's own way to the next line: the editor when there is a terminal,
 ; the byte reader otherwise (python/line.x), the prompt drawn either way.
 (def %py-more-from-loop
-  (fn (_) (python-read "... ")))
+  (fn (_) (%py-read-counted "... ")))
 
 ; --- the loop ----------------------------------------------------------------
 (def %python-repl ())
@@ -225,7 +319,7 @@
   (fn (_)
     ; Through the line editor when there is a terminal (python/line.x),
     ; which draws the prompt itself; through the byte reader otherwise.
-    (let ((line (python-read ">>> ")))
+    (let ((line (%py-read-counted ">>> ")))
       (match
         ((eq? line (lit eof)) (%seq (newline) (Sys exit 0)))
         ; ctrl-c abandons the line being typed.
@@ -235,14 +329,7 @@
           (Sys exit 0))
         (#t
           (%seq
-            (guard (%py-err
-                (%seq
-                  (display "Error: ")
-                  (%seq
-                    (display %py-err)
-                    (newline))))
-              (let ((entry (%py-read-entry line %py-more-from-loop)))
-                (unless (eq? entry (lit cancel)) (%py-repl-eval entry))))
+            (%py-entry-run line %py-more-from-loop)
             (%python-repl-loop)))))))
 
 ; --- the editor's way in -----------------------------------------------------
@@ -261,16 +348,7 @@
     (match
       ((= (Str8 length line) 0) ())
       ((if (Str8 =? line "quit()") #t (Str8 =? line "exit()")) (Sys exit 0))
-      (#t
-        (let ((entry (%py-read-entry line %py-more-from-editor)))
-          (unless (eq? entry (lit cancel))
-            (guard (%py-err
-                (%seq
-                  (display "Error: ")
-                  (%seq
-                    (display %py-err)
-                    (newline))))
-              (%py-repl-eval entry))))))))
+      (#t (%py-entry-run line %py-more-from-editor)))))
 
 ; Python's own spelling of the switch: lang("x").  The name arrives as a
 ; Python str, code points, and Lang wants bytes.
