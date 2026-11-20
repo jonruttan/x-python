@@ -24,12 +24,16 @@
 # whatever tree wrote an image, and the bundle sweeps between its files on
 # every source boot (python/util.x), so the load fits.
 #
-# The program goes in as the specs send theirs, `python-run` forms in a file
-# the wrapper reads after run.x.  It is small on purpose: one thing from each
-# table the bundle builds while it loads -- a string escape, a big integer, a
-# float, a dict -- and the specs cover the rest.  Each line runs on a swept
-# heap, so the peak this check reaches is the load's and not the probe's;
-# on x-lang 0.14.0 the two together passed the cap below.
+# The program goes in as a user's does, a Python file given with -f, which
+# the wrapper cats after run.x and run.x's last form reads (python-batch,
+# python/repl.x).  It is small on purpose: one thing from each table the
+# bundle builds while it loads -- a string escape, a big integer, a float, a
+# dict -- and the specs cover the rest.  It has what only a file has: a
+# blank line inside a block, an expression statement that must print
+# nothing, and a last line.
+#
+# A second program raises and catches nothing: its error is on standard
+# error, what it printed first is on standard output, and the status is 1.
 set -u
 
 BUNDLE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -69,17 +73,20 @@ else
 	SPAWN_DIR="$BUNDLE"
 fi
 
-# x forms, as the specs write them: the reader unescapes \\, so the first
-# program Python sees has a \x41 escape.  A collect between the lines, as
-# the platform's own boots collect between their groups.
-cat > "$_TMP/program.x" <<'EOX'
-(python-run "print('\\x41' + 'b')")
-((prim-ref (lit heap) (lit collect)))
-(python-run "print(2 ** 100)")
-((prim-ref (lit heap) (lit collect)))
-(python-run "print(1 / 4 < 1)")
-((prim-ref (lit heap) (lit collect)))
-(python-run "print(sorted({'b': 1, 'a': 2}))")
+cat > "$_TMP/program.py" <<'EOX'
+print('\x41' + 'b')
+print(2 ** 100)
+print(1 / 4 < 1)
+print(sorted({'b': 1, 'a': 2}))
+
+def fact(n):
+    if n <= 1:
+        return 1
+
+    return n * fact(n - 1)
+
+fact(3)
+print(fact(20))
 EOX
 
 cat > "$_TMP/want" <<'EOX'
@@ -87,6 +94,13 @@ Ab
 1267650600228229401496703205376
 True
 ['a', 'b']
+2432902008176640000
+EOX
+
+cat > "$_TMP/raises.py" <<'EOX'
+print("before")
+raise ValueError("no")
+print("after")
 EOX
 
 # Stdin is closed off so the run owes nothing to whatever the caller's is.
@@ -101,7 +115,7 @@ run_x() {
 	) < /dev/null
 }
 
-run_x -q --no-image -l python -f "$_TMP/program.x" > "$_TMP/got" 2> "$_TMP/err"
+run_x -q --no-image -l python -f "$_TMP/program.py" > "$_TMP/got" 2> "$_TMP/err"
 status=$?
 if [ "$status" -ne 0 ]; then
 	echo "x-python: x -l python exited $status" >&2
@@ -117,3 +131,15 @@ if ! diff -u "$_TMP/want" "$_TMP/got" > "$_TMP/diff"; then
 fi
 
 echo "x-python: x -l python boots from source on the declared dialect and runs a program"
+
+run_x -q --no-image -l python -f "$_TMP/raises.py" > "$_TMP/got" 2> "$_TMP/err"
+status=$?
+if [ "$status" -ne 1 ] || [ "$(cat "$_TMP/got")" != before ] \
+	|| ! grep -q '^Error: .*no' "$_TMP/err"; then
+	echo "x-python: a program that raises: status $status, wanted 1," >&2
+	echo "  'before' on standard output and the error on standard error" >&2
+	show
+	exit 1
+fi
+
+echo "x-python: a program that raises ends with status 1 and its error on standard error"

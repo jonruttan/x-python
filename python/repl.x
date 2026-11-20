@@ -332,6 +332,69 @@
             (%py-entry-run line %py-more-from-loop)
             (%python-repl-loop)))))))
 
+; --- a program in a file -----------------------------------------------------
+;
+; `x -l python -f PROGRAM`: the wrapper cats the program onto the boot stream
+; after this bundle's entry, and the entry's last form calls this.  What is
+; left of the stream is the program, as text; nothing but this reads it as
+; Python.  It is run whole, as CPython runs a script: no banner, no prompt,
+; no echo of an expression's value, and a blank line ends nothing.
+;
+; The first line read is the rest of the entry's own last line, the newline
+; after its closing parenthesis, and is not the program's.
+;
+; With the program read, the stream is spent, and the program's own standard
+; input is where the wrapper parked it, on fd 3, as it is for the session's
+; loop above.
+;
+; An error the program does not catch is its last line on standard error and
+; status 1.
+;
+; A line is its bytes.  python-repl-line converts the characters it read,
+; and a byte past 127 comes out as the two bytes of the code point with that
+; number, so the UTF-8 of a program's `é` would be encoded a second time.
+(def %py-batch-line
+  (fn (_)
+    (def go
+      (fn (self acc)
+        (let ((c (Io read-char)))
+          (if (null? c)
+            (if (null? acc) (lit eof) (pb->str (python-reverse acc)))
+            (if (= (char->int c) 10)
+              (pb->str (python-reverse acc))
+              (self (pair (char->int c) acc)))))))
+    (go ())))
+
+(def %py-batch-lines
+  (fn (self acc)
+    (let ((line (%py-batch-line)))
+      (if (eq? line (lit eof))
+        (python-reverse acc)
+        (self (pair line acc))))))
+
+(def %py-batch-source
+  (fn (_)
+    (let ((lines (%py-batch-lines ())))
+      (Str8 append
+        (Str8 join "\n"
+          (if (null? lines) lines
+            (if (= (Str8 length (first lines)) 0) (rest lines) lines)))
+        "\n"))))
+
+(def %py-batch-error
+  (fn (_ err)
+    (let ((text (Str8 append (Str8 append "Error: " (Str8 str err)) "\n")))
+      (File write 2 text (python-byte-len text)))))
+
+(def python-batch
+  (fn (_)
+    (let ((src (%py-batch-source)))
+      (do
+        (guard (%py-e ()) (do (Sys dup2 3 0) (Sys close 3)))
+        (guard (%py-err (do (%py-batch-error %py-err) (Sys exit 1)))
+          (python-run src))
+        (Sys exit 0)))))
+
 ; --- the editor's way in -----------------------------------------------------
 ;
 ; %repl-eval-line's Python answer: the editor has read one line and asks what
