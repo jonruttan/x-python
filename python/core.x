@@ -94,7 +94,7 @@
   python-sig! python-slice-span python-str python-str-cps python-str-display python-str-is
   python-str-new python-str-of-x python-sub python-subclass? python-sweep! python-take
   python-takes-at-most! python-text->x python-th-float python-tuple-elems python-tuple-is
-  python-tuple-new python-tuple-of-list python-type-of python-banner python-lex
+  python-tuple-new python-tuple-of-list python-type-of python-banner python-batch python-lex
   python-parse python-parse-expr python-parse-single python-repl-print
   (global python-run) python-version type?)
 

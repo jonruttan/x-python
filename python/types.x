@@ -77,7 +77,13 @@
 
 ; A float index is a TypeError, so the subscript handler needs to recognise a
 ; machine float; the type handle compare is the same check runtime.x uses.
-(def %py-t-th-float (type-of 1.5))
+;
+; The handle is bound in python/runtime-num.x, once the tower is loaded.
+; This file loads before it, on the dialect lang.xon declares, where `1.5`
+; is not yet read as a float: taken here, the handle was an integer's, and
+; `a[1]` on a list was refused as a float index.  The suite's amalgam has
+; the tower from the start and did not show it.
+(def %py-t-th-float ())
 (def %py-t-float? (fn (_ v) (eq? (type-of v) %py-t-th-float)))
 
 (def python-list-elems (fn (_ v) (rest (first (python-native-of v)))))

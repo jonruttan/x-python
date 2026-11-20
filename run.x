@@ -39,7 +39,7 @@
 ; second (`x -l xe -l python`) this bundle is a library to the lang that
 ; owns the prompt: it registers "python" so (lang python) can switch to it,
 ; and touches neither the banner nor the loop.
-(import python/core python-banner python-leads? python-repl-install! python-repl-choose! python-repl-register! python-sweep!)
+(import python/core python-banner python-batch python-leads? python-repl-install! python-repl-choose! python-repl-register! python-sweep!)
 (python-sweep!)
 (if (python-leads?)
   (do
@@ -47,3 +47,14 @@
     (python-repl-install!)
     (python-repl-choose!))
   (python-repl-register!))
+
+; With a file (-f), what follows this entry on the stream is the program, in
+; Python, and the platform's batch loop would read it as x-lang: python-batch
+; reads it instead, runs it, and exits.  %batch? comes from the wrapper's
+; seam and means a file was supplied.  This form is last and nothing may
+; follow it: python-batch does not return.
+;
+; Not while this bundle is being imaged: the image writer loads this entry
+; in a child where %batch? is true and the stream is the writer's own
+; script.  %image-writing is bound in that child alone.
+(if (python-leads?) (if (guard (_ #f) %image-writing) () (if (guard (_ #f) %batch?) (python-batch) ())) ())
