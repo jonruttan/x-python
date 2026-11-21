@@ -66,6 +66,7 @@
 ; python-run is the seam a Python program presses on: a program file of
 ; (python-run ...) forms calls it bare, so it is the root's.
 (provide python/core
+  python-exc-info python-exception-now
   python-f-2p52
   make-instance make-type pb->str pb-len pb-of-str ps->x ps-codec
   ps-decode-as ps-enc1 ps-encode ps-encode-as ps-write-bytes-to python-add

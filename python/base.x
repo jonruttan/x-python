@@ -84,8 +84,16 @@
     ; first either way
     (guard (e (%seq (%set-first! %py-program before)
                 (if (%py-exc-match e python-exc-SystemExit) () (error e))))
-      (%seq (%py-code-run env (python-parse src) ())
+      (%seq (%py-code-run env (%py-run-parse src file) ())
         (%seq (%set-first! %py-program before) ())))))
+
+; A program's forms, parsed as its file -- "<string>" without one -- whose
+; source a traceback shows lines of.
+(def %py-run-parse
+  (fn (_ src file)
+    (let ((f (if (null? file) "<string>" (first file))))
+      (%seq (python-source-remember! f (if (python-str-is src) (python-str src) src))
+        (python-parse-as f src)))))
 
 ; FILE's directory: everything before its last slash, or the working
 ; directory, '', when it has none.

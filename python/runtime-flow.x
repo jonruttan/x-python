@@ -1073,6 +1073,290 @@
               (List map (fn (_ r) (pair (rest r) (python-str-of-x (first r)))) rows)))
           rows)))))
 
+; --- tracebacks -----------------------------------------------------------------
+;
+; WHERE AN EXCEPTION WENT, gathered as it goes, as CPython's is.  Every
+; statement first sets %py-ln to the line it is on (python/parse.x, the
+; statement loop), and every call of a def runs inside %py-framed, which keeps
+; the caller's line to put back.  An exception leaving a call passes the
+; guard there, which notes the call -- its function's name, its file, the
+; line it had reached -- and raises the exception on.  So by the time an
+; `except` catches it the notes run from the frame below the handler's to the
+; one that raised, and the handler's own frame, at the line it had reached,
+; goes on the front.  That list is the traceback.
+;
+; THE NOTES ARE KEPT FOR ONE EXCEPTION AT A TIME, the one last raised past a
+; frame: a different one starts them again.  A handler reads them and leaves
+; them, so an exception that no clause takes goes on gathering.
+;
+; An entry is (NAME FILE LINE), NAME and FILE the platform's strings.  The
+; cost is a cell write per statement, and per call a guard, which costs
+; nothing until something raises through it.
+(def %py-ln (pair 0 ()))
+(def %py-tb-pending (pair () ()))
+(def %py-tb-note!
+  (fn (_ e name file)
+    (let ((p (first %py-tb-pending)) (ent (list name file (first %py-ln))))
+      (%set-first! %py-tb-pending
+        (if (if (null? p) #f (eq? (first p) e))
+          (pair e (pair ent (rest p)))
+          (pair e (list ent)))))))
+(def %py-framed
+  (fn (_ name file body)
+    (let ((saved (first %py-ln)))
+      (let ((r (guard (e (%seq (%py-tb-note! e name file)
+                           (%seq (%set-first! %py-ln saved) (error e))))
+                 (body))))
+        (%seq (%set-first! %py-ln saved) r)))))
+(def %py-tb-entries
+  (fn (_ e name file)
+    (let ((p (first %py-tb-pending)))
+      (pair (list name file (first %py-ln))
+        (if (if (null? p) #f (eq? (first p) e)) (rest p) ())))))
+
+; THE EXCEPTION BEING HANDLED, for sys.exc_info() and sys.exception(): (RAISED
+; ENTRIES INSTANCE-CELL) while an except clause's handler runs, and what it
+; was before once the handler is left -- by its end, by a raise, or by a
+; return, break or continue, which reach the wind stack (runtime-seq.x).
+(def %py-exc-now (pair () ()))
+(def %py-handling
+  (fn (_ e name file chain)
+    (let ((tb (%py-tb-entries e name file)) (saved (first %py-exc-now)))
+      (%seq (if (python-obj-is e) (%py-tb-attach! e tb) ())
+        (%seq (%set-first! %py-exc-now (list e tb (pair () ())))
+          (let ((w (%py-wind-push! (fn (_) (%set-first! %py-exc-now saved)))))
+            (let ((r (guard (x (%seq (%py-wind-drop! w)
+                                 (%seq (%set-first! %py-exc-now saved) (error x))))
+                       (chain))))
+              (%seq (%py-wind-drop! w) (%seq (%set-first! %py-exc-now saved) r)))))))))
+
+; The traceback objects: a tb_next chain, outermost first, each with its
+; frame, whose f_code names the function and the file.
+(def %py-cls-traceback
+  (python-class-new "traceback" python-cls-object (list (pair "%final" #t)) "traceback"))
+(def %py-cls-frame
+  (python-class-new "frame" python-cls-object (list (pair "%final" #t)) "frame"))
+(def %py-tb-objects
+  (fn (self ents)
+    (if (null? ents) ()
+      (let ((ent (first ents)) (tb (python-obj-new %py-cls-traceback))
+            (fr (python-obj-new %py-cls-frame)))
+        (%seq
+          (python-obj-set-attrs! fr
+            (list
+              (pair "f_code" (%py-code-new (lit function) () (List ref 1 ent) (first ent) ()))
+              (pair "f_lineno" (List ref 2 ent))))
+          (%seq
+            (python-obj-set-attrs! tb
+              (list (pair "tb_frame" fr) (pair "tb_lineno" (List ref 2 ent))
+                (pair "tb_lasti" -1) (pair "tb_next" (self (rest ents)))))
+            tb))))))
+(def %py-tb-attach!
+  (fn (_ inst ents)
+    (%py-setattr inst "__traceback__" (%py-tb-objects ents))))
+
+; The instance an except clause binds, with its traceback: a raise by label
+; becomes one instance for the whole handler, the one sys.exc_info() answers.
+(def %py-exc-instance-now
+  (fn (_ e)
+    (let ((now (first %py-exc-now)))
+      (if (if (null? now) #t (not (eq? (first now) e)))
+        (%py-exc-instance-of e)
+        (let ((cell (List ref 2 now)))
+          (if (null? (first cell))
+            (let ((inst (%py-exc-instance-of e)))
+              (%seq (if (python-obj-is e) () (%py-tb-attach! inst (List ref 1 now)))
+                (%seq (%set-first! cell inst) inst)))
+            (first cell)))))))
+(def python-exception-now
+  (fn (_)
+    (let ((now (first %py-exc-now)))
+      (if (null? now) () (%py-exc-instance-now (first now))))))
+(def python-exc-info
+  (fn (_)
+    (let ((e (python-exception-now)))
+      (python-tuple-new
+        (if (null? e) (list () () ())
+          (list (python-obj-class e) e (%py-tb-of e)))))))
+(def %py-tb-of
+  (fn (_ e)
+    (let ((row (python-alist-find "__traceback__" (python-obj-attrs e))))
+      (if (null? row) () (rest row)))))
+
+; --- the traceback module ---
+;
+; The entries a traceback object chain holds, back as (NAME FILE LINE).
+(def %py-tb-walk
+  (fn (self tb)
+    (if (null? tb) ()
+      (let ((fr (%py-getattr tb "tb_frame")))
+        (let ((code (%py-getattr fr "f_code")))
+          (pair (list (python-str (%py-getattr code "co_name"))
+                      (python-str (%py-getattr code "co_filename"))
+                      (%py-getattr tb "tb_lineno"))
+            (self (%py-getattr tb "tb_next"))))))))
+; LIMIT as CPython's StackSummary takes it: None is sys.tracebacklimit, which
+; when negative is 0; a limit of N >= 0 keeps the first N, and a negative one
+; the last -N.
+(def %py-tb-limit
+  (fn (_ limit)
+    (if (null? limit)
+      (let ((l (%py-sys-attr-or "tracebacklimit" ())))
+        (if (null? l) () (if (< l 0) 0 l)))
+      limit)))
+(def %py-tb-cut
+  (fn (_ ents limit)
+    (match
+      ((null? limit) ents)
+      ((>= limit 0) (python-take-n ents limit ()))
+      (#t (python-drop ents (python-max0 (+ (python-length ents) limit)))))))
+(def python-max0 (fn (_ n) (if (< n 0) 0 n)))
+; An attribute of the program's sys, importing it if the program has not.
+(def %py-sys-attr-or
+  (fn (_ name dflt) (guard (_ dflt) (%py-getattr (%py-import "sys") name))))
+; THE SOURCE OF EACH FILE RUN OR IMPORTED, for the line a traceback shows under
+; its entry, as CPython's linecache reads it back from the file.
+(def %py-sources (pair () ()))
+(def python-source-remember!
+  (fn (_ file src)
+    (%set-first! %py-sources (pair (pair file src) (first %py-sources)))))
+(def %py-source-line
+  (fn (_ file n)
+    (let ((row (python-alist-find file (first %py-sources))))
+      (if (null? row) ()
+        (%py-nth-line (rest row) 0 (python-byte-len (rest row)) n)))))
+(def %py-nth-line
+  (fn (self s i end n)
+    (if (>= i end) ()
+      (let ((j (%py-line-end s i end)))
+        (if (= n 1) (%py-strip-blanks (Str8 sub i (- j i) s))
+          (self s (+ j 1) end (- n 1)))))))
+(def %py-line-end
+  (fn (self s i end)
+    (if (if (>= i end) #t (= (python-code-at s i) 10)) i (self s (+ i 1) end))))
+(def %py-strip-blanks
+  (fn (_ s)
+    (let ((n (Str8 length s)))
+      (let ((a (%py-blank-run s 0 n 1)) (b (%py-blank-run s (- n 1) -1 -1)))
+        (if (> a b) "" (Str8 sub a (+ (- b a) 1) s))))))
+(def %py-blank-run
+  (fn (self s i stop step)
+    (if (= i stop) i
+      (let ((c (python-code-at s i)))
+        (if (match ((= c 32) #t) ((= c 9) #t) ((= c 13) #t) (#t #f))
+          (self s (+ i step) stop step)
+          i)))))
+; '  File "F", line N, in NAME\n' and the stripped source line under it
+(def %py-tb-entry-text
+  (fn (_ ent)
+    (let ((head (Str8 append "  File \""
+                  (Str8 append (List ref 1 ent)
+                    (Str8 append "\", line "
+                      (Str8 append (python-str (List ref 2 ent))
+                        (Str8 append ", in " (Str8 append (first ent) "\n")))))))
+          (src (%py-source-line (List ref 1 ent) (List ref 2 ent))))
+      (if (if (null? src) #t (= (Str8 length src) 0)) head
+        (Str8 append head (Str8 append "    " (Str8 append src "\n")))))))
+; 'Name: message\n', or 'Name\n' for an empty message; a class from another
+; module than builtins or __main__ is named with its module, as CPython does.
+(def %py-exc-only-text
+  (fn (_ e)
+    (let ((cls (python-obj-class e)) (msg (python-str e)))
+      (let ((mod (guard (_ ()) (python-str (%py-getattr cls "__module__")))))
+        (let ((name (if (if (null? mod) #t
+                          (if (Str8 =? mod "builtins") #t (Str8 =? mod "__main__")))
+                      (python-class-qualname cls)
+                      (Str8 append mod (Str8 append "." (python-class-qualname cls))))))
+          (if (= (Str8 length msg) 0)
+            (Str8 append name "\n")
+            (Str8 append name (Str8 append ": " (Str8 append msg "\n")))))))))
+; The lines of one exception's report, its cause's first when CHAIN.
+(def %py-tb-lines
+  (fn (self e ents limit chain)
+    (let ((own (let ((cut (%py-tb-cut ents (%py-tb-limit limit))))
+                 (pair
+                   (if (null? cut) () "Traceback (most recent call last):\n")
+                   (List map %py-tb-entry-text cut))))
+          (cause (if chain (guard (_ ()) (%py-getattr e "__cause__")) ())))
+      (let ((mine (%py-append (if (null? (first own)) () (list (first own)))
+                    (%py-append (rest own) (list (%py-exc-only-text e))))))
+        (if (if (null? cause) #t (not (python-obj-is cause))) mine
+          (%py-append (self cause (%py-tb-walk (%py-tb-of cause)) limit chain)
+            (pair "\nThe above exception was the direct cause of the following exception:\n\n"
+              mine)))))))
+; format_exception(exc, /, value, tb, limit=None, chain=True): with VALUE
+; given, it is the exception and TB its traceback (the three-argument form);
+; without, EXC is the exception and its own __traceback__ the traceback.
+(def %py-tb-exc-tb
+  (fn (_ a)
+    (let ((value (python-opt a 1 python-dflt)))
+      (if (same? value python-dflt)
+        (pair (first a) (%py-tb-of-any (first a)))
+        (pair value (python-opt a 2 (%py-tb-of-any value)))))))
+(def %py-tb-of-any (fn (_ e) (if (python-obj-is e) (%py-tb-of e) ())))
+(def %py-tb-format
+  (fn (_ e tb limit chain)
+    (if (null? e) (list "NoneType: None\n")
+      (%py-tb-lines e (%py-tb-walk tb) limit (%py-truthy chain)))))
+(def %py-tb-strs (fn (_ ls) (python-list-new (List map python-str-of-x ls))))
+(def %py-tb-write
+  (fn (_ file ls)
+    (let ((f (if (null? file) (%py-sys-attr-or "stderr" ()) file)))
+      (let ((w (%py-getattr f "write")))
+        (%seq (w (python-str-of-x (Str8 join "" ls))) ())))))
+(def %py-traceback-module
+  (fn (_)
+    (python-module-new "traceback"
+      (list
+        (pair "format_exception"
+          (python-sig!
+            (fn (_ . a)
+              (let ((et (%py-tb-exc-tb a)))
+                (%py-tb-strs (%py-tb-format (first et) (rest et)
+                               (python-opt a 3 ()) (python-opt a 4 #t)))))
+            "format_exception" (list "exc" "value" "tb" "limit" "chain") 1 #f))
+        (pair "print_exception"
+          (python-sig!
+            (fn (_ . a)
+              (let ((et (%py-tb-exc-tb a)))
+                (%py-tb-write (python-opt a 4 ())
+                  (%py-tb-format (first et) (rest et) (python-opt a 3 ()) (python-opt a 5 #t)))))
+            "print_exception" (list "exc" "value" "tb" "limit" "file" "chain") 1 #f))
+        (pair "format_exc"
+          (python-sig!
+            (fn (_ . a)
+              (let ((e (python-exception-now)))
+                (python-str-of-x
+                  (Str8 join "" (%py-tb-format e (%py-tb-of-any e) (python-opt a 0 ()) (python-opt a 1 #t))))))
+            "format_exc" (list "limit" "chain") 0 #f))
+        (pair "print_exc"
+          (python-sig!
+            (fn (_ . a)
+              (let ((e (python-exception-now)))
+                (%py-tb-write (python-opt a 1 ())
+                  (%py-tb-format e (%py-tb-of-any e) (python-opt a 0 ()) (python-opt a 2 #t)))))
+            "print_exc" (list "limit" "file" "chain") 0 #f))
+        (pair "format_tb"
+          (python-sig!
+            (fn (_ tb . a)
+              (%py-tb-strs (List map %py-tb-entry-text
+                             (%py-tb-cut (%py-tb-walk tb) (%py-tb-limit (python-opt a 0 ()))))))
+            "format_tb" (list "tb" "limit") 1 #f))
+        (pair "print_tb"
+          (python-sig!
+            (fn (_ tb . a)
+              (%py-tb-write (python-opt a 1 ())
+                (List map %py-tb-entry-text
+                  (%py-tb-cut (%py-tb-walk tb) (%py-tb-limit (python-opt a 0 ()))))))
+            "print_tb" (list "tb" "limit" "file") 1 #f))
+        (pair "format_exception_only"
+          (python-sig!
+            (fn (_ . a)
+              (let ((value (python-opt a 1 python-dflt)))
+                (let ((e (if (same? value python-dflt) (first a) value)))
+                  (%py-tb-strs (list (%py-exc-only-text e))))))
+            "format_exception_only" (list "exc" "value") 1 #f))))))
+
 ; The modules this runtime offers, each built on first import and remembered
 ; after.
 (def %py-module-build
@@ -1089,6 +1373,7 @@
       ((Str8 =? name "os") (python-os-module))
       ((Str8 =? name "gc") (%py-gc-module))
       ((Str8 =? name "errno") (%py-errno-module))
+      ((Str8 =? name "traceback") (%py-traceback-module))
       ((Str8 =? name "builtins") (%py-builtins-module))
       (#t ()))))
 
@@ -1239,7 +1524,9 @@
     (if (null? file)
       ()
       (guard (e (%seq (%py-table-drop! key) (error e)))
-        (%py-code-run env (python-parse (File read-all file)) ())))
+        (let ((src (File read-all file)))
+          (%seq (python-source-remember! file src)
+            (%py-code-run env (python-parse-as file src) ())))))
     ; what the table holds when the code is done: a module may put something
     ; else there in its own place
     (let ((e (%py-dfind key (python-dict-entries (python-modules-now)))))

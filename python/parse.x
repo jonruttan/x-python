@@ -2211,9 +2211,14 @@
       (let ((t (%py-skip-nl (rest toks))))
         (if (not (%py-block? (if (null? t) () (first t))))
           (Err raise (lit indent) "expected an indented block" ())
-          (pair
-            (%py-body-seq (%py-block-stmts (%py-semi->nl (%py-block-toks (first t)))))
-            (rest t))))))))
+          (let ((blk (first t)))
+            (%py-block-line! (%py-nth-or blk 2 ()))
+            (let ((body (%py-body-seq (%py-block-stmts (%py-semi->nl (%py-block-toks blk))))))
+              (%py-block-line! (%py-nth-or blk 3 ()))
+              (pair body (rest t))))))))))
+; a block's line, or the line after it, when the block records one
+(def %py-block-line!
+  (fn (_ l) (if (number? l) (%set-first! %py-cur-line l) ())))
 
 ; A block's statements, compiled; what they bind is bound for certain only
 ; inside it (%py-bound-in).  What was bound for certain at its end is left in
@@ -2267,7 +2272,7 @@
 (def %py-line-of
   (fn (self toks acc)
     (if (if (null? toks) #t
-          (if (eq? (%py-label (first toks)) (lit tok-newline)) (null? (rest (first toks))) #f))
+          (if (eq? (%py-label (first toks)) (lit tok-newline)) (not (%py-semi-nl? (first toks))) #f))
       (pair (python-reverse acc) toks)
       (self (rest toks) (pair (first toks) acc)))))
 
@@ -2276,6 +2281,8 @@
 ; `a = 1; b = 2`: a top-level ; is a statement boundary, so it becomes the
 ; newline token the statement parser already stops at.  Shallow on
 ; purpose: a block's contents are their own list and get their own pass.
+(def %py-semi-nl?
+  (fn (_ t) (if (null? (rest t)) #f (eq? (first (rest t)) (lit semi)))))
 (def %py-semi->nl
   (fn (self toks)
     (if (null? toks) ()
@@ -2325,14 +2332,16 @@
         ; or a class, and the rest of the header is not read
         ((%py-block? last)
           (%py-append (python-take (- (python-length st) 1) st)
-            (list (list (lit tok-block)
+            (list (pair (lit tok-block) (pair
                     (%py-annotations (%py-block-toks last)
                       (match
                         ((%py-kw? (first st) "def") #t)
                         ((if (%py-kw? (first st) "async")
                            (%py-kw? (if (null? (rest st)) () (first (rest st))) "def") #f) #t)
                         ((%py-kw? (first st) "class") #f)
-                        (#t in-fn)))))))
+                        (#t in-fn)))
+                    ; the block's line and the next, as the reader recorded them
+                    (rest (rest last)))))))
         ; a header whose suite is on its line -- `if d: q: int = 9` -- has the
         ; suite rewritten past the header's own colon
         ((%py-ann-inline-header? (first st))
@@ -2399,13 +2408,35 @@
       ((%py-op-is? (first toks) "=") toks)
       (#t (self (rest toks))))))
 
-(set! %py-stmts
-  (fn (self toks acc)
+; THE LINE EACH STATEMENT IS ON, for a traceback: the line the newline before
+; it opened, or, where no newline precedes it -- the first statement of a
+; block, or the one after a block, whose newline the block's end took -- the
+; one the block recorded (tokens.x, mk-tok-block), kept here as the parse
+; reaches it.  Each statement is preceded by the form that sets its frame's
+; line (python/runtime-flow.x, %py-ln); one on the same line as the statement
+; before it, after a `;`, sets nothing new and is not preceded.
+(def %py-cur-line (pair 1 ()))
+(def %py-nl-line
+  (fn (self toks line)
+    (if (null? toks) line
+      (if (eq? (%py-label (first toks)) (lit tok-newline))
+        (let ((l (if (null? (rest (first toks))) () (first (rest (first toks))))))
+          (self (rest toks) (if (number? l) l line)))
+        line))))
+(def %py-stmts-from
+  (fn (self toks acc prev)
     (let ((t (%py-skip-nl toks)))
       (if (null? t)
         (pair (python-reverse acc) t)
-        (let ((r (%py-stmt t)))
-          (self (rest r) (pair (first r) acc)))))))
+        (let ((line (%py-nl-line toks (first %py-cur-line))))
+          (%set-first! %py-cur-line line)
+          (let ((r (%py-stmt t)))
+            (self (rest r)
+              (if (eq? line prev)
+                (pair (first r) acc)
+                (pair (first r) (pair (list (lit %set-first!) (lit %py-ln) line) acc)))
+              line)))))))
+(set! %py-stmts (fn (_ toks acc) (%py-stmts-from toks acc ())))
 
 (python-sweep!)
 ; --- import ------------------------------------------------------------------
@@ -3469,6 +3500,26 @@
         (let ((r (%py-except-clause (rest t))))
           (self (rest r) (pair (first r) acc)))))))
 
+; An except clause's handler runs as the exception being handled, with its
+; traceback taken where it was caught (python/runtime-flow.x, %py-handling):
+; the frame it is in is the one being parsed.
+(def %py-frame-name (pair () ()))
+(def %py-parse-file (pair () ()))
+(def %py-frame-name-now
+  (fn (_) (if (null? (first %py-frame-name)) "<module>" (first %py-frame-name))))
+(def %py-parse-file-now
+  (fn (_) (if (null? (first %py-parse-file)) "<string>" (first %py-parse-file))))
+; Parse SRC as the file FILE, for the traceback's entries.
+(def python-parse-as
+  (fn (_ file src)
+    (let ((was (first %py-parse-file)))
+      (%seq (%set-first! %py-parse-file file)
+        (let ((r (guard (e (%seq (%set-first! %py-parse-file was) (error e))) (python-parse src))))
+          (%seq (%set-first! %py-parse-file was) r))))))
+(def %py-handling-form
+  (fn (_ chain)
+    (list (lit %py-handling) (lit %py-exc) (%py-frame-name-now) (%py-parse-file-now)
+      (list (lit fn) (list (lit _)) chain))))
 (def %py-except-chain ())
 (set! %py-except-chain
   (fn (self clauses)
@@ -3490,7 +3541,7 @@
                     ; e.args reads as it would in Python.
                     (let ((sym (%py-name->sym var)))
                       (list (lit %seq)
-                        (list (lit set!) sym (list (lit %py-exc-instance-of) (lit %py-exc)))
+                        (list (lit set!) sym (list (lit %py-exc-instance-now) (lit %py-exc)))
                         (%py-finally-form body
                           (list (lit set!) sym (lit %py-deleted))))))))
             (if (null? matcher)
@@ -3545,12 +3596,12 @@
                       (first b)
                       (if (null? (first e))
                         (list (lit guard)
-                          (list (lit %py-exc) (%py-except-chain (first cs)))
+                          (list (lit %py-exc) (%py-handling-form (%py-except-chain (first cs))))
                           (first b))
                         (list (lit let) (list (list (lit %py-ok) (list (lit pair) #f ())))
                           (list (lit %seq)
                             (list (lit guard)
-                              (list (lit %py-exc) (%py-except-chain (first cs)))
+                              (list (lit %py-exc) (%py-handling-form (%py-except-chain (first cs))))
                               (list (lit %seq) (first b)
                                 (list (lit %set-first!) (lit %py-ok) #t)))
                             (list (lit if) (list (lit first) (lit %py-ok)) (first e) ())))))))
@@ -4195,8 +4246,9 @@
             (def %py-async-outer (first %py-in-async))
             (%set-first! %py-async-def ())
             (%set-first! %py-in-async (first %py-async-me))
-            (let ((outer-self (first %py-current-self)))
+            (let ((outer-self (first %py-current-self)) (outer-frame (first %py-frame-name)))
               (%set-first! %py-current-self (if (null? syms) () (first syms)))
+              (%set-first! %py-frame-name (%py-val name))
               ; A FUNCTION'S ASSIGNMENTS ARE ITS OWN.  The module-level scan
               ; skips def bodies, so their targets are hoisted HERE instead,
               ; as a `let` (NOT `def`: x's `def` decides global-versus-local
@@ -4244,17 +4296,25 @@
                   ; The fn's own name is %py-fn, which nothing else binds: the
                   ; call's frame is the one a bare dir() or locals() stops at
                   ; (python/runtime-flow.x, %py-frame-rows).
+                  ; THE BODY RUNS FRAMED, so an exception leaving it notes the
+                  ; call for the traceback (python/runtime-flow.x, %py-framed).
+                  (def framed
+                    (fn (_ form)
+                      (list (lit %py-framed) (%py-val name) (%py-parse-file-now)
+                        (list (lit fn) (list (lit _)) form))))
                   (def inner
                     (if (if (first %py-async-me) #t (%py-has-yield? (%py-block-contents after) #f))
                       (list (lit %py-gen-new)
                         (list (lit fn) (list (lit _) (lit %py-gen))
-                          (list (lit %py-escape)
-                            (list (lit fn) (list (lit _) (lit %py-return))
-                              (list (lit %seq) (%py-check-escapes body0) ()))))
+                          (framed
+                            (list (lit %py-escape)
+                              (list (lit fn) (list (lit _) (lit %py-return))
+                                (list (lit %seq) (%py-check-escapes body0) ())))))
                         (%py-val name))
-                      (list (lit %py-escape)
-                        (list (lit fn) (list (lit _) (lit %py-return))
-                          (list (lit %seq) (%py-check-escapes body0) ())))))
+                      (framed
+                        (list (lit %py-escape)
+                          (list (lit fn) (list (lit _) (lit %py-return))
+                            (list (lit %seq) (%py-check-escapes body0) ()))))))
                   (def fn-form (list (lit fn) (pair (lit %py-fn) params) (prelude inner)))
                   ; The fn its __code__ holds takes no default from the def:
                   ; a function's defaults are its own and not its code's, so
@@ -4286,6 +4346,7 @@
                           (if (null? kw-name) () kw-name)
                           (%py-kwo-names kwonly ())))))
                   (%set-first! %py-current-self outer-self)
+                  (%set-first! %py-frame-name outer-frame)
                   (%set-first! %py-in-async %py-async-outer)
                   ; the name is bound for the statements after this one
                   (%py-bound! (list (%py-name->sym (%py-val name))))
@@ -4773,6 +4834,8 @@
     ; inside a class body and left the class behind.
     (%set-first! %py-current-class ())
     (%set-first! %py-current-self ())
+    (%set-first! %py-cur-line 1)
+    (%set-first! %py-frame-name ())
     (%set-first! %py-echo-on (first %py-echo-next))
     (%set-first! %py-echo-next #f)
     (if (%py-first-line-indented? src 0 (python-byte-len src))

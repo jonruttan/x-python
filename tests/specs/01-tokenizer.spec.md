@@ -142,7 +142,7 @@ carries the column of the line it opens, which is what python/indent.x reads.
 (%seq (write (python-tokenize "a # c\nb")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-newline) ('tok-name "b"))
+    (('tok-name "a") ('tok-newline 2) ('tok-name "b"))
 
 ## tokenizer numbers
 
@@ -374,7 +374,7 @@ second is, so `//` before a name is still floor division.
 (%seq (write (python-tokenize "a\nb")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-newline) ('tok-name "b"))
+    (('tok-name "a") ('tok-newline 2) ('tok-name "b"))
 
 ### a def line
 

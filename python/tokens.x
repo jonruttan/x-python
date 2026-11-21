@@ -79,7 +79,7 @@
 ; The platform owns the tokenizer intrinsics (lib/x/reader/intrinsics.x); these
 ; run per character, so they are the platform's own tested versions rather than
 ; a second copy of the same contract.
-(import x/core/doors tok-read-str buf-tok char->int int->char)
+(import x/core/doors tok-read-str buf-tok char->int int->char str-byte-ref)
 ; %buffer-len / %buffer-unread / %score-set are globals from
 ; lib/x/reader/intrinsics.x; the token accessor is not, and every module that
 ; wants it fetches it the same way (num/bigint.x, num/complex.x).
@@ -167,10 +167,14 @@
 ; met, or nil for a group that ran out at EOF.  The lexer only records it; the
 ; parser is what judges a missing or mismatched closer (python/parse.x).
 (def mk-tok-group   (fn (_ open elems closer) (list (lit tok-group) open elems closer)))
-; An indented run, already nested by the reader: (tok-block (tok ...)).
-(def mk-tok-block   (fn (_ elems) (list (lit tok-block) elems)))
-; A newline carries the column of the line it opens.
-(def mk-tok-newline (fn (_) (list (lit tok-newline))))
+; An indented run, already nested by the reader: (tok-block (tok ...) LINE
+; NEXT) -- LINE the one its first statement is on, NEXT the one the statement
+; after the block is on, which no newline token precedes (the newline that
+; closed the block is the block's end), or nil at the end of the input.
+(def mk-tok-block   (fn (_ elems line next) (list (lit tok-block) elems line next)))
+; A newline carries the number of the line it opens, for a traceback, or nil
+; inside brackets, where the newline is only whitespace.
+(def mk-tok-newline (fn (_ line) (list (lit tok-newline) line)))
 
 ; --- Character classes -------------------------------------------------------
 ; Nested if, never `or`: operatives expand per evaluation and these run per
@@ -311,6 +315,40 @@
 ; Indent chose.
 (def %py-ind-error (pair () ()))
 
+; --- line numbers -------------------------------------------------------------
+;
+; WHICH LINE A NEWLINE OPENS, for the traceback (python/runtime-flow.x).  A
+; read handler sees its token's buffer: the address its token starts at (the
+; first word of the buffer's first cell) -- for PY-NL, the newline itself --
+; and the address the input ends at (the second word of its second cell,
+; x-engine-c buffer.h, x_bufferwrite).  The reader reads a COPY of the source
+; (x-prim/buffer.c, token-read-string), so neither address is the string's,
+; but their difference is the bytes left: the newline's offset in the source
+; is the source's length less that.  Its line is one more than the newlines
+; before it, counted forward from the last newline asked about -- one pass over
+; the source in all.  A blank or comment-only line never reaches a handler
+; (PY-BLANK), which is why the count is of the source and not of the tokens.
+;   %py-ln-src    (SOURCE)
+;   %py-ln-count  (OFFSET-COUNTED-TO . NEWLINES-BEFORE-IT)
+(def %py-ln-src (pair () ()))
+(def %py-ln-count (pair 0 0))
+(def %py-ln-scan
+  (fn (self s i end n)
+    (if (> i end) n
+      (self s (+ i 1) end (if (= (char->int (str-byte-ref s i)) 10) (+ n 1) n)))))
+(def %py-buf-end (fn (_ buffer) (%ptr-ref-word (%obj->ptr (rest buffer)) %data-off-1)))
+(def %py-line-of-buf
+  (fn (_ buffer)
+    (let ((src (first (first %py-ln-src))) (c (first %py-ln-count)))
+      (let ((at (- (Str8 length src) (- (%py-buf-end buffer) (%cell-int buffer)))))
+        (if (if (< at (first c)) #t (>= at (Str8 length src)))
+          ()
+          (let ((n (%py-ln-scan src (first c) at (rest c))))
+            (%seq (%set-first! %py-ln-count (pair (+ at 1) n))
+              (+ n 1))))))))
+; the line the newline that closed blocks opened: the line after them
+(def %py-dedent-line (pair () ()))
+
 (def %py-ind-reset!
   (fn (_)
     (%set-first! %py-ind (Indent make))
@@ -339,17 +377,18 @@
     (self (rest evs) (if (eq? (first evs) (lit close)) (+ n 1) n)))))
 
 (def %py-block-of
-  (fn (_ buffer)
+  (fn (_ buffer line)
     (def go
       (fn (self acc)
         (let ((v (%py-token-read buffer)))
           (match
-            ((null? v) (mk-tok-block (python-reverse acc)))
-            ((eq? v (lit %py-dedent)) (mk-tok-block (python-reverse acc)))
+            ((null? v) (mk-tok-block (python-reverse acc) line ()))
+            ((eq? v (lit %py-dedent))
+              (mk-tok-block (python-reverse acc) line (first %py-dedent-line)))
             ; a nested block may have closed more levels than its own
             ((> (first %py-owed) 0)
               (%seq (%set-first! %py-owed (- (first %py-owed) 1))
-                (mk-tok-block (python-reverse (pair v acc)))))
+                (mk-tok-block (python-reverse (pair v acc)) line (first %py-dedent-line))))
             (#t (self (pair v acc)))))))
     (go ())))
 
@@ -411,21 +450,24 @@
         (def buffer (first args))
         (if (> (first %py-in-group) 0)
           ; inside brackets: whitespace, and the group reader drops it
-          (mk-tok-newline)
+          (mk-tok-newline ())
           (do
+        (def line (%py-line-of-buf buffer))
         (def col (first (%py-indent-scan (buf-tok buffer) 1 8)))
         (def evs
           (guard (_ (%seq (%py-note-ind-error!) (list (lit same))))
             ((first %py-ind) feed col)))
         (if (%py-evs-opens? evs)
-          (%py-block-of buffer)
+          (%py-block-of buffer line)
           (let ((n (%py-evs-closes evs 0)))
             (if (> n 0)
-              (%seq (%set-first! %py-owed (- n 1)) (lit %py-dedent))
+              (%seq (%set-first! %py-owed (- n 1))
+                (%seq (%set-first! %py-dedent-line line) (lit %py-dedent)))
               ; NO COLUMN ON THE TOKEN.  It carried one for the pass that used
               ; to consume it; the block structure now says everything the
-              ; column said, so emitting it would be dead data.
-              (mk-tok-newline))))))))))
+              ; column said, so emitting it would be dead data.  The line is
+              ; not: the parser numbers each statement with it.
+              (mk-tok-newline line))))))))))
 (%py-tok-type! "PY-NL" %py-t-nl)
 
 ; --- PY-KEYWORD: the keywords, decided by the analyser ------------------------
@@ -1915,8 +1957,13 @@
     (%py-ind-reset!)
     (%set-first! %py-lex-error ())
     (%set-first! %py-number-end -1)
-    (let ((toks (tok-read-str (first %py-active-raw)
-                  (Str8 append (%py-source-lf input) " "))))
+    (let ((src (Str8 append (%py-source-lf input) " "))
+          (was-src (first %py-ln-src)) (was-count (first %py-ln-count)))
+     (%set-first! %py-ln-src (list src))
+     (%set-first! %py-ln-count (pair 0 0))
+     (let ((toks (tok-read-str (first %py-active-raw) src)))
+      (%set-first! %py-ln-src was-src)
+      (%set-first! %py-ln-count was-count)
       ; Reading is over and x is driving again, so this is where a parked
       ; error can finally be raised: an indentation error, or a refusal a read
       ; handler recorded (%py-lex-refuse!).
@@ -1926,7 +1973,7 @@
             "unindent does not match any outer indentation level" ()))
         ((not (null? (first %py-lex-error)))
           (Err raise (lit syntax) (first %py-lex-error) ()))
-        (#t toks)))))
+        (#t toks))))))
 
 ; --- PY-OPEN / PY-CLOSE: brackets are READ AS GROUPS -------------------------
 ;
