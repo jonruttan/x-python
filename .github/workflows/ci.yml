@@ -7,7 +7,7 @@ name: CI
 # own CI is the last generation with a fresh coat of paint.
 #
 # TWO RELEASES, DELIBERATELY.  A bundle names the x-lang it was built against
-# in lang.xon's (requires-release ...); the matrix runs that one AND
+# in bundle.xon's (requires-release ...); the matrix runs that one AND
 # whatever main is now.  The pairing row is what turns "the platform moved
 # underneath us" from something discovered years later into a red build on the
 # day it happens.  The `main` leg is allowed to fail -- it is an early warning
@@ -34,10 +34,10 @@ jobs:
         # BOTH LEGS, AND THEY ANSWER DIFFERENT QUESTIONS.  The pinned leg
         # proves this bundle still runs on the platform it DECLARES; the main
         # leg is an early warning that x-lang has moved underneath it, and is
-        # allowed to fail.  Keep the pinned row equal to lang.xon's
+        # allowed to fail.  Keep the pinned row equal to bundle.xon's
         # (requires-release ...) VERBATIM -- they are one fact, and the check
         # below fails the build if they drift.
-        x-lang: ['v0.59.0', 'main']
+        x-lang: ['v0.60.0', 'main']
         # FOUR SHARDS, BECAUSE THE BOOT IS THE COST.  Each spec file boots the
         # whole tower in its own process (tests/spec-runner.sh says why), and
         # measured on these runners that boot is ~26s of a ~38s file: a
@@ -65,9 +65,9 @@ jobs:
       - name: Check the declared release against the checkout
         if: matrix.x-lang != 'main'
         run: |
-          declared=$(sed -n 's/^(requires-release "\(.*\)")$/\1/p' lang.xon)
+          declared=$(sed -n 's/^(requires-release "\(.*\)")$/\1/p' bundle.xon)
           if [ "$declared" != "${{ matrix.x-lang }}" ]; then
-            echo "lang.xon declares $declared, matrix leg is ${{ matrix.x-lang }}" >&2
+            echo "bundle.xon declares $declared, matrix leg is ${{ matrix.x-lang }}" >&2
             echo "update one or the other -- they are the same fact" >&2
             exit 1
           fi
@@ -86,8 +86,8 @@ jobs:
 
   boot:
     # The specs load the bundle on the full-tower amalgam, which binds more
-    # names than the dialect lang.xon declares.  This job boots the way a user
-    # does -- the wrapper, the declared dialect, run.x -- and runs a program,
+    # names than the dialect bundle.xon declares.  This job boots the way a user
+    # does -- the wrapper, the declared dialect, python/run -- and runs a program,
     # so a platform name the bundle reads and never binds stops it here.  Both
     # legs, for the reasons the specs job gives, and main may fail likewise.
     name: boots under -l python @ x-lang ${{ matrix.x-lang }}
@@ -96,7 +96,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        x-lang: ['v0.59.0', 'main']
+        x-lang: ['v0.60.0', 'main']
     steps:
       - uses: actions/checkout@v4
       - name: Check out x-lang
@@ -109,10 +109,10 @@ jobs:
       # rewires every caller.  The kit's scanner reads text and needs no
       # build, and leaves out the .x-lang checkout beside the sources.  An
       # x-lang older than x-lang#1023 does not ship it, so the declared leg
-      # runs it once lang.xon names a release that does.
+      # runs it once bundle.xon names a release that does.
       - name: One meaning per global name
         run: |
-          kit="$GITHUB_WORKSPACE/.x-lang/tools/lang-kit"
+          kit="$GITHUB_WORKSPACE/.x-lang/tools/bundle-kit"
           if [ -f "$kit/dup-defs.sh" ]; then
             BUNDLE="$GITHUB_WORKSPACE" sh "$kit/dup-defs.sh"
           else
@@ -130,7 +130,7 @@ jobs:
         run: X="$PWD/.x-lang/x.sh" /usr/bin/time -v sh tests/boot.sh
       # docs/card.md (x-lang docs/contributing.md, "The card").  The card runs
       # from the bundle's root and a checkout's wrapper runs only from its own,
-      # so the platform is installed first; X_LANG_DIR is the directory that
+      # so the platform is installed first; X_BUNDLE_DIR is the directory that
       # holds this bundle's checkout.  The check itself is x-lang main's on both
       # legs: the format is the platform's, and the bundle does not move its
       # release to follow it.
@@ -140,12 +140,12 @@ jobs:
           repository: jonruttan/x-lang
           ref: main
           path: .x-kit
-          sparse-checkout: tools/lang-kit
+          sparse-checkout: tools/bundle-kit
       - name: Check the card
         run: |
           make -C .x-lang install PREFIX="$RUNNER_TEMP/x"
-          X_LANG_DIR="$PWD/.." BUNDLE=. X="$RUNNER_TEMP/x/bin/x" \
-            sh .x-kit/tools/lang-kit/card.sh
+          X_BUNDLE_DIR="$PWD/.." BUNDLE=. X="$RUNNER_TEMP/x/bin/x" \
+            sh .x-kit/tools/bundle-kit/card.sh
 
   if-ladders:
     # `match` IS THE PRIMITIVE, and a decision with four or more arms written
@@ -178,8 +178,8 @@ jobs:
     # THE RULE THAT ACTUALLY KILLED THE LAST GENERATION, as a gate -- and it
     # is stricter now than the contract requires.  The contract exempts an app
     # ENTRY, because an in-tree app self-boots.  A bundle does not: x.sh boots
-    # the dialect lang.xon declares and arms this root before run.x is read, so
-    # ZERO files here need a root-relative literal, run.x included.  A bundle
+    # the dialect bundle.xon declares and arms this root before python/run is imported, so
+    # ZERO files here need a root-relative literal, the entry included.  A bundle
     # that grows one is nailed to the directory it was written in, and the
     # symptom does not appear until someone moves it -- which is to say, never
     # in the repository where it was developed.
@@ -187,15 +187,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: No path literals outside run.x
+      - name: No path literals anywhere
         run: |
-          # Match the entry however grep spells its path (./run.x or run.x),
           # and ignore COMMENTS -- a file may legitimately quote the literal it
           # no longer uses, which is exactly what a port's notes do.
           hits=$(grep -rn '(include "[a-zA-Z]' --include='*.x' . \
                  | grep -Ev ':[0-9]+:[[:space:]]*;' || true)
           if [ -n "$hits" ]; then
-            echo "root-relative include (a bundle needs none, not even in run.x):" >&2
+            echo "root-relative include (a bundle needs none, not even in its entry):" >&2
             echo "$hits" >&2
             exit 1
           fi

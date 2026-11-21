@@ -3,7 +3,7 @@
 #
 #   sh tools/check/if-ladders.sh
 #
-# Reports every MAXIMAL nested-if ladder of four arms or more in python/*.x,
+# Reports every MAXIMAL nested-if ladder of four arms or more in lib/python/*.x,
 # aggregated per function as "FILE NAME COUNT LONGEST", and diffs that against
 # tools/contract/if-ladders.txt in BOTH directions:
 #
@@ -21,7 +21,7 @@
 # checker itself is x -- an if ladder is STRUCTURAL, and reading the file
 # as s-expressions is the only way to see one.  A grep would count parens.
 #
-# NOT A GLOB, because a glob only sees one directory deep.  python/ is flat
+# NOT A GLOB, because a glob only sees one directory deep.  lib/python/ is flat
 # today and this changes nothing here; it is the shape the sibling bundles
 # need -- x-r7rs keeps seven of its ten modules under r7rs/x/, where
 # `r7rs/*.x` left most of the bundle unchecked -- and the point of writing it
@@ -37,7 +37,7 @@ command -v "$X" >/dev/null 2>&1 || {
 	exit 1
 }
 
-MODULES="$BUNDLE/python"
+MODULES="$BUNDLE/lib/python"
 MANIFEST="$BUNDLE/tools/contract/if-ladders.txt"
 TMP="${TMPDIR:-/tmp}/if-ladders.$$"
 trap 'rm -f "$TMP.files" "$TMP.raw" "$TMP.want" "$TMP.have"' EXIT
