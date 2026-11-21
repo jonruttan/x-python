@@ -25,11 +25,13 @@
 
 (module python/struct)
 (import python/core
+  python-class-name python-type-of
   ps->x python-barr-is python-barr-set! python-boolnorm python-byte-len python-bytes-is
   python-bytes-list python-bytes-new python-char-code python-drop python-dunder python-int-encode
   python-int-invert python-int-join python-length python-list-cat python-mfloat python-module-new
   python-num? python-obj-is python-opt python-reverse python-str-cps python-str-is python-sweep!
   python-tuple-of-list)
+(import python/memoryview python-buffer-bytes python-buffer?)
 (import python/array
   python-arr-find python-ieee-bits python-ieee-double python-ieee-half python-ieee-one
   python-ieee-sign python-ieee-single python-ieee-top python-ieee-value python-take-n)
@@ -258,9 +260,16 @@
                         (self (rest items) align order (first r)
                           (+ (+ off skip) (* cnt w)) (rest r))))))))))))))
 
+; The bytes of any buffer -- bytes, a bytearray, an array, or a memoryview of
+; one -- as unpack and unpack_from read them (python/memoryview.x).  Anything
+; else is CPython's TypeError, not struct.error.
 (def %py-st-bytes-of
   (fn (_ v)
-    (if (python-bytes-is v) (python-bytes-list v) (%py-st-bad! "a buffer is required"))))
+    (if (python-buffer? v)
+      (python-buffer-bytes v)
+      (Err raise (lit type)
+        (Str8 append "a bytes-like object is required, not '"
+          (Str8 append (python-class-name (python-type-of v)) "'")) ()))))
 
 (def %py-st-unpack
   (fn (_ fmt buf)
