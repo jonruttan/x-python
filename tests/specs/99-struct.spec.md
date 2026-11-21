@@ -91,3 +91,19 @@ round trip e [1.099609375, 65504.0, 0.00012302398681640625, -3.140625]
 >d b'\x80\x00\x00\x00\x00\x00\x00\x00' -0.0 -1.0
 [-0.0, 0.0] [-1.0, 1.0]
 ```
+
+### unpack and unpack_from read any buffer: a bytearray, an array, a memoryview
+
+```python
+(python-run "import struct\nfrom array import array\nbuf = b'0123456789'\nprint(struct.unpack('<h', memoryview(buf)[1:3]))\nprint(struct.unpack('<h', bytearray(b'12')))\nprint(struct.unpack_from('<i', bytearray(buf), 2))\nprint(struct.unpack_from('<i', memoryview(buf), 3))\nprint(struct.unpack('<H', array('B', [1, 2])))\nprint(struct.unpack('<h', memoryview(bytearray(b'ab'))))\ntry:\n    struct.unpack('<h', 'ab')\nexcept TypeError as e:\n    print('TypeError', e)")
+```
+---
+```output
+(12849,)
+(12849,)
+(892613426,)
+(909456435,)
+(513,)
+(25185,)
+TypeError a bytes-like object is required, not 'str'
+```

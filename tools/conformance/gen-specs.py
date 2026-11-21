@@ -39,6 +39,13 @@
 #                     file readable and one awk batch sane.
 #   empty-output      the program prints nothing, so the assertion has no
 #                     content to be wrong about.
+#
+# WHAT IT ADAPTS, AND WHY.  A few programs ask a question whose right answer
+# depends on WHICH implementation runs them, and accept only CPython's and
+# MicroPython's.  x-python answering with its own name is conforming, not a
+# gap.  ADAPTED widens such a check to take x-python's answer too: the edit is
+# to the case's source only, CPython still answers it as it did (so its run is
+# still the oracle), and each one is listed in SKIPPED.md with its reason.
 
 import os
 import subprocess
@@ -53,6 +60,15 @@ import sys
 MAX_SRC = 20000       # chars of Python source in one x-lang string literal
 MAX_OUT_LINES = 500   # lines of expected output in one case
 MAX_OUT_CHARS = 40000
+
+# suite/name -> [(source text, replacement, reason)]; each text must occur
+ADAPTED = {
+    "basics/sys1.py": [
+        ("sys.implementation.name in ('cpython', 'micropython')",
+         "sys.implementation.name in ('cpython', 'micropython', 'x-python')",
+         "sys.implementation.name is the running implementation's own"),
+    ],
+}
 
 REASONS = [
     "cpython-refused", "nondeterministic", "prompt-prefix",
@@ -153,6 +169,10 @@ def main():
             except UnicodeDecodeError:
                 skipped.append((rel, "oversize"))
                 continue
+            for was, now, why in ADAPTED.get(rel, []):
+                if was not in src:
+                    sys.exit("x-python: ADAPTED text not in %s: %r" % (rel, was))
+                src = src.replace(was, now)
             # PEP 750 template strings are a 3.14 feature outside this
             # bundle's scope, and one of them loops the parser to the
             # allocation ceiling, taking its batch-mates with it.
@@ -255,6 +275,12 @@ def main():
             for n in sorted(hits):
                 fh.write("- `%s`\n" % n)
             fh.write("\n")
+        fh.write("## adapted (%d)\n\n" % len(ADAPTED))
+        fh.write("Run, not skipped: the check widened to take x-python's own answer.\n\n")
+        for n in sorted(ADAPTED):
+            for _, _, why in ADAPTED[n]:
+                fh.write("- `%s`: %s\n" % (n, why))
+        fh.write("\n")
 
     # TOTALS.tsv is what turns the runner's wall of failures into a table.
     # The runner reports one global count and prints "FAIL: <unit>: <case>" per
