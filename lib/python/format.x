@@ -1,0 +1,588 @@
+; # x-python -- Python on x-lang
+;
+; ## lib/python/format.x -- the % string-formatting operator
+;
+; @description "%.2e" % x and friends: the printf-family conversions, built
+;   on the float repr's exact-digit machinery so every rendering is
+;   bit-faithful to the value rather than to a lossy intermediate.
+; @author [Jon Ruttan](jonruttan@gmail.com)
+; @copyright 2026 Jon Ruttan
+; @license MIT No Attribution (MIT-0)
+;
+;     ., .,
+;     {O,O}
+;     (   )
+;      " "
+;
+; THE DIGITS ARE EXACT, SO THE ROUNDING IS HONEST.  A float is m*2^e; the
+; repr machinery in runtime.x (%py-f-exact) renders every decimal digit of
+; that integer product, so %.5e, %.40f and %.0g are all the same operation --
+; keep k digits of a fully known expansion, round half to even against a
+; fully known tail -- rather than printf reinterpreting a lossy double.
+; This is what makes the MicroPython corpus's nastiest cases (digit-value-10
+; rendering as ':', %.12e of 1e-r rendering as 0.999...e-r) structurally
+; impossible here instead of carefully avoided.
+;
+; ONE NAMESPACE NOTE: this file leans on runtime.x's globals (python-str,
+; %py-f-round, %py-f-exact ...) resolved at CALL time, so it loads before
+; them without ceremony; nothing here runs until a program formats.
+
+; --- Spec grammar ------------------------------------------------------------
+; %[flags][width][.precision]conversion, with flags in {- + space 0 #}.
+; No %(name)s mapping form and no * width/precision: both refuse loudly
+; rather than mis-consume arguments.
+
+(module python/core)
+(def %py-fmt-code (fn (_ s i) (python-char-code (%str-ref s i))))
+(def %py-fmt-digit? (fn (_ c) (if (>= c 48) (<= c 57) #f)))
+
+(def %py-fmt-zeros
+  (fn (self k) (if (<= k 0) "" (Str8 append "0" (self (- k 1))))))
+(def %py-fmt-spaces
+  (fn (self k) (if (<= k 0) "" (Str8 append " " (self (- k 1))))))
+
+; --- Padding and signs -------------------------------------------------------
+; The sign travels separately from the magnitude so zero-padding lands
+; BETWEEN them: %08.2f of -1.5 is -0001.50, never 000-1.50.
+(def %py-fmt-pad
+  (fn (_ sgn body width left zero)
+    (def total (+ (Str8 length sgn) (Str8 length body)))
+    (match
+      ((>= total width) (Str8 append sgn body))
+      (left
+        (Str8 append (Str8 append sgn body) (%py-fmt-spaces (- width total))))
+      (zero
+        (Str8 append sgn
+          (Str8 append (%py-fmt-zeros (- width total)) body)))
+      (#t
+        (Str8 append (%py-fmt-spaces (- width total))
+          (Str8 append sgn body))))))
+
+(def %py-fmt-sign
+  (fn (_ neg plus space)
+    (match
+      (neg "-")
+      (plus "+")
+      (space " ")
+      (#t ""))))
+
+; --- Integer magnitudes ------------------------------------------------------
+; The decimal spelling of the integer part of any numeric operand: ints and
+; bigints by the platform's printer, whose bigints are base-10^9 limbs and so
+; print without a division, bools as 1/0, floats truncated as int() truncates.
+
+(def %py-fmt-int-mag
+  (fn (_ v)
+    ; -> (pair neg? magnitude-string)
+    (match
+      ((eq? v #t) (pair #f "1"))
+      ((eq? v #f) (pair #f "0"))
+      ; toward zero as int() takes it, so %d of -0.5 is 0 and not -0
+      ((%py-float-is v) (%py-fmt-int-mag (%py-mwhole v (lit trunc))))
+      (#t
+        (let ((s (python-str v)))
+          (if (Str8 =? (Str8 sub 0 1 s) "-")
+            (pair #t (Str8 sub 1 (- (Str8 length s) 1) s))
+            (pair #f s)))))))
+
+; Base conversion for %o %x %X and bin/hex/oct.  The digits are the platform's
+; own (%number->str with a radix).  A bigint's limbs are decimal, so it gives
+; up its low chunk to a division by the largest base^k under the limb base --
+; inside one limb, a division in one pass -- until what is left is a machine
+; int, the top chunk.  A chunk below the top is exactly k digits: those of
+; base^k + r, less the leading 1.
+;   The limb base is bigint's, sized to the word: 10^9 on an 8-byte word, 10^4
+; on a 4-byte one.  The bound is tested by division, never by the product:
+; 16^8 is 2^32, which a 4-byte word multiplies to zero, and a zero never
+; reaches a bound.
+(def %py-fmt-chunk-of
+  (fn (_ base)
+    ; (pow . k)
+    (def go
+      (fn (self p k)
+        (if (> p (/ (- bigint-base 1) base)) (pair p k) (self (* p base) (+ k 1)))))
+    (go base 1)))
+; Made at first use, not at load: bigint-base is runtime-num.x's import into
+; this module, bound by the time a program formats and not before, and the
+; load order stays what the sweeps were placed for.
+(def %py-fmt-chunk-2 ())
+(def %py-fmt-chunk-8 ())
+(def %py-fmt-chunk-16 ())
+(def %py-fmt-chunks!
+  (fn (_)
+    (if (null? %py-fmt-chunk-16)
+      (do (set! %py-fmt-chunk-2 (%py-fmt-chunk-of 2))
+          (set! %py-fmt-chunk-8 (%py-fmt-chunk-of 8))
+          (set! %py-fmt-chunk-16 (%py-fmt-chunk-of 16)))
+      ())))
+(def %py-fmt-base
+  (fn (_ v0 base upper)
+    (def v (python-boolnorm v0))
+    (%py-fmt-chunks!)
+    (def ck
+      (match
+        ((= base 2) %py-fmt-chunk-2)
+        ((= base 8) %py-fmt-chunk-8)
+        (#t %py-fmt-chunk-16)))
+    (def go
+      (fn (self n acc)
+        (if (Num int? n)
+          (Str8 append (%number->str n base) acc)
+          (let ((qr (Num divmod n (first ck))))
+            (let ((d (%number->str (+ (first ck) (first (rest qr))) base)))
+              (self (first qr) (Str8 append (Str8 sub 1 (rest ck) d) acc)))))))
+    (if (%py-float-is v)
+      (Err raise (lit type) "%x format: an integer is required, not float" ())
+      (let ((neg (< v 0)))
+        (let ((s (go (if neg (- 0 v) v) "")))
+          (pair neg (if upper (Str8 upcase s) s)))))))
+
+; --- Float digit machinery ---------------------------------------------------
+; Everything below speaks (D x10): every digit, and the power of ten of the
+; first one, from %py-f-exact.  Rounding to k POSITIONS of a digit string is
+; %py-f-round (half to even, exact tail); a carry lengthens the string and
+; the caller reads the length.
+
+; Fixed-point: value rounded at 10^-prec, as (pair int-part frac-part).
+(def %py-fmt-fixed
+  (fn (_ D x10 prec)
+    (def keep (+ (+ x10 1) prec))
+    ; Pad leading zeros so the round position is always inside the string.
+    (def z (if (<= keep 0) (+ 1 (- 0 keep)) 0))
+    (def Dp (Str8 append (%py-fmt-zeros z) D))
+    (def k (+ keep z))
+    (def R0 (%py-f-round Dp k))
+    ; Right-pad to exactly k digits (an exact short expansion is zeros).
+    (def R
+      (if (< (Str8 length R0) k)
+        (Str8 append R0 (%py-fmt-zeros (- k (Str8 length R0))))
+        R0))
+    (def total (Str8 length R))
+    (def intd (- total prec))
+    (if (> intd 0)
+      (pair (Str8 sub 0 intd R) (Str8 sub intd (- total intd) R))
+      (pair "0" (Str8 append (%py-fmt-zeros (- 0 intd)) R)))))
+
+; Scientific: prec digits after the point -> (list mant-int mant-frac exp10).
+(def %py-fmt-sci
+  (fn (_ D x10 prec)
+    (def sig (+ prec 1))
+    (def R0 (%py-f-round D sig))
+    (def kept (if (< (Str8 length D) sig) (Str8 length D) sig))
+    (def xa (+ x10 (- (Str8 length R0) kept)))
+    (def R
+      (if (< (Str8 length R0) sig)
+        (Str8 append R0 (%py-fmt-zeros (- sig (Str8 length R0))))
+        (if (> (Str8 length R0) sig) (Str8 sub 0 sig R0) R0)))
+    (list (Str8 sub 0 1 R) (Str8 sub 1 (- (Str8 length R) 1) R) xa)))
+
+(def %py-fmt-exp-str
+  (fn (_ x upper)
+    (def mag (if (< x 0) (- 0 x) x))
+    (def ds (%py-write-to-str mag))
+    (Str8 append (if upper "E" "e")
+      (Str8 append (if (< x 0) "-" "+")
+        (if (< mag 10) (Str8 append "0" ds) ds)))))
+
+(def %py-fmt-strip0
+  (fn (self s)
+    (def L (Str8 length s))
+    (if (= L 0)
+      s
+      (if (= (%py-fmt-code s (- L 1)) 48)
+        (self (Str8 sub 0 (- L 1) s))
+        s))))
+
+(python-sweep!)
+; --- The conversions ---------------------------------------------------------
+; Each returns the magnitude body; the caller adds sign and padding.
+; Non-finite floats short-circuit before any of these.
+
+(def %py-fmt-f
+  (fn (_ D x10 prec)
+    (let ((p (%py-fmt-fixed D x10 prec)))
+      (if (= prec 0)
+        (first p)
+        (Str8 append (first p) (Str8 append "." (rest p)))))))
+
+(def %py-fmt-e
+  (fn (_ D x10 prec upper)
+    (let ((s (%py-fmt-sci D x10 prec)))
+      (Str8 append
+        (if (= prec 0)
+          (first s)
+          (Str8 append (first s) (Str8 append "." (first (rest s)))))
+        (%py-fmt-exp-str (first (rest (rest s))) upper)))))
+
+(def %py-fmt-g
+  (fn (_ D x10 prec0 upper alt)
+    (def prec (if (= prec0 0) 1 prec0))
+    ; Round to prec significant digits FIRST; the fixed/scientific decision
+    ; reads the rounded exponent (99.9 at %.2g is 1e+02, not 100).
+    (def s (%py-fmt-sci D x10 (- prec 1)))
+    (def xa (first (rest (rest s))))
+    (def digits (Str8 append (first s) (first (rest s))))
+    (if (if (>= xa (- 0 4)) (< xa prec) #f)
+      ; fixed, prec-1-xa places after the point, trailing zeros stripped
+      (do
+        (def intd (+ xa 1))
+        (def ip (if (> intd 0) (Str8 sub 0 intd digits) "0"))
+        (def fp0
+          (if (> intd 0)
+            (Str8 sub intd (- (Str8 length digits) intd) digits)
+            (Str8 append (%py-fmt-zeros (- 0 intd)) digits)))
+        (def fp (if alt fp0 (%py-fmt-strip0 fp0)))
+        (if (= (Str8 length fp) 0)
+          ip
+          (Str8 append ip (Str8 append "." fp))))
+      ; scientific, trailing zeros stripped from the mantissa
+      (do
+        (def fp (if alt (first (rest s)) (%py-fmt-strip0 (first (rest s)))))
+        (Str8 append
+          (if (= (Str8 length fp) 0)
+            (first s)
+            (Str8 append (first s) (Str8 append "." fp)))
+          (%py-fmt-exp-str xa upper))))))
+
+; A numeric operand for the float conversions, through the tower so 10**val
+; formats the same as its float twin.
+; %d on an object asks __int__, as int() would
+(def %py-fmt-int-of
+  (fn (_ v)
+    (if (python-obj-is v)
+      (let ((m (python-dunder v "__int__")))
+        (let ((r (if (null? m) () (python-boolnorm (m)))))
+          ; the answer must be an int; CPython names the object's class
+          ; either way
+          (if (eq? (python-num-py-type r) (lit int))
+            r
+            (Err raise (lit type)
+              (Str8 append "%d format: a real number is required, not "
+                (python-class-name (python-type-of v)))
+              ()))))
+      v)))
+(def %py-fmt-float-of
+  (fn (_ v)
+    (match
+      ((%py-float-is v) v)
+      ((python-obj-is v) (%py-obj-float v))
+      ((python-num? v) (* 1.0 (python-boolnorm v)))
+      (#t
+        (Err raise (lit type)
+          (Str8 append "must be real number, not " (python-class-name (python-type-of v)))
+          ())))))
+
+; --- The operator ------------------------------------------------------------
+
+(def %py-fmt-take!
+  (fn (_ cell)
+    (if (null? (first cell))
+      (Err raise (lit type) "not enough arguments for format string" ())
+      (let ((v (first (first cell))))
+        (%set-first! cell (rest (first cell)))
+        v))))
+
+; A BYTES TEMPLATE'S TEXT CONVERSIONS, each as the platform string of the bytes
+; it inserts.  s and b take a buffer's own bytes, or what __bytes__ answers, and
+; refuse a str; c takes a byte, as an int or a one-byte bytes; r and a are the
+; ascii() of the value, which is its repr with every character past ASCII
+; escaped.
+(def %py-fmt-bytes-text
+  (fn (_ conv v)
+    (match
+      ((if (= conv 114) #t (= conv 97)) (%py-ascii-of v))
+      ((= conv 99) (%py-fmt-bytes-char v))
+      ((python-buffer? v) (pb->str (python-buffer-bytes v)))
+      (#t
+        (let ((m (if (python-obj-is v) (python-dunder v "__bytes__") ())))
+          (if (null? m)
+            (Err raise (lit type)
+              (Str8 append
+                "%b requires a bytes-like object, or an object that implements __bytes__, not '"
+                (Str8 append (python-class-name (python-type-of v)) "'")) ())
+            (pb->str (python-bytes-list (m)))))))))
+
+(def %py-fmt-bytes-char
+  (fn (_ v)
+    (match
+      ((if (python-bytes-is v) (= (pb-len (python-bytes-list v)) 1) #f)
+        (pb->str (python-bytes-list v)))
+      ((eq? (python-num-py-type (python-boolnorm v)) (lit int))
+        (if (if (< v 0) #t (> v 255))
+          (Err raise (lit overflow) "%c arg not in range(256)" ())
+          (pb->str (list v))))
+      (#t
+        (Err raise (lit type)
+          (Str8 append "%c requires an integer in range(256) or a single byte, not "
+            (if (python-bytes-is v)
+              (Str8 append "a bytes object of length " (python-str (pb-len (python-bytes-list v))))
+              (python-class-name (python-type-of v)))) ())))))
+
+; ascii(v): the repr, with each character past ASCII written as the escape
+; Python's repr would use for an unprintable one -- \xhh, \uhhhh or \Uhhhhhhhh.
+(def %py-ascii-of
+  (fn (_ v) (ps->x (%py-ascii-cps (%ps-of-x (python-repr-of v)) ()))))
+(def %py-ascii-cps
+  (fn (self cps acc)
+    (if (null? cps)
+      (List reverse acc)
+      (self (rest cps)
+        (if (< (first cps) 128)
+          (pair (first cps) acc)
+          (%py-ascii-push (%py-ascii-escape (first cps)) acc))))))
+(def %py-ascii-push
+  (fn (self l acc) (if (null? l) acc (self (rest l) (pair (first l) acc)))))
+(def %py-ascii-escape
+  (fn (_ c)
+    (match
+      ((< c 256) (pair 92 (pair 120 (%py-ascii-hex c 2 ()))))
+      ((< c 65536) (pair 92 (pair 117 (%py-ascii-hex c 4 ()))))
+      (#t (pair 92 (pair 85 (%py-ascii-hex c 8 ())))))))
+; the low `k` hex digits of c, as code points, most significant first
+(def %py-ascii-hex
+  (fn (self c k acc)
+    (if (= k 0)
+      acc
+      (self (Num quotient c 16) (- k 1) (pair (%py-hex-code (% c 16)) acc)))))
+
+; The text conversions: s, r and c, and in a bytes template b and a too.
+(def %py-fmt-text?
+  (fn (_ conv bytes?)
+    (match
+      ((= conv 115) #t)
+      ((= conv 114) #t)
+      ((= conv 99) #t)
+      (bytes? (if (= conv 98) #t (= conv 97)))
+      (#t #f))))
+
+; One parsed conversion, fully rendered and padded.  A separate global
+; rather than a frame-local of %py-format: a closure sees only the frame
+; locals that exist when it is BUILT, so the walker below forward-declares
+; nothing it can define first.
+(def %py-fmt-one
+  (fn (_ conv v left plus space zero alt width prec bad bytes?)
+    ; s and r: text, precision truncates, zero pads with spaces; c is the
+    ; character of a code point, or a one-character string as itself.  A bytes
+    ; template also has b, which is its s, and a, which is its r.
+    (match
+      ((%py-fmt-text? conv bytes?)
+        (do
+          ; EVERYTHING HERE IS A PLATFORM STRING: this engine pads and measures
+          ; with Str8, so each branch hands back one of those rather than a str.
+          ; `str?` asks about the PLATFORM's strings, which a Python str is not
+          ; any more, so the test is python-str-is and the value crosses over.
+          ;
+          ; %c OF A ZERO therefore raises rather than answering "\x00": the
+          ; crossing refuses, because the rest of this pipeline is a C string.
+          ; Building a str with chr(0) and printing it is the way to emit one.
+          (def s0
+            (match
+              (bytes? (%py-fmt-bytes-text conv v))
+              ((= conv 99)
+                (if (python-str-is v)
+                  (if (= (%py-len v) 1) (ps->x (python-str-cps v))
+                    (Err raise (lit type) "%c requires an int or a unicode char, not a string of length other than 1" ()))
+                  (ps->x (python-str-cps (%py-fmt-char v)))))
+              (#t (if (= conv 115) (python-str v) (python-repr-of v)))))
+          (def s (if (if (>= prec 0) (> (Str8 length s0) prec) #f)
+            (Str8 sub 0 prec s0) s0))
+          (%py-fmt-pad "" s width left #f)))
+      ; d i u
+      ((if (= conv 100) #t (if (= conv 105) #t (= conv 117)))
+        (do
+          (def m (%py-fmt-int-mag (%py-fmt-int-of v)))
+          (def body
+            (if (if (>= prec 0) (< (Str8 length (rest m)) prec) #f)
+              (Str8 append (%py-fmt-zeros (- prec (Str8 length (rest m)))) (rest m))
+              (rest m)))
+          (%py-fmt-pad (%py-fmt-sign (first m) plus space)
+            body width left (if left #f zero))))
+      ; o x X
+      ((if (= conv 111) #t (if (= conv 120) #t (= conv 88)))
+        (do
+          (def b (if (= conv 111) 8 16))
+          (def m (%py-fmt-base v b (= conv 88)))
+          (def pfx
+            (if alt
+              (if (= conv 111) "0o" (if (= conv 88) "0X" "0x"))
+              ""))
+          (%py-fmt-pad (Str8 append (%py-fmt-sign (first m) plus space) pfx)
+            (rest m) width left (if left #f zero))))
+      ; e E f F g G
+      ((match
+         ((= conv 101) #t)
+         ((= conv 69) #t)
+         ((= conv 102) #t)
+         ((= conv 70) #t)
+         ((= conv 103) #t)
+         (#t (= conv 71)))
+        (do
+          (def upper
+            (if (= conv 69) #t (if (= conv 70) #t (= conv 71))))
+          (def p (if (>= prec 0) prec 6))
+          (def fv (%py-fmt-float-of v))
+          (def ex (%py-f-exact fv))
+          (def label (first ex))
+          (def neg (Str8 =? (first (rest ex)) "-"))
+          (if (not (eq? label (lit num)))
+            ; inf and nan zero-pad like any number under %-formatting
+            ; ('%06e' % inf is 000inf -- measured, not assumed); nan
+            ; never carries the value's sign, only a flag's
+            (do
+              (def body0 (if (eq? label (lit inf)) "inf" "nan"))
+              (def body (if upper (if (eq? label (lit inf)) "INF" "NAN") body0))
+              (%py-fmt-pad
+                (%py-fmt-sign (if (eq? label (lit nan)) #f neg) plus space)
+                body width left (if left #f zero)))
+            (do
+              (def D (first (rest (rest ex))))
+              (def x10 (first (rest (rest (rest ex)))))
+              (def body
+                (if (if (= conv 101) #t (= conv 69))
+                  (%py-fmt-e D x10 p upper)
+                  (if (if (= conv 102) #t (= conv 70))
+                    (%py-fmt-f D x10 p)
+                    (%py-fmt-g D x10 p upper alt))))
+              (%py-fmt-pad (%py-fmt-sign neg plus space)
+                body width left (if left #f zero))))))
+      (#t (bad)))))
+
+(python-sweep!)
+; The end of the run of ordinary characters starting at j: the next percent
+; sign, or the end of the template.  The walk below appends a run in one
+; piece, for the reason %py-fmt-run gives in python/runtime-str.x.
+; The byte comes through the primitives rather than %py-fmt-code: that is
+; an interpreted call, and this scan would pay one per character.
+(def %py-fmt-pct-run
+  (fn (self fmt n j)
+    (if (>= j n)
+      j
+      (if (= (python-char-code (%str-ref fmt j)) 37) j (self fmt n (+ j 1))))))
+
+; A BYTES TEMPLATE IS THE SAME ENGINE with one flag, given as a third argument:
+; its text arrives as the platform string of its bytes and leaves as one, so
+; only what a conversion inserts can differ, and %py-fmt-one says what does.
+(def %py-format
+  (fn (_ fmt arg . opt)
+    (def bytes? (not (null? opt)))
+    ; a tuple SUBCLASS spreads too: "%d %d" % namedtuple_instance takes its
+    ; fields as the arguments, which is what makes a namedtuple a tuple here
+    (def args
+      (let ((n (python-native-of arg)))
+        (if (python-tuple-is n) (python-tuple-elems n) (list arg))))
+    (def cell (pair args ()))
+    ; A DICT IS A MAPPING: %(key)s looks the key up, and the looked-up value
+    ; becomes the ONE positional argument left (CPython's own rule -- a %s
+    ; after a keyed spec is "not enough arguments"), and a mapping never
+    ; trips the not-all-converted check.
+    (def mapping (if (%py-dict-is arg) arg ()))
+    (def n (Str8 length fmt))
+    ; * takes the width or precision from the arguments
+    (def star!
+      (fn (_)
+        (let ((v (%py-fmt-take! cell)))
+          (if (eq? (python-num-py-type v) (lit int)) v
+            (Err raise (lit type) "* wants int" ())))))
+    (def spec-err
+      (fn (_ i)
+        (Err raise (lit value)
+          (Str8 append "unsupported format character '"
+            (Str8 append (if (< i n) (Str8 sub i 1 fmt) "") "'"))
+          ())))
+    ; DEFINE-BEFORE-USE, WITH A FORWARD CELL FOR THE MUTUAL RECURSION: a
+    ; closure sees only the frame locals that exist when it is built, so
+    ; the plain walker gets a cell the spec parser can hand back to --
+    ; the tokenizer's own idiom.
+    (def go ())
+    (def self-spec
+      (fn (_ j0 acc)
+        ; flags
+        (def flags
+          (fn (self j left plus space zero alt)
+            (let ((c (if (< j n) (%py-fmt-code fmt j) 0)))
+              (match
+                ((= c 45) (self (+ j 1) #t plus space zero alt))
+                ((= c 43) (self (+ j 1) left #t space zero alt))
+                ((= c 32) (self (+ j 1) left plus #t zero alt))
+                ((= c 48) (self (+ j 1) left plus space #t alt))
+                ((= c 35) (self (+ j 1) left plus space zero #t))
+                (#t (list j left plus space zero alt))))))
+        (def keyed
+          (if (if (< j0 n) (= (%py-fmt-code fmt j0) 40) #f)
+            (let ((close (Str8 index-of ")" (Str8 sub j0 (- n j0) fmt))))
+              (if (null? close)
+                (Err raise (lit value) "incomplete format key" ())
+                (pair (+ j0 close 1) (Str8 sub (+ j0 1) (- close 1) fmt))))
+            ()))
+        (if (null? keyed) ()
+          (if (null? mapping)
+            (Err raise (lit type) "format requires a mapping" ())
+            ; THE KEY CROSSES OVER BEFORE THE LOOKUP.  `%(foo)s` cuts the name
+            ; out of the template with Str8, and the mapping's keys are strs --
+            ; a platform string matches none of them, so `"%(foo)s" % {"foo":
+            ; "bar"}` raised KeyError about a key that is plainly there (and
+            ; said `"foo"`, with the platform string's double quotes, which is
+            ; the tell).
+            ; A bytes template's keys are bytes, as its mapping's are.
+            (%set-first! cell
+              (list
+                (%py-dget mapping
+                  (if bytes?
+                    (python-bytes-new (pb-of-str (rest keyed)))
+                    (python-str-of-x (rest keyed))))))))
+        (def fl (flags (if (null? keyed) j0 (first keyed)) #f #f #f #f #f))
+        (def j1 (first fl))
+        (def left (first (rest fl)))
+        (def plus (first (rest (rest fl))))
+        (def space (first (rest (rest (rest fl)))))
+        (def zero (first (rest (rest (rest (rest fl))))))
+        (def alt (first (rest (rest (rest (rest (rest fl)))))))
+        ; width
+        (def num
+          (fn (self j acc2)
+            (if (if (< j n) (%py-fmt-digit? (%py-fmt-code fmt j)) #f)
+              (self (+ j 1) (+ (* acc2 10) (- (%py-fmt-code fmt j) 48)))
+              (pair j acc2))))
+        (def w
+          (if (if (< j1 n) (= (%py-fmt-code fmt j1) 42) #f)
+            (pair (+ j1 1) (star!))
+            (num j1 0)))
+        (def j2 (first w))
+        (def width (rest w))
+        ; precision: a dot with no digits is precision 0
+        (def pr
+          (if (if (< j2 n) (= (%py-fmt-code fmt j2) 46) #f)
+            (if (if (< (+ j2 1) n) (= (%py-fmt-code fmt (+ j2 1)) 42) #f)
+              (pair (+ j2 2) (star!))
+              (num (+ j2 1) 0))
+            (pair j2 (- 0 1))))
+        (def j3 (first pr))
+        (def prec (rest pr))
+        (if (>= j3 n)
+          (Err raise (lit value) "incomplete format" ())
+          (do
+            (def conv (%py-fmt-code fmt j3))
+            (def out
+              ; %% consumes no argument
+              (if (= conv 37)
+                "%"
+                (%py-fmt-one conv (%py-fmt-take! cell)
+                  left plus space zero alt width prec
+                  (fn (_) (spec-err j3)) bytes?)))
+            (go (+ j3 1) (Str8 append acc out))))))
+    (set! go
+      (fn (_ i acc)
+        (if (>= i n)
+          acc
+          (let ((c (%py-fmt-code fmt i)))
+            (if (not (= c 37))
+              (let ((e (%py-fmt-pct-run fmt n (+ i 1))))
+                (go e (Str8 append acc (Str8 sub i (- e i) fmt))))
+              (if (>= (+ i 1) n)
+                (Err raise (lit value) "incomplete format" ())
+                (self-spec (+ i 1) acc)))))))
+    (let ((out (go 0 "")))
+      (if (if (null? (first cell)) #t (not (null? mapping)))
+        out
+        (Err raise (lit type)
+          "not all arguments converted during string formatting" ())))))

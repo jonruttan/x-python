@@ -4,7 +4,7 @@
 # MAXIMAL ladders of four arms or more it holds and LONGEST is the deepest.
 # `match` is the primitive for a decision with more than a couple of arms.
 #
-# The file was born with 67 rows and is now empty: every ladder in python/*.x
+# The file was born with 67 rows and is now empty: every ladder in lib/python/*.x
 # has become a match.  tools/check/if-ladders.sh fails on a new row, so this
 # emptiness is now the RULE rather than a target -- adding one back means
 # writing it here on purpose, and explaining why in review.
