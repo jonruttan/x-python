@@ -23,7 +23,7 @@ A module's first logical line is at column 0 and opens nothing.
 (%seq (write (python-lex "a\nb")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-newline) ('tok-name "b"))
+    (('tok-name "a") ('tok-newline 2) ('tok-name "b"))
 
 ## lines indentation
 
@@ -44,7 +44,7 @@ things.
 (%seq (write (python-lex "a\n  b")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-block (('tok-name "b"))))
+    (('tok-name "a") ('tok-block (('tok-name "b")) 2 ()))
 
 ### returning to the outer column closes it
 
@@ -52,7 +52,7 @@ things.
 (%seq (write (python-lex "a\n  b\nc")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-block (('tok-name "b"))) ('tok-name "c"))
+    (('tok-name "a") ('tok-block (('tok-name "b")) 2 3) ('tok-name "c"))
 
 ### end of input closes what is still open
 
@@ -62,7 +62,7 @@ A block left open at end of input is closed by a DEDENT, as CPython does.
 (%seq (write (python-lex "a\n  b")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-block (('tok-name "b"))))
+    (('tok-name "a") ('tok-block (('tok-name "b")) 2 ()))
 
 ### one dedent can close several levels
 
@@ -70,7 +70,7 @@ A block left open at end of input is closed by a DEDENT, as CPython does.
 (%seq (write (python-lex "a\n  b\n    c\nd")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-block (('tok-name "b") ('tok-block (('tok-name "c"))))) ('tok-name "d"))
+    (('tok-name "a") ('tok-block (('tok-name "b") ('tok-block (('tok-name "c")) 3 4)) 2 4) ('tok-name "d"))
 
 ## lines blank and comment
 
@@ -80,7 +80,7 @@ A block left open at end of input is closed by a DEDENT, as CPython does.
 (%seq (write (python-lex "a\n\nb")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-newline) ('tok-name "b"))
+    (('tok-name "a") ('tok-newline 3) ('tok-name "b"))
 
 ### a comment-only line is transparent
 
@@ -92,7 +92,7 @@ treats it.
 (%seq (write (python-lex "a\n# note\nb")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-newline) ('tok-name "b"))
+    (('tok-name "a") ('tok-newline 3) ('tok-name "b"))
 
 ### a blank line does not close a block
 
@@ -100,7 +100,7 @@ treats it.
 (%seq (write (python-lex "a\n  b\n\n  c")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-block (('tok-name "b") ('tok-newline) ('tok-name "c"))))
+    (('tok-name "a") ('tok-block (('tok-name "b") ('tok-newline 4) ('tok-name "c")) 2 ()))
 
 ### leading blank lines contribute a newline, and nothing else
 
@@ -114,7 +114,7 @@ what changed is the token stream, not the language.
 (%seq (write (python-lex "\n\na")) (newline))
 ```
 ---
-    (('tok-newline) ('tok-name "a"))
+    (('tok-newline 3) ('tok-name "a"))
 
 ## lines brackets
 
@@ -144,7 +144,7 @@ reaches the indenter.
 (%seq (write (python-lex "a = [\n      1,\n  2]\nb")) (newline))
 ```
 ---
-    (('tok-name "a") ('tok-op "=") ('tok-group "[" (('tok-number "1" 1) ('tok-op ",") ('tok-number "2" 1)) "]") ('tok-newline) ('tok-name "b"))
+    (('tok-name "a") ('tok-op "=") ('tok-group "[" (('tok-number "1" 1) ('tok-op ",") ('tok-number "2" 1)) "]") ('tok-newline 4) ('tok-name "b"))
 
 ### line structure resumes after the brackets close
 
@@ -152,7 +152,7 @@ reaches the indenter.
 (%seq (write (python-lex "f(\n1)\n  x")) (newline))
 ```
 ---
-    (('tok-name "f") ('tok-group "(" (('tok-number "1" 1)) ")") ('tok-block (('tok-name "x"))))
+    (('tok-name "f") ('tok-group "(" (('tok-number "1" 1)) ")") ('tok-block (('tok-name "x")) 3 ()))
 
 ## lines backslash
 
@@ -166,7 +166,7 @@ both before PY-NL could see them.
 (%seq (write (python-lex "x = 1 + \\\n    2\nif x and \\\n   y:\n    z = 3\nb")) (newline))
 ```
 ---
-    (('tok-name "x") ('tok-op "=") ('tok-number "1" 1) ('tok-op "+") ('tok-number "2" 1) ('tok-newline) ('tok-kw "if") ('tok-name "x") ('tok-kw "and") ('tok-name "y") ('tok-op ":") ('tok-block (('tok-name "z") ('tok-op "=") ('tok-number "3" 1))) ('tok-name "b"))
+    (('tok-name "x") ('tok-op "=") ('tok-number "1" 1) ('tok-op "+") ('tok-number "2" 1) ('tok-newline 3) ('tok-kw "if") ('tok-name "x") ('tok-kw "and") ('tok-name "y") ('tok-op ":") ('tok-block (('tok-name "z") ('tok-op "=") ('tok-number "3" 1)) 5 6) ('tok-name "b"))
 
 ### the joined lines run as one
 
@@ -204,7 +204,7 @@ and `(Indent make)`'s default is Python's answer.
 (%seq (write (python-lex "def f():\n    return 1\nf()")) (newline))
 ```
 ---
-    (('tok-kw "def") ('tok-name "f") ('tok-group "(" () ")") ('tok-op ":") ('tok-block (('tok-kw "return") ('tok-number "1" 1))) ('tok-name "f") ('tok-group "(" () ")"))
+    (('tok-kw "def") ('tok-name "f") ('tok-group "(" () ")") ('tok-op ":") ('tok-block (('tok-kw "return") ('tok-number "1" 1)) 2 3) ('tok-name "f") ('tok-group "(" () ")"))
 
 ## implicit line joining
 

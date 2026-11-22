@@ -24,6 +24,7 @@
 (import python/core
   python-byte-len python-bytes-is python-bytes-list python-char-code python-cls-SimpleNamespace
   python-dict-entries python-dict? python-exc-SystemExit python-implementation-version
+  python-exc-info python-exception-now
   python-instantiate python-length python-list-elems python-list-new python-list? python-module-new
   python-modules-now python-obj-attrs python-obj-is python-obj-new python-obj-set-attrs!
   python-path-now python-raise python-reverse python-set-elems python-set-is python-sig! python-str-cps
@@ -143,6 +144,10 @@
           (pair "stdin" (python-io-std 0 "<stdin>" #f))
           (pair "stdout" (python-io-std 1 "<stdout>" #t))
           (pair "stderr" (python-io-std 2 "<stderr>" #t))
+          ; the exception an except clause is handling, and its traceback
+          ; (python/runtime-flow.x, %py-exc-now)
+          (pair "exc_info" (fn (_) (python-exc-info)))
+          (pair "exception" (fn (_) (python-exception-now)))
           (pair "getsizeof"
             (python-sig! %py-getsizeof "getsizeof" (list "object" "default") 1 #f))
           (pair "exit"
