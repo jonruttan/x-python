@@ -80,7 +80,7 @@ SPEC_PATH="${SPEC_PATH:-$BUNDLE/tests/specs}"
 #
 # tools/dev/image-build.sh images a child base that loaded the harness and
 # keys the image on everything it depends on -- the harness, the platform's
-# lib/, its engine, and python/ (the KEY-PATH) -- so an edit to any of them
+# lib/, its engine, and lib/python/ (the KEY-PATH) -- so an edit to any of them
 # rewrites it (a few seconds) and a current one is skipped.  What makes this
 # possible here at all is the transient work in #42: a second base is its own
 # chain and holds words no image can name, so until %py-base and %py-sexp-base
@@ -125,7 +125,7 @@ else
 		_builder=""
 	fi
 	if [ -f "$_builder" ]; then
-		if X_BIN="$X_BIN" sh "$_builder" "$LANG_LIB" "$BUNDLE/tests/lib/.images" "$BUNDLE/python"; then
+		if X_BIN="$X_BIN" sh "$_builder" "$LANG_LIB" "$BUNDLE/tests/lib/.images" "$BUNDLE/lib/python"; then
 			X_IMG_DIR="$BUNDLE/tests/lib/.images"; export X_IMG_DIR
 		else
 			echo "x-python: no state image (image-build exit $?) -- the suite boots from source" >&2

@@ -4,7 +4,7 @@
 # ## tests/boot.sh -- the bundle boots the way a user boots it
 #
 # @description Boots the bundle from source through `x -l python`, on the
-#   dialect lang.xon declares, runs a short program, and compares what it
+#   dialect bundle.xon declares, runs a short program, and compares what it
 #   prints.
 # @author [Jon Ruttan](jonruttan@gmail.com)
 # @copyright 2026 Jon Ruttan
@@ -17,7 +17,7 @@
 # full-tower amalgam (tests/gen-harness.sh), which binds more names than the
 # declared dialect does, so a platform name the bundle reads and never binds
 # can be bound for the suite and unbound for `x -l python`.  Here the wrapper
-# boots the declared dialect and reads run.x, which is the path that finds
+# boots the declared dialect and imports python/run, which is the path that finds
 # such a name: the load stops with `Unbound SYMBOL`.
 #
 # From source, with --no-image: the boot under test is this tree's, not
@@ -25,8 +25,8 @@
 # every source boot (python/util.x), so the load fits.
 #
 # The program goes in as a user's does, a Python file given with -f, which
-# the wrapper cats after run.x and run.x's last form reads (python-batch,
-# python/repl.x).  It is small on purpose: one thing from each table the
+# the wrapper cats after the call of python/run's main, which reads it
+# (python-batch, python/repl.x).  It is small on purpose: one thing from each table the
 # bundle builds while it loads -- a string escape, a big integer, a float, a
 # dict -- and the specs cover the rest.  It has what only a file has: a
 # blank line inside a block, an expression statement that must print
@@ -45,7 +45,7 @@ command -v "$X" >/dev/null 2>&1 || {
 }
 
 _TMP="${TMPDIR:-/tmp}/x-python-boot.$$"
-mkdir -p "$_TMP/langs"
+mkdir -p "$_TMP/bundles"
 
 # What the runs wrote so far, for a run that did not end on its own.
 show() {
@@ -57,12 +57,12 @@ trap 'rm -rf "$_TMP"' EXIT
 trap 'echo "x-python: interrupted" >&2; show; exit 130' INT
 trap 'echo "x-python: terminated" >&2; show; exit 143' TERM
 
-# The wrapper searches X_LANG_DIR for the bundle that calls itself "python"
+# The wrapper searches X_BUNDLE_DIR for the bundle that calls itself "python"
 # and refuses when two do.  A directory holding one link to this tree answers
 # with this tree whatever else sits beside it -- another checkout, a worktree.
-ln -s "$BUNDLE" "$_TMP/langs/python"
-X_LANG_DIR="$_TMP/langs/"
-export X_LANG_DIR
+ln -s "$BUNDLE" "$_TMP/bundles/python"
+X_BUNDLE_DIR="$_TMP/bundles/"
+export X_BUNDLE_DIR
 
 # A checkout's x.sh finds its library relative to the current directory, so
 # it is run from its own root; an installed x runs from anywhere.

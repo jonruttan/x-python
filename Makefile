@@ -6,19 +6,20 @@
 #   make install       into the x on PATH
 #
 # INSTALL PUTS THIS BUNDLE WHERE `-l` LOOKS, which is the whole of it: an
-# installed x searches <share>/langs/*/lang.xon, so a lang is "installed" when
-# its files are there.  Use lang.pin.xon and `Pin bundle` instead when it
+# installed x searches <share>/bundles/*/bundle.xon, so a lang is "installed" when
+# its files are there.  Use bundle.pin.xon and `Pin bundle` instead when it
 # matters to a build which version it got.
 
 X ?= x
 SHARE := $(if $(PREFIX),$(PREFIX)/share/x,$(shell $(X) --share-dir))
-DEST  := $(SHARE)/langs/python
+DEST  := $(SHARE)/bundles/python
 
-# What a consumer needs to RUN the lang.  Not the suite, not the tooling.
-PAYLOAD := lang.xon run.x python
+# What a consumer needs to RUN the lang: the declaration and the modules,
+# the entry among them.  Not the suite, not the tooling.
+PAYLOAD := bundle.xon lib
 
 .PHONY: install
-install: ## Install into <share>/langs/python
+install: ## Install into <share>/bundles/python
 	@test -n "$(SHARE)" || { echo "x-python: cannot find an x tree -- set PREFIX or X" >&2; exit 1; }
 	@test -d "$(SHARE)" || { echo "x-python: no x tree at $(SHARE)" >&2; exit 1; }
 	rm -rf "$(DEST)"
@@ -43,13 +44,13 @@ test-boot: ## Run a program through `x -l python`, on the declared dialect
 	X="$(X)" sh tests/boot.sh
 
 # The card runs from here, so X is an installed x: a checkout's wrapper runs
-# only from its own root.  X_LANG_DIR is the directory holding this bundle,
+# only from its own root.  X_BUNDLE_DIR is the directory holding this bundle,
 # so `x -l python` loads this tree and not an installed copy.  CARD_SH is the
 # check: the installed x-lang's, or a newer one named here.
 .PHONY: card
 card: ## Hold docs/card.md to the card format and run its programs
-	X_LANG_DIR="$${X_LANG_DIR:-$(CURDIR)/..}" BUNDLE=. X="$(X)" \
-		sh "$${CARD_SH:-$$("$(X)" --share-dir)/tools/lang-kit/card.sh}"
+	X_BUNDLE_DIR="$${X_BUNDLE_DIR:-$(CURDIR)/..}" BUNDLE=. X="$(X)" \
+		sh "$${CARD_SH:-$$("$(X)" --share-dir)/tools/bundle-kit/card.sh}"
 
 .PHONY: fetch
 fetch: ## Fetch and verify the pinned upstream test corpus

@@ -4,7 +4,7 @@
 # ## tools/bundle.sh -- roll the release tarball, and print the pin it needs
 #
 # @description Builds x-python-<tag>.tar.gz from a clean tree and prints the
-#   (bundle ...) row a consumer's lang.pin.xon must carry.
+#   (bundle ...) row a consumer's bundle.pin.xon must carry.
 # @author [Jon Ruttan](jonruttan@gmail.com)
 # @copyright 2026 Jon Ruttan
 # @license MIT No Attribution (MIT-0)
@@ -40,7 +40,7 @@ mkdir -p "$OUT"
 # human untarring it by hand, not for the tool.
 # THE STAMP IS THE ONE THING THE COMMIT CANNOT CARRY.  Everything else in
 # this archive is exactly what was committed, deliberately -- but a version
-# row in lang.xon could only be true at the single commit that gets tagged,
+# row in bundle.xon could only be true at the single commit that gets tagged,
 # and would be a lie in the tree both before and after it.  So the tag says
 # what this is, and the archive carries that as a file the checkout has not
 # got, matching what `make install` writes from git describe.
@@ -77,27 +77,27 @@ else
 fi
 printf '%s  %s\n' "$DG" "$NAME.tar.gz" > "$OUT/$NAME.tar.gz.sha256"
 
-DECLARED=$(sed -n 's/^(lang "\(.*\)")$/\1/p' lang.xon)
+DECLARED=$(sed -n 's/^(name "\(.*\)")$/\1/p' bundle.xon)
 URL="https://github.com/jonruttan/x-python/releases/download/$TAG/$NAME.tar.gz"
 
 # THE PIN IS AN ARTIFACT, not just something printed for a human to retype.
-# `x --install-lang <url>` fetches exactly this file, reads the digest and the
+# `x --install-bundle <url>` fetches exactly this file, reads the digest and the
 # tarball URL out of it, and installs -- so publishing it beside the tarball is
 # what makes a release installable without cloning anything.
 {
-	printf '(lang "%s")\n' "$DECLARED"
+	printf '(name "%s")\n' "$DECLARED"
 	printf '(release "%s")\n' "$TAG"
 	printf '(bundle "sha256:%s" "%s")\n' "$DG" "$URL"
 	printf '(source "https://github.com/jonruttan/x-python.git")\n'
-} > "$OUT/lang.pin.xon"
+} > "$OUT/bundle.pin.xon"
 
 echo "bundle: $OUT/$NAME.tar.gz"
-echo "bundle: $OUT/lang.pin.xon"
+echo "bundle: $OUT/bundle.pin.xon"
 echo "bundle: $DG"
 echo
 echo "Install it with:"
-echo "  x --install-lang https://github.com/jonruttan/x-python/releases/download/$TAG/lang.pin.xon"
+echo "  x --install-bundle https://github.com/jonruttan/x-python/releases/download/$TAG/bundle.pin.xon"
 echo
-echo "Or pin it, by putting $OUT/lang.pin.xon in your project:"
+echo "Or pin it, by putting $OUT/bundle.pin.xon in your project:"
 echo
-sed 's/^/  /' "$OUT/lang.pin.xon"
+sed 's/^/  /' "$OUT/bundle.pin.xon"

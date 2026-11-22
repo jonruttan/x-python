@@ -45,7 +45,7 @@ The built-in modules a program can import are `array`, `builtins`, `cmath`,
 `collections`, `errno`, `gc`, `io`, `math`, `os`, `struct`, `sys` and
 `types`. The rest of the standard library is absent.
 
-It is paired with x-lang v0.59.0; `lang.xon` is the row that says so. No
+It is paired with x-lang v0.60.0; `bundle.xon` is the row that says so. No
 release has been cut.
 
 ## The conformance suite
@@ -79,7 +79,7 @@ writes.
 
 ## Install
 
-No release has been cut, so there is no pin for `x --install-lang` to
+No release has been cut, so there is no pin for `x --install-bundle` to
 fetch. From a clone:
 
 ```bash
@@ -88,15 +88,15 @@ PREFIX=$HOME/.local make install  # or a particular prefix
 ```
 
 `make uninstall` removes it again. An installed x searches
-`<share>/langs/*/lang.xon`, so a lang is installed when its files are there.
+`<share>/bundles/*/bundle.xon`, so a lang is installed when its files are there.
 
-Inside an x-lang checkout, `x` searches that checkout's `deps/langs/` and
-does not see an installed lang. `X_LANG_DIR` names the bundles explicitly in
+Inside an x-lang checkout, `x` searches that checkout's `deps/bundles/` and
+does not see an installed lang. `X_BUNDLE_DIR` names the bundles explicitly in
 either case:
 
 ```bash
-X_LANG_DIR=$HOME/.local/share/x/langs/ x -l python   # the installed one
-X_LANG_DIR=/path/to/x-python/.. x -l python          # a checkout, uninstalled
+X_BUNDLE_DIR=$HOME/.local/share/x/bundles/ x -l python  # the installed one
+X_BUNDLE_DIR=/path/to/x-python/.. x -l python         # a checkout, uninstalled
 ```
 
 ## Running it
@@ -106,8 +106,8 @@ x -l python                  # interactive
 x -l python -f program.py    # batch
 ```
 
-x-lang boots the dialect `lang.xon` declares, arms this bundle's module root,
-and loads `run.x` on top.
+x-lang boots the dialect `bundle.xon` declares, arms this bundle's module root,
+`lib/`, imports the entry `python/run` and calls its `main`.
 
 `make install` ends with `x --image -l python`, which writes the booted lang
 to a state image; `x -l python` then loads the image instead of reading the
@@ -165,7 +165,7 @@ and programs that are run, each line beside what it prints.
 Without `X` the suite takes the `x` on `PATH`. An installed x older than the
 checkout reports failures the platform has since fixed.
 
-`make test-boot` boots through the wrapper on the dialect `lang.xon`
+`make test-boot` boots through the wrapper on the dialect `bundle.xon`
 declares, from source, and runs a short program. The suite loads the bundle
 on the full-tower amalgam, which binds more platform names than that dialect
 does, so a name the bundle reads and never imports shows only under
@@ -173,7 +173,7 @@ does, so a name the bundle reads and never imports shows only under
 
 `make install` asks `$(X) --share-dir` where to put the bundle. A checkout
 answers with its own root, which is not a path `-l` searches there: install
-into a `<share>` tree, or use `X_LANG_DIR`.
+into a `<share>` tree, or use `X_BUNDLE_DIR`.
 
 The conformance run is serial: `score.sh` sets `PARALLEL=1`, because the
 per-process allocation ceiling bounds one interpreter and the platform
@@ -201,30 +201,30 @@ oracle. `make clean` drops both.
 
 ```
 docs/                        design notes
-lang.xon                     name, dialect, release pairing, grammar
-run.x                        the entry
-python/base.x                the language, assembled
-python/core.x                the core: one module in several files
-python/tokens.x              the lexical layer, on its own tokenizer base
-python/parse.x               tokens to forms
-python/types.x               Python's values, as x types
-python/str.x                 the code point sequence, and the codec under it
-python/bytes.x               the byte sequence, and the algorithms over it
-python/memoryview.x          memoryview
-python/format.x              the % string-formatting operator
-python/runtime-num.x         arithmetic, the operator protocol, numeric builtins
-python/runtime-seq.x         comparison, lists, dicts and iteration
-python/runtime-str.x         attributes, str's methods, the format-spec language
-python/runtime-obj.x         print, float repr, complex, exceptions and classes
-python/runtime-call.x        keyword calls, super, sets, the rendering builtins
-python/runtime-flow.x        modules, with, tuples and generators
-python/runtime-py-type.x     type objects, constructors and slicing
-python/util.x                list walks the bundle shares
-python/array.x  cmath.x  collections.x  deque.x  io.x  os.x  struct.x  sys.x
+bundle.xon                   name, dialect, release pairing, entry, grammar
+lib/python/run.x             the entry
+lib/python/base.x            the language, assembled
+lib/python/core.x            the core: one module in several files
+lib/python/tokens.x          the lexical layer, on its own tokenizer base
+lib/python/parse.x           tokens to forms
+lib/python/types.x           Python's values, as x types
+lib/python/str.x             the code point sequence, and the codec under it
+lib/python/bytes.x           the byte sequence, and the algorithms over it
+lib/python/memoryview.x      memoryview
+lib/python/format.x          the % string-formatting operator
+lib/python/runtime-num.x     arithmetic, the operator protocol, numeric builtins
+lib/python/runtime-seq.x     comparison, lists, dicts and iteration
+lib/python/runtime-str.x     attributes, str's methods, the format-spec language
+lib/python/runtime-obj.x     print, float repr, complex, exceptions and classes
+lib/python/runtime-call.x    keyword calls, super, sets, the rendering builtins
+lib/python/runtime-flow.x    modules, with, tuples and generators
+lib/python/runtime-py-type.x type objects, constructors and slicing
+lib/python/util.x            list walks the bundle shares
+lib/python/array.x  cmath.x  collections.x  deque.x  io.x  os.x  struct.x  sys.x
                              the importable modules
-python/repl.x                the interactive session
-python/line.x                the line editor's seams
-python/lexer.x  syntax.x     the highlighting grammar
+lib/python/repl.x            the interactive session
+lib/python/line.x            the line editor's seams
+lib/python/lexer.x  syntax.x the highlighting grammar
 tests/spec-runner.sh         sources the platform's shared runner
 tests/gen-harness.sh         writes tests/lib/harness.gen.x (generated)
 tests/boot.sh                what `make test-boot` runs
@@ -240,7 +240,7 @@ tools/check/                 the if-ladder check CI runs
 
 ## Dialect
 
-`lang.xon` declares helium, and the bundle imports the libraries Python's
+`bundle.xon` declares helium, and the bundle imports the libraries Python's
 data model needs:
 
 - Python 3 has one integer type and it is arbitrary-precision: `2 ** 200` is
