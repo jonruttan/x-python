@@ -26,6 +26,7 @@
 ; values are what the real functions make of them.
 
 (module python/cmath)
+(import python/modules PyModule)
 (import python/core
   python-cim python-complex-is python-cre python-div python-dunder python-fasinh python-fcopysign
   python-fcosh python-float-of-str python-flog1p python-fsinh python-ftanh python-mdomain python-mfloat
@@ -295,5 +296,8 @@
         (pair "isnan" (fn (_ x) (%py-cm-nan? (%py-cm-arg x))))
         (pair "isclose"
           (python-sig! %py-cm-isclose "isclose" (list "a" "b" "rel_tol" "abs_tol") 2 #f))))))
+
+; The row in the table of built-in modules (python/modules).
+(PyModule def-static! (lit cmath) (fn (_ cls) (python-cmath-module)))
 
 (provide python/cmath python-cmath-module)

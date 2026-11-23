@@ -70,6 +70,7 @@ cat > "$OUT" <<EOX
   python-parse python-parse-expr python-repl-print python-run
   python-version)
 (import python/tokens python-tokenize)
+(import python/modules PyModule python-module-builder)
 (set! %repl-print python-repl-print)
 ; The privates the specs read, each through its module.
 (def %py-class-of (eval (lit %py-class-of) (module python/core)))

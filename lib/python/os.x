@@ -21,6 +21,7 @@
 ; module are not here yet.
 
 (module python/os)
+(import python/modules PyModule)
 (import python/core
   python-instantiate python-module-new python-sig! python-str-of-x python-text->x)
 (import python/collections python-namedtuple-class)
@@ -60,5 +61,8 @@
           (pair "getpid" (fn (_) (Sys getpid)))
           (pair "cpu_count" (fn (_) (Sys cpu-count)))
           (pair "getenv" (python-sig! %py-getenv "getenv" (list "key" "default") 1 #f)))))))
+
+; The row in the table of built-in modules (python/modules).
+(PyModule def-static! (lit os) (fn (_ cls) (python-os-module)))
 
 (provide python/os python-os-module)

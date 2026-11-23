@@ -24,6 +24,7 @@
 ; python/array.x, at the same width in both sizings.
 
 (module python/struct)
+(import python/modules PyModule)
 (import python/core
   python-class-name python-type-of
   ps->x python-barr-is python-barr-set! python-boolnorm python-byte-len python-bytes-is
@@ -330,5 +331,8 @@
         (pair "unpack" %py-st-unpack)
         (pair "pack_into" %py-st-pack-into)
         (pair "unpack_from" %py-st-unpack-from)))))
+
+; The row in the table of built-in modules (python/modules).
+(PyModule def-static! (lit struct) (fn (_ cls) (python-struct-module)))
 
 (provide python/struct python-struct-module)
