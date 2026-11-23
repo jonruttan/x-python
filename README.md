@@ -45,7 +45,7 @@ The built-in modules a program can import are `array`, `builtins`, `cmath`,
 `collections`, `errno`, `gc`, `io`, `math`, `os`, `struct`, `sys` and
 `types`. The rest of the standard library is absent.
 
-It is paired with x-lang v0.60.0; `bundle.xon` is the row that says so. No
+It is paired with x-lang v0.61.0; `bundle.xon` is the row that says so. No
 release has been cut.
 
 ## The conformance suite
