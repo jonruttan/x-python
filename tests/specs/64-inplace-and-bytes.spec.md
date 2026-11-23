@@ -220,12 +220,12 @@ CPython prints the three-character string `x\x00y`.
 ### at runtime the crossings raise and the carriers do not
 
 `chr(0)` has left this list too -- it answers a str of one code point now.
-What still refuses is every crossing INTO a platform string: `%c` builds its
-answer with Str8, and so does an f-string, so both end at a zero byte and say
-so rather than truncating.
+What still refuses is every crossing INTO a platform string: a % template is
+read as one, so a zero in it ends there and says so rather than truncating.
+A `%c` of zero is carried (88-str-nul).
 
 ```python
-(python-run "print('chr', len(chr(0)))\nprint('list', bytes([0]))\nprint('count', bytes(3))\ntry:\n    '%c' % 0\nexcept ValueError as e:\n    print('pct', e)")
+(python-run "print('chr', len(chr(0)))\nprint('list', bytes([0]))\nprint('count', bytes(3))\ntry:\n    ('a' + chr(0) + '%s') % 1\nexcept ValueError as e:\n    print('pct', e)")
 ```
 ---
 ```output

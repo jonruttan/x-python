@@ -87,15 +87,29 @@ x<<NUL>>y<<NUL>>z
 'a\x00b'
 ```
 
+### %c of zero is the NUL character, padded like any other
+
+The % engine joins its pieces as bytes, and a %c is its bytes rather than a
+platform string, so its character may be a zero in a str or a bytes
+template. Precision does not apply to %c.
+
+```python
+(python-run "print(repr('x%cy' % 0), repr('%3c' % 0), repr('%-3c|' % False), repr(b'%c' % 0), repr('%.0c' % 'a'), repr('%c' % 233))")
+```
+---
+```output
+'x\x00y' '  \x00' '\x00  |' b'\x00' 'a' 'é'
+```
+
 ## where the limit still is
 
 ### a platform string cannot hold one, so the crossings refuse
 
-An attribute name, a module name and the format engines are the platform's
+An attribute name, a module name and a format template are the platform's
 strings, and those end at a zero byte. Each says so rather than truncating.
 
 ```python
-(python-run "try:\n    '%c' % 0\nexcept ValueError as e:\n    print('pct', e)\ntry:\n    getattr(object(), chr(0))\nexcept ValueError as e:\n    print('attr', e)")
+(python-run "try:\n    ('a' + chr(0) + '%s') % 1\nexcept ValueError as e:\n    print('pct', e)\ntry:\n    getattr(object(), chr(0))\nexcept ValueError as e:\n    print('attr', e)")
 ```
 ---
 ```output
