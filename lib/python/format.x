@@ -291,7 +291,6 @@
   (fn (_ conv v)
     (match
       ((if (= conv 114) #t (= conv 97)) (%py-ascii-of v))
-      ((= conv 99) (%py-fmt-bytes-char v))
       ((python-buffer? v) (pb->str (python-buffer-bytes v)))
       (#t
         (let ((m (if (python-obj-is v) (python-dunder v "__bytes__") ())))
@@ -306,11 +305,11 @@
   (fn (_ v)
     (match
       ((if (python-bytes-is v) (= (pb-len (python-bytes-list v)) 1) #f)
-        (pb->str (python-bytes-list v)))
+        (python-bytes-list v))
       ((eq? (python-num-py-type (python-boolnorm v)) (lit int))
         (if (if (< v 0) #t (> v 255))
           (Err raise (lit overflow) "%c arg not in range(256)" ())
-          (pb->str (list v))))
+          (list v)))
       (#t
         (Err raise (lit type)
           (Str8 append "%c requires an integer in range(256) or a single byte, not "
@@ -345,15 +344,31 @@
       acc
       (self (Num quotient c 16) (- k 1) (pair (%py-hex-code (% c 16)) acc)))))
 
-; The text conversions: s, r and c, and in a bytes template b and a too.
+; The text conversions: s and r, and in a bytes template b and a too.  c is
+; its own branch of %py-fmt-one.
 (def %py-fmt-text?
   (fn (_ conv bytes?)
     (match
       ((= conv 115) #t)
       ((= conv 114) #t)
-      ((= conv 99) #t)
       (bytes? (if (= conv 98) #t (= conv 97)))
       (#t #f))))
+
+; A %c's bytes padded with spaces to WIDTH characters; it is one character.
+(def %py-fmt-pad-bytes
+  (fn (_ bs chars width left)
+    (def pad (%py-fmt-space-bytes (- width chars) ()))
+    (if left (%py-append bs pad) (%py-append pad bs))))
+(def %py-fmt-space-bytes
+  (fn (self k acc) (if (<= k 0) acc (self (- k 1) (pair 32 acc)))))
+
+; The pieces %py-format collected, last first, as one list of bytes: a
+; platform string by its bytes, a %c's bytes as they are.
+(def %py-fmt-join
+  (fn (self pieces acc)
+    (if (null? pieces) acc
+      (self (rest pieces)
+        (%py-append (if (str? (first pieces)) (pb-of-str (first pieces)) (first pieces)) acc)))))
 
 ; One parsed conversion, fully rendered and padded.  A separate global
 ; rather than a frame-local of %py-format: a closure sees only the frame
@@ -365,24 +380,29 @@
     ; character of a code point, or a one-character string as itself.  A bytes
     ; template also has b, which is its s, and a, which is its r.
     (match
+      ; %c IS BYTES, NOT A PLATFORM STRING: its character may be a zero, which
+      ; no platform string holds, so it answers the list of its bytes (UTF-8
+      ; for a str template) and %py-format joins the pieces as bytes.
+      ; Precision does not apply to it, as in CPython.
+      ((= conv 99)
+        (%py-fmt-pad-bytes
+          (if bytes? (%py-fmt-bytes-char v)
+            (ps-encode
+              (if (python-str-is v)
+                (if (= (%py-len v) 1) (python-str-cps v)
+                  (Err raise (lit type) "%c requires an int or a unicode char, not a string of length other than 1" ()))
+                (python-str-cps (%py-fmt-char v)))
+              ()))
+          1 width left))
       ((%py-fmt-text? conv bytes?)
         (do
           ; EVERYTHING HERE IS A PLATFORM STRING: this engine pads and measures
           ; with Str8, so each branch hands back one of those rather than a str.
           ; `str?` asks about the PLATFORM's strings, which a Python str is not
           ; any more, so the test is python-str-is and the value crosses over.
-          ;
-          ; %c OF A ZERO therefore raises rather than answering "\x00": the
-          ; crossing refuses, because the rest of this pipeline is a C string.
-          ; Building a str with chr(0) and printing it is the way to emit one.
           (def s0
             (match
               (bytes? (%py-fmt-bytes-text conv v))
-              ((= conv 99)
-                (if (python-str-is v)
-                  (if (= (%py-len v) 1) (ps->x (python-str-cps v))
-                    (Err raise (lit type) "%c requires an int or a unicode char, not a string of length other than 1" ()))
-                  (ps->x (python-str-cps (%py-fmt-char v)))))
               (#t (if (= conv 115) (python-str v) (python-repr-of v)))))
           (def s (if (if (>= prec 0) (> (Str8 length s0) prec) #f)
             (Str8 sub 0 prec s0) s0))
@@ -569,7 +589,7 @@
                 (%py-fmt-one conv (%py-fmt-take! cell)
                   left plus space zero alt width prec
                   (fn (_) (spec-err j3)) bytes?)))
-            (go (+ j3 1) (Str8 append acc out))))))
+            (go (+ j3 1) (pair out acc))))))
     (set! go
       (fn (_ i acc)
         (if (>= i n)
@@ -577,11 +597,11 @@
           (let ((c (%py-fmt-code fmt i)))
             (if (not (= c 37))
               (let ((e (%py-fmt-pct-run fmt n (+ i 1))))
-                (go e (Str8 append acc (Str8 sub i (- e i) fmt))))
+                (go e (pair (Str8 sub i (- e i) fmt) acc)))
               (if (>= (+ i 1) n)
                 (Err raise (lit value) "incomplete format" ())
                 (self-spec (+ i 1) acc)))))))
-    (let ((out (go 0 "")))
+    (let ((out (%py-fmt-join (go 0 ()) ())))
       (if (if (null? (first cell)) #t (not (null? mapping)))
         out
         (Err raise (lit type)

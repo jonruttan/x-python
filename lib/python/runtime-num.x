@@ -377,17 +377,18 @@
     (if (null? l) h
       (self (rest l) (% (+ (* h 31) (first l)) 4294967296)))))
 
-; `s % args` -- the formatter still speaks the platform's string, so this is
-; its door.  A NUL in the FORMAT would stop it, and says so.
+; `s % args` -- the formatter reads the template as a platform string, so a
+; NUL in the FORMAT stops it, and says so.  It answers the result's bytes,
+; which may hold a zero from %c.
 (def %py-format-str
-  (fn (_ a b) (python-str-of-x (%py-format (ps->x (python-str-cps a)) b))))
+  (fn (_ a b) (python-str-new (%ps-decode (%py-format (ps->x (python-str-cps a)) b) ()))))
 
 ; b"..." % args: the same engine over the template's bytes, answering the type
 ; the template was -- a bytearray formats to a bytearray.
 (def %py-format-bytes
   (fn (_ a b)
     ((if (python-barr-is a) %py-barr-new python-bytes-new)
-      (pb-of-str (%py-format (pb->str (python-bytes-list a)) b #t)))))
+      (%py-format (pb->str (python-bytes-list a)) b #t))))
 
 ; `a @ b` means nothing here except to an object with __matmul__.
 (def %py-matmul
