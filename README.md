@@ -245,6 +245,7 @@ rarely touch the same lines.
 | `io` | x | `lib/python/io.x` |
 | `keyword` | Python | `stdlib/keyword.py` |
 | `math` | x | `lib/python/runtime-flow.x` |
+| `operator` | Python | `stdlib/operator.py` |
 | `os` | x | `lib/python/os.x` |
 | `struct` | x | `lib/python/struct.x` |
 | `sys` | x | `lib/python/sys.x` |
