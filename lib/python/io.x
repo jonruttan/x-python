@@ -22,6 +22,7 @@
 ; not reach the bytes it was built from, which is what io_bytesio_cow asks.
 
 (module python/io)
+(import python/modules PyModule)
 (import python/core
   make-instance make-type ps-codec ps-decode-as ps-encode ps-encode-as
   ps-write-bytes-to python-alist-find python-barr-is python-barr-set! python-boolnorm
@@ -963,6 +964,9 @@
         (pair "IOBase" %py-cls-IOBase)
         (pair "UnsupportedOperation" %py-exc-UnsupportedOperation)
         (pair "open" python-open)))))
+
+; The row in the table of built-in modules (python/modules).
+(PyModule def-static! (lit io) (fn (_ cls) (python-io-module)))
 
 (provide python/io
   python-cls-BytesIO python-cls-StringIO python-io-attr python-io-class python-io-drain! python-io-is

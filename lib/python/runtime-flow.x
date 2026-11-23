@@ -1357,25 +1357,36 @@
                   (%py-tb-strs (list (%py-exc-only-text e))))))
             "format_exception_only" (list "exc" "value") 1 #f))))))
 
-; The modules this runtime offers, each built on first import and remembered
-; after.
+; ROWS IN THE TABLE OF BUILT-IN MODULES (python/modules) for the modules this
+; file builds; the libraries core.x imports fill in their own.
+(PyModule def-static! (lit math) (fn (_ cls) (%py-math-module)))
+(PyModule def-static! (lit types) (fn (_ cls) (%py-types-module)))
+(PyModule def-static! (lit gc) (fn (_ cls) (%py-gc-module)))
+(PyModule def-static! (lit errno) (fn (_ cls) (%py-errno-module)))
+(PyModule def-static! (lit traceback) (fn (_ cls) (%py-traceback-module)))
+(PyModule def-static! (lit builtins) (fn (_ cls) (%py-builtins-module)))
+
+; The module this runtime builds under NAME, or () when it builds none: each
+; built on first import, and remembered in sys.modules after.
 (def %py-module-build
   (fn (_ name)
-    (match
-      ((Str8 =? name "sys") (python-sys-module))
-      ((Str8 =? name "math") (%py-math-module))
-      ((Str8 =? name "cmath") (python-cmath-module))
-      ((Str8 =? name "collections") (python-collections-module))
-      ((Str8 =? name "array") (python-array-module))
-      ((Str8 =? name "struct") (python-struct-module))
-      ((Str8 =? name "types") (%py-types-module))
-      ((Str8 =? name "io") (python-io-module))
-      ((Str8 =? name "os") (python-os-module))
-      ((Str8 =? name "gc") (%py-gc-module))
-      ((Str8 =? name "errno") (%py-errno-module))
-      ((Str8 =? name "traceback") (%py-traceback-module))
-      ((Str8 =? name "builtins") (%py-builtins-module))
-      (#t ()))))
+    (let ((build (python-module-builder name)))
+      (if (null? build) () (build PyModule)))))
+
+; THE STANDARD LIBRARY'S PURE-PYTHON MODULES are .py files under stdlib/ in
+; the bundle's own directory, beside lib/ -- not in it, since lib/ is the
+; import root and holds only x modules.  They are found as any module on the
+; path is, searched after sys.path, so a program's own json.py is found ahead
+; of the library's, as it is in CPython.
+;
+; The directory is asked for at each search, not once at load: a state image
+; is written in one process and booted in others, and (Bundle root) answers
+; where THIS process found the bundle.  No root, no directory -- a session
+; that loaded the runtime by hand without arming its lib/ has no stdlib.
+(def %py-stdlib-dirs
+  (fn (_)
+    (let ((root (Bundle root "python")))
+      (if (null? root) () (list (%py-path-join root "stdlib"))))))
 
 ; THE NAME HERE IS THE PLATFORM'S STRING, not a str.  This is the INTERNAL
 ; door, under `__import__()` (below), the Python-facing one, which crosses a
@@ -1404,7 +1415,8 @@
       (if (null? dot)
         (let ((built (%py-module-build name)))
           (if (null? built)
-            (%py-load name (%py-find name (%py-path-dirs (python-path-now)) ()))
+            (%py-load name
+              (%py-find name (%py-append (%py-path-dirs (python-path-now)) (%py-stdlib-dirs)) ()))
             (%seq (%py-dset (python-modules-now) (python-str-of-x name) built) built)))
         (%py-import-sub name (Str8 sub 0 dot name)
           (Str8 sub (+ dot 1) (- (Str8 length name) (+ dot 1)) name))))))

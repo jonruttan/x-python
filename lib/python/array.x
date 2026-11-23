@@ -19,6 +19,7 @@
 ; 64-bit machine (l and L are eight bytes), and the float typecodes f and d.
 
 (module python/array)
+(import python/modules PyModule)
 (import python/core
   python-f-2p52
   make-instance make-type python-add python-boolnorm python-bytes-is python-bytes-list
@@ -437,6 +438,9 @@
 
 (def python-array-module
   (fn (_) (python-module-new "array" (list (pair "array" python-cls-array)))))
+
+; The row in the table of built-in modules (python/modules).
+(PyModule def-static! (lit array) (fn (_ cls) (python-array-module)))
 
 (provide python/array
   python-arr-at python-arr-attr python-arr-buffer python-arr-cat python-arr-el python-arr-find

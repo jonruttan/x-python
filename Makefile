@@ -14,9 +14,11 @@ X ?= x
 SHARE := $(if $(PREFIX),$(PREFIX)/share/x,$(shell $(X) --share-dir))
 DEST  := $(SHARE)/bundles/python
 
-# What a consumer needs to RUN the lang: the declaration and the modules,
-# the entry among them.  Not the suite, not the tooling.
-PAYLOAD := bundle.xon lib
+# What a consumer needs to RUN the lang: the declaration, the modules (the
+# entry among them) and the standard library written in Python, which the
+# importer finds beside lib/ through (Bundle root "python").  Not the suite,
+# not the tooling.
+PAYLOAD := bundle.xon lib stdlib
 
 .PHONY: install
 install: ## Install into <share>/bundles/python

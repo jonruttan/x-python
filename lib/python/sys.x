@@ -21,6 +21,7 @@
 ; that branches on it sees what is actually running.
 
 (module python/sys)
+(import python/modules PyModule)
 (import python/core
   python-byte-len python-bytes-is python-bytes-list python-char-code python-cls-SimpleNamespace
   python-dict-entries python-dict? python-exc-SystemExit python-implementation-version
@@ -155,5 +156,8 @@
               (python-raise
                 (python-instantiate python-exc-SystemExit
                   (if (null? a) () (list (first a))))))))))))
+
+; The row in the table of built-in modules (python/modules).
+(PyModule def-static! (lit sys) (fn (_ cls) (python-sys-module)))
 
 (provide python/sys python-implementation-version python-sys-module)

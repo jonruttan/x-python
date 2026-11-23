@@ -22,6 +22,7 @@
 ; and its own repr.
 
 (module python/collections)
+(import python/modules PyModule)
 (import python/core
   ps->x python-byte-len python-char-code python-class-methods-set! python-class-name
   python-class-new python-cls-dict python-cls-tuple python-desc-new python-dict-entries
@@ -214,5 +215,8 @@
         (pair "namedtuple" (python-sig! %py-namedtuple "namedtuple" (list "typename" "field_names") 2 #f))
         (pair "OrderedDict" %py-cls-OrderedDict)
         (pair "deque" python-cls-deque)))))
+
+; The row in the table of built-in modules (python/modules).
+(PyModule def-static! (lit collections) (fn (_ cls) (python-collections-module)))
 
 (provide python/collections python-collections-module python-namedtuple-class)

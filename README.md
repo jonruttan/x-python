@@ -41,9 +41,8 @@ on its whole stdout against a CPython 3.14 run. CI does not run it: the run
 is serial and takes about an hour. `make score` prints the table by group,
 worst first.
 
-The built-in modules a program can import are `array`, `builtins`, `cmath`,
-`collections`, `errno`, `gc`, `io`, `math`, `os`, `struct`, `sys` and
-`types`. The rest of the standard library is absent.
+The modules a program can import are listed under [The standard
+library](#the-standard-library); most of CPython's are not here yet.
 
 It is paired with x-lang v0.61.0; `bundle.xon` is the row that says so. No
 release has been cut.
@@ -190,6 +189,75 @@ against the digest in `tools/conformance/upstream.pin.xon`;
 `tests/conformance/` is derived from it and from the CPython that was the
 oracle. `make clean` drops both.
 
+## The standard library
+
+`import NAME` asks three places, in order:
+
+1. the program's `sys.modules`;
+2. the modules this runtime builds itself, written in x: each is a static
+   method of the class `PyModule` (`lib/python/modules.x`), named for the
+   module;
+3. the files: each directory on `sys.path`, then the bundle's own `stdlib/`,
+   which holds the library's modules written in Python.
+
+So a program's own `keyword.py` beside it is imported ahead of the library's,
+as in CPython; a built-in such as `sys` or `math` cannot be replaced that way.
+One difference: `stdlib/` is not an entry on `sys.path` but is searched after
+all of it, so a directory a program *appends* to `sys.path` still comes
+before the library. The directory is found at each search with
+`(Bundle root "python")`, so it moves with the bundle.
+
+### Adding a module
+
+**In Python**, wherever the runtime already supports what the module needs:
+add `stdlib/NAME.py` (or a package, `stdlib/NAME/__init__.py`). Nothing else
+is shared: no table, no list in x.
+
+**In x**, when it needs the platform or the runtime's own values: add
+`lib/python/NAME.x`, a scoped module `python/NAME` that imports `python/core`
+for what it reads, and ends with its row:
+
+```x
+(import python/modules PyModule)
+...
+(PyModule def-static! (lit NAME) (fn (_ cls) (python-NAME-module)))
+(provide python/NAME python-NAME-module)
+```
+
+then add `(import python/NAME)` to the list at the end of
+`lib/python/core.x`, which is what loads it into the boot.
+
+Either way, add a spec file under `tests/specs/` whose expected output is a
+real CPython 3.14 run of the same program, and a row to the table below.
+Keep the table sorted, one module a row, so two branches adding modules
+rarely touch the same lines.
+
+### What is here
+
+| Module | Written in | Where |
+|---|---|---|
+| `array` | x | `lib/python/array.x` |
+| `builtins` | x | `lib/python/runtime-flow.x` |
+| `cmath` | x | `lib/python/cmath.x` |
+| `collections` | x | `lib/python/collections.x` |
+| `errno` | x | `lib/python/runtime-flow.x` |
+| `gc` | x | `lib/python/runtime-flow.x` |
+| `io` | x | `lib/python/io.x` |
+| `keyword` | Python | `stdlib/keyword.py` |
+| `math` | x | `lib/python/runtime-flow.x` |
+| `os` | x | `lib/python/os.x` |
+| `struct` | x | `lib/python/struct.x` |
+| `sys` | x | `lib/python/sys.x` |
+| `traceback` | x | `lib/python/runtime-flow.x` |
+| `types` | x | `lib/python/runtime-flow.x` |
+
+### Not planned yet: the network
+
+Packages such as `requests` need sockets and TLS. `bundle.xon` declares the
+helium dialect, which reaches nothing raw; moving to radon for `socket` is a
+decision to make deliberately, and its dialect note says so. Until then,
+nothing here opens a connection.
+
 ## Design notes
 
 - [Python values on x's type system](docs/values-on-the-type-system.md):
@@ -220,11 +288,13 @@ lib/python/runtime-call.x    keyword calls, super, sets, the rendering builtins
 lib/python/runtime-flow.x    modules, with, tuples and generators
 lib/python/runtime-py-type.x type objects, constructors and slicing
 lib/python/util.x            list walks the bundle shares
+lib/python/modules.x         the table of built-in modules, the class PyModule
 lib/python/array.x  cmath.x  collections.x  deque.x  io.x  os.x  struct.x  sys.x
                              the importable modules
 lib/python/repl.x            the interactive session
 lib/python/line.x            the line editor's seams
 lib/python/lexer.x  syntax.x the highlighting grammar
+stdlib/                      the standard library's modules written in Python
 tests/spec-runner.sh         sources the platform's shared runner
 tests/gen-harness.sh         writes tests/lib/harness.gen.x (generated)
 tests/boot.sh                what `make test-boot` runs

@@ -9,6 +9,11 @@
 ; worth.
 
 (module python/core)
+; The table of built-in modules comes first: the runtime's own files and the
+; libraries imported below each fill in their rows (python/modules).
+(import python/modules PyModule python-module-builder)
+; Where the bundle is installed, which is where its stdlib/ is.
+(import x/sys/bundle)
 (include-once "./util.x")
 (include-once "./types.x")
 (python-sweep!)
@@ -104,27 +109,21 @@
   python-list->string python-tokenize)
 (import python/array
   python-arr-at python-arr-attr python-arr-buffer python-arr-cat python-arr-el python-arr-is
-  python-arr-put! python-array-module python-cls-array python-ieee-2p63 python-ieee-raw
+  python-arr-put! python-cls-array python-ieee-2p63 python-ieee-raw
   python-take-n)
-(import python/cmath
-  python-cmath-module)
-(import python/collections
-  python-collections-module)
+(import python/cmath)
+(import python/collections)
 (import python/deque
   python-cls-deque python-dq-at python-dq-attr python-dq-cat python-dq-del! python-dq-eq
   python-dq-extend! python-dq-put! python-dq-repeat python-dq-repr)
 (import python/io
-  python-io-attr python-io-class python-io-drain! python-io-is python-io-line! python-io-module
-  python-open)
+  python-io-attr python-io-class python-io-drain! python-io-is python-io-line! python-open)
 (import python/memoryview
   python-buffer-bytes python-buffer-text python-buffer? python-cls-memoryview python-mv-at
   python-mv-attr python-mv-elems python-mv-in python-mv-is python-mv-len python-mv-put!
   python-mv-setslice! python-mv-slice)
-(import python/os
-  python-os-module)
-(import python/struct
-  python-struct-module)
-(import python/sys
-  python-sys-module)
+(import python/os)
+(import python/struct)
+(import python/sys)
 (import python/line
   python-complete python-marks python-paint python-read python-session-name!)
