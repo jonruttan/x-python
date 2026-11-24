@@ -84,13 +84,88 @@
       ((eq? (python-num-py-type (python-boolnorm obj)) (lit int)) (%py-int-attr obj name))
       (#t
         (let ((sig (%py-sig-of obj)))
-          (match
-            ((if (null? sig) #f (Str8 =? name "__name__")) (python-str-of-x (first sig)))
-            ((if (null? sig) #f (Str8 =? name "__globals__")) (%py-sig-globals sig))
-            ((if (null? sig) #f (Str8 =? name "__code__")) (%py-sig-code sig))
-            (#t
-              (Err raise (lit attribute)
-                (Str8 append (Str8 append "object has no attribute '" name) "'")()))))))))
+          (if (null? sig)
+            (Err raise (lit attribute)
+              (Str8 append (Str8 append "object has no attribute '" name) "'") ())
+            (%py-fn-attr obj sig name)))))))
+
+; A FUNCTION'S ATTRIBUTES.  What a program stored on it comes first -- so a
+; stored __name__ or __doc__ is the one read back, as in CPython -- and then
+; what the def recorded.
+(def %py-fn-attr
+  (fn (_ f sig name)
+    (let ((own (%py-fn-own sig name)))
+      (match
+        ((not (null? own)) (rest own))
+        ((Str8 =? name "__name__") (python-str-of-x (first sig)))
+        ((Str8 =? name "__doc__") (%py-nth-or sig 9 ()))
+        ((Str8 =? name "__module__") (%py-sig-module f sig))
+        ((Str8 =? name "__dict__") (%py-fn-dict sig))
+        ((Str8 =? name "__globals__") (%py-sig-globals sig))
+        ((Str8 =? name "__code__") (%py-sig-code sig))
+        (#t (%py-fn-no-attr f name))))))
+(def %py-fn-no-attr
+  (fn (_ f name)
+    (Err raise (lit attribute)
+      (Str8 append
+        (if (%py-user-fn? f) "'function' object has no attribute '" "object has no attribute '")
+        (Str8 append name "'"))
+      ())))
+
+; The dict of what a program has stored on a function, made on first asking:
+; `f.__dict__` is the same dict every time, and `f.__dict__.update(...)`
+; stores through it, which is what functools.update_wrapper does.
+(def %py-fn-dict
+  (fn (_ sig)
+    (let ((box (%py-nth-or sig 10 ())))
+      (match
+        ((null? box) (Err raise (lit attribute) "object has no attribute '__dict__'" ()))
+        ((null? (first box)) (%seq (%set-first! box (python-dict-new ())) (first box)))
+        (#t (first box))))))
+; The entry stored under NAME, or () -- without making the dict to ask it.
+(def %py-fn-own
+  (fn (_ sig name)
+    (let ((box (%py-nth-or sig 10 ())))
+      (if (if (null? box) #t (null? (first box)))
+        ()
+        (%py-dfind (python-str-of-x name) (python-dict-entries (first box)))))))
+; A store or a delete on a function: into its dict, and `f.__dict__ = d`
+; replaces the dict, which must be one.
+(def %py-fn-set!
+  (fn (_ sig name v)
+    (match
+      ((%py-fn-readonly? name) (%py-fn-readonly))
+      ((Str8 =? name "__dict__")
+        (if (python-dict? v)
+          (%seq (%set-first! (%py-nth-or sig 10 (pair () ())) v) ())
+          (Err raise (lit type) "__dict__ must be set to a dictionary" ())))
+      (#t (%seq (%py-dset (%py-fn-dict sig) (python-str-of-x name) v) ())))))
+(def %py-fn-del!
+  (fn (_ f sig name)
+    (match
+      ((%py-fn-readonly? name) (%py-fn-readonly))
+      ((null? (%py-fn-own sig name)) (%py-fn-no-attr f name))
+      (#t (%seq (%py-ddel (%py-fn-dict sig) (python-str-of-x name)) ())))))
+
+; What CPython won't let a program set or delete on a function.
+(def %py-fn-readonly?
+  (fn (_ name)
+    (if (Str8 =? name "__globals__") #t
+      (if (Str8 =? name "__closure__") #t (Str8 =? name "__builtins__")))))
+(def %py-fn-readonly
+  (fn (_) (Err raise (lit attribute) "readonly attribute" ())))
+
+; A function's __module__: the __name__ of the module its def ran in.  A def
+; at the prompt, whose names are x's root, is __main__'s, and a builtin
+; registered by hand is builtins'.
+(def %py-sig-module
+  (fn (_ f sig)
+    (let ((env (%py-nth-or sig 7 ())))
+      (let ((n (if (null? env) () (guard (_ ()) (eval (lit py-__name__) env)))))
+        (match
+          ((python-str-is n) n)
+          ((%py-user-fn? f) (python-str-of-x "__main__"))
+          (#t (python-str-of-x "builtins")))))))
 
 ; A function's __code__, made of what its def or lambda recorded when it is
 ; first asked for and the same value after.  The ninth signature field holds

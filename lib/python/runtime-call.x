@@ -570,6 +570,9 @@
           (if (null? sig)
             (Err raise (lit attribute) "'method' object has no attribute '__name__'" ())
             (python-str-of-x (first sig)))))
+      ; anything else is the function's, as CPython's method forwards it:
+      ; m.__doc__, m.__wrapped__, m.__module__
+      ((not (null? (%py-sig-of (%py-bound-fn v)))) (%py-getattr (%py-bound-fn v) name))
       (#t
         (Err raise (lit attribute)
           (Str8 append (Str8 append "'method' object has no attribute '" name) "'") ())))))
@@ -749,7 +752,8 @@
 (def %py-setattr3
   (fn (_ o n0 v)
     (def n (%py-attr-name! n0))
-    (if (match ((python-obj-is o) #t) ((%py-class-is o) #t) (#t (%py-mod-is o)))
+    (if (match ((python-obj-is o) #t) ((%py-class-is o) #t) ((%py-mod-is o) #t)
+          (#t (not (null? (%py-sig-of o)))))
       (%py-setattr o n v)
       (Err raise (lit attribute) "object has no settable attributes" ()))))
 (def %py-delattr
@@ -766,9 +770,10 @@
               (Str8 append "' has no attribute '" (Str8 append n "'"))) ()))
         (#t (%seq (python-class-methods-set! o (%py-attr-drop (%py-class-methods o) n)) ())))
     (if (not (python-obj-is o))
-      (if (%py-mod-is o)
-        (%py-mod-del! o n)
-        (Err raise (lit attribute) "object has no deletable attributes" ()))
+      (match
+        ((%py-mod-is o) (%py-mod-del! o n))
+        ((not (null? (%py-sig-of o))) (%py-fn-del! o (%py-sig-of o) n))
+        (#t (Err raise (lit attribute) "object has no deletable attributes" ())))
       ; __delattr__ is the same hook on `del obj.x`, and it is PYTHON code: it
       ; takes the name as a str, not as the platform string the tables below are
       ; keyed by.  Built from the CROSSED name rather than from the argument,

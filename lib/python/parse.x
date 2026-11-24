@@ -551,6 +551,23 @@
         (list (lit %py-fjoin) (pair (lit list) (%py-text-parts ts ()))))
       (list (lit python-str-new) (pair (lit list) (%ps-decode (%py-text-join ts ()) ()))))))
 
+; A DEF'S DOCSTRING is its body's first statement when that statement is a
+; string literal and nothing more -- a run of adjacent ones, joined, but no
+; f-string among them, which Python does not take as one.  The answer is the
+; form that makes the str, or () when the body has none.
+(def %py-docstring-form
+  (fn (_ body)
+    (let ((t (%py-skip-nl body)))
+      (if (if (null? t) #f (eq? (%py-label (first t)) (lit tok-string)))
+        (let ((r (%py-text-run t ())))
+          (match
+            ((%py-any-fstring? (first r)) ())
+            ((null? (rest r)) (%py-text-form (first r)))
+            ((eq? (%py-label (first (rest r))) (lit tok-newline)) (%py-text-form (first r)))
+            ((%py-op-is? (first (rest r)) ";") (%py-text-form (first r)))
+            (#t ())))
+        ()))))
+
 (set! %py-postfix
   (fn (_ toks)
     (def %a (%py-atom toks))
@@ -4403,7 +4420,9 @@
                           (not (null? rest-sym))
                           (if (null? kw-name) () kw-name)
                           (%py-kwo-names kwonly ())
-                          (%py-co-close co def-line)))))
+                          (%py-co-close co def-line)))
+                      ; its docstring, for __doc__
+                      (%py-docstring-form (%py-block-contents after))))
                   (%set-first! %py-current-self outer-self)
                   (%set-first! %py-frame-name outer-frame)
                   (%set-first! %py-co outer-co)
