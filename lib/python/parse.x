@@ -567,8 +567,9 @@
             (let ((n (if (null? (rest more)) () (first (rest more)))))
               (if (not (eq? (%py-label n) (lit tok-name)))
                 (Err raise (lit syntax) "expected a name after ." ())
-                (self (list (lit %py-getattr) acc (%py-val n))
-                      (rest (rest more))))))
+                (%seq (%py-co-push! 2 (%py-val n))
+                  (self (list (lit %py-getattr) acc (%py-val n))
+                        (rest (rest more)))))))
           ; Subscript binds like a call: left-associative, same level.
           ((%py-group? (if (null? more) () (first more)) "[")
             (self (%py-subscript-form acc (%py-group-of (first more))) (rest more)))
@@ -758,6 +759,10 @@
           (if (%py-op-is? (first ts) ":") (pair (python-reverse acc) (rest ts))
             (self (rest ts) (pair (first ts) acc))))))
     (let ((sp (split (rest toks) ())))
+      (def outer-co (first %py-co))
+      (def co (%py-co-open))
+      (def co-line (first %py-cur-line))
+      (%set-first! %py-co co)
       (let ((sig (%py-params-of (first sp)))
             ; a lambda body is a function's, for a yield in it (%py-yield-expr),
             ; and owns its parameters (%py-fn-names)
@@ -766,6 +771,7 @@
                    (fn (_)
                      (%py-in-fn
                        (fn (_) (%py-fn-names ps () () (fn (_) (%py-plain-test (rest sp)))))))))))
+        (%set-first! %py-co outer-co)
         (def names (first sig))
         (def syms (%py-strs->syms names))
         (def dflts (first (rest sig)))
@@ -796,7 +802,7 @@
             (list (lit lit)
               (list (list (lit fn) (pair (lit %py-fn) (lit %py-more)) code-body)
                 "<lambda>" names (python-length names) (not (null? rest-sym)) ()
-                (%py-kwo-names kwonly ())))))
+                (%py-kwo-names kwonly ()) (%py-co-close co co-line)))))
         (def all-dflts (%py-append dflts (%py-kwo-dflts kwonly ())))
         (pair (if (null? all-dflts) sig-form (list (lit let) (%py-dflt-lets all-dflts 0) sig-form))
           (rest b))))))
@@ -1325,7 +1331,9 @@
       (let ((t (first toks)))
         (match
           ((eq? (%py-label t) (lit tok-number))
-            (pair (%py-num (%py-val t) (%py-tok-number-label t)) (rest toks)))
+            (let ((v (%py-num (%py-val t) (%py-tok-number-label t))))
+              (%seq (if (number? v) (%py-co-push! 1 v) ())
+                (pair v (rest toks)))))
           ; A str LITERAL'S CODE POINTS ARE DECIDED HERE, once, at parse
           ; time: the tokenizer hands over the utf-8 (it cannot reach
           ; python/str.x, which imports it), and the emitted form is the
@@ -1336,7 +1344,8 @@
               (if (if (null? (rest r)) #f
                     (eq? (%py-label (first (rest r))) (lit tok-bytes)))
                 (%py-mixed-literals)
-                (pair (%py-text-form (first r)) (rest r)))))
+                (%seq (%py-co-text! (first r))
+                  (pair (%py-text-form (first r)) (rest r))))))
           ; THE VALUE IS A BYTE LIST, so it is emitted as one: a (list ...)
           ; form the evaluator builds, not a datum standing where a form
           ; belongs.
@@ -2033,6 +2042,7 @@
 ; LOAD_NAME is (%py-global-read).
 (def %py-name-read
   (fn (_ s)
+    (%py-co-name! s)
     (if (%py-str-seen? s (first %py-class-level))
       (list (lit %py-cread) (lit %py-crows) s
         (list (lit fn) (list (lit _))
@@ -2430,6 +2440,7 @@
         (pair (python-reverse acc) t)
         (let ((line (%py-nl-line toks (first %py-cur-line))))
           (%set-first! %py-cur-line line)
+          (if (eq? line prev) () (%py-co-push! 0 line))
           (let ((r (%py-stmt t)))
             (self (rest r)
               (if (eq? line prev)
@@ -3505,6 +3516,51 @@
 ; the frame it is in is the one being parsed.
 (def %py-frame-name (pair () ()))
 (def %py-parse-file (pair () ()))
+
+; WHAT A FUNCTION'S __code__ TELLS OF ITS BODY, gathered while the body
+; parses: the line of each statement, the literals it names and the names it
+; reads that are not its own -- for co_lines(), co_consts and co_names
+; (python/runtime-flow.x, %py-code-attr).  Nil outside a def or lambda; a
+; nested one gathers its own, and the outer one's resumes after it.
+(def %py-co (pair () ()))
+(def %py-co-open (fn (_) (list (pair () ()) (pair () ()) (pair () ()))))
+(def %py-co-push!
+  (fn (_ k v)
+    (let ((c (first %py-co)))
+      (if (null? c) ()
+        (let ((cell (List ref k c))) (%set-first! cell (pair v (first cell))))))))
+; A str literal's value, for co_consts; an f-string is no constant
+(def %py-co-text!
+  (fn (_ ts)
+    (if (if (null? (first %py-co)) #t (%py-any-fstring? ts)) ()
+      (%py-co-push! 1 (python-str-new (%ps-decode (%py-text-join ts ()) ()))))))
+; A name read in a def body that is none of its own nor of the defs around
+; it: a global or a builtin, as co_names lists them
+(def %py-co-name!
+  (fn (_ s)
+    (if (if (null? (first %py-co)) #t (eq? (first %py-fn-depth) 0)) ()
+      (let ((sym (%py-name->sym s)))
+        (if (if (%py-seen? sym (first %py-scope-syms)) #t (%py-seen? sym (first %py-free-names)))
+          ()
+          (%py-co-push! 2 s))))))
+; The record's tail: (FIRSTLINE LINES CONSTS NAMES), each list in order, the
+; consts and names once each
+(def %py-co-close
+  (fn (_ c line)
+    (list line (python-reverse (first (List ref 0 c)))
+      (%py-co-once (python-reverse (first (List ref 1 c))) () %py-co-same?)
+      (%py-co-once (python-reverse (first (List ref 2 c))) () (fn (_ a b) (Str8 =? a b))))))
+(def %py-co-has?
+  (fn (self l v same?)
+    (if (null? l) #f (if (same? (first l) v) #t (self (rest l) v same?)))))
+(def %py-co-once
+  (fn (self l acc same?)
+    (if (null? l) (python-reverse acc)
+      (self (rest l) (if (%py-co-has? acc (first l) same?) acc (pair (first l) acc)) same?))))
+; 1 and 1.0 are two constants, as 1 and True are: the same type, and equal
+(def %py-co-same?
+  (fn (_ a b)
+    (if (eq? (python-type-of a) (python-type-of b)) (%py-truthy (python-eq a b)) #f)))
 (def %py-frame-name-now
   (fn (_) (if (null? (first %py-frame-name)) "<module>" (first %py-frame-name))))
 (def %py-parse-file-now
@@ -4246,9 +4302,11 @@
             (def %py-async-outer (first %py-in-async))
             (%set-first! %py-async-def ())
             (%set-first! %py-in-async (first %py-async-me))
-            (let ((outer-self (first %py-current-self)) (outer-frame (first %py-frame-name)))
+            (let ((outer-self (first %py-current-self)) (outer-frame (first %py-frame-name))
+                  (outer-co (first %py-co)) (co (%py-co-open)) (def-line (first %py-cur-line)))
               (%set-first! %py-current-self (if (null? syms) () (first syms)))
               (%set-first! %py-frame-name (%py-val name))
+              (%set-first! %py-co co)
               ; A FUNCTION'S ASSIGNMENTS ARE ITS OWN.  The module-level scan
               ; skips def bodies, so their targets are hoisted HERE instead,
               ; as a `let` (NOT `def`: x's `def` decides global-versus-local
@@ -4344,9 +4402,11 @@
                         (list code-form (%py-val name) names (python-length names)
                           (not (null? rest-sym))
                           (if (null? kw-name) () kw-name)
-                          (%py-kwo-names kwonly ())))))
+                          (%py-kwo-names kwonly ())
+                          (%py-co-close co def-line)))))
                   (%set-first! %py-current-self outer-self)
                   (%set-first! %py-frame-name outer-frame)
+                  (%set-first! %py-co outer-co)
                   (%set-first! %py-in-async %py-async-outer)
                   ; the name is bound for the statements after this one
                   (%py-bound! (list (%py-name->sym (%py-val name))))
@@ -4836,6 +4896,7 @@
     (%set-first! %py-current-self ())
     (%set-first! %py-cur-line 1)
     (%set-first! %py-frame-name ())
+    (%set-first! %py-co ())
     (%set-first! %py-echo-on (first %py-echo-next))
     (%set-first! %py-echo-next #f)
     (if (%py-first-line-indented? src 0 (python-byte-len src))

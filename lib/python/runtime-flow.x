@@ -165,8 +165,14 @@
 ; the mode `function`: its one form is the fn the def or lambda compiled to,
 ; and RECORD is what python-sig! is told of it -- (NAME NAMES NREQ HAS-REST
 ; KWNAME KWONLY) -- so the function can be made again over other globals
-; (python/base.x, %py-function-over).  There is no bytecode here, so a code
-; object has no co_code and nothing that counts in it.
+; (python/base.x, %py-function-over).
+;
+; THERE IS NO BYTECODE HERE, and a function's code answers as if there were
+; one two-byte instruction for its def line and one for each statement:
+; co_code is that many zero bytes, and co_lines() pairs each with the
+; statement's real line.  The lines, co_consts and co_names are what the
+; parser saw in the body (python/parse.x, %py-co); the record's seventh field
+; holds them.  A code object compile() made has none of these.
 (def %py-code ())
 (def %py-code-new
   (fn (_ mode forms file name record)
@@ -197,12 +203,39 @@
 
 (def %py-code-attr
   (fn (_ c name)
+    (def co (%py-nth-or (%py-code-record c) 6 ()))
     (match
       ((Str8 =? name "co_name") (python-str-of-x (%py-code-name c)))
       ((Str8 =? name "co_filename") (python-str-of-x (%py-code-file c)))
-      (#t
-        (Err raise (lit attribute)
-          (Str8 append "'code' object has no attribute '" (Str8 append name "'")) ())))))
+      ((null? co) (%py-code-no-attr name))
+      ((Str8 =? name "co_firstlineno") (first co))
+      ((Str8 =? name "co_code")
+        (python-bytes-new (%py-code-zeros (* 2 (+ 1 (python-length (first (rest co))))) ())))
+      ((Str8 =? name "co_lines")
+        (python-sig!
+          (fn (_) (%py-iter (python-list-new (%py-code-lines (first co) (first (rest co))))))
+          "co_lines" () 0 #f))
+      ; a body naming no constant has None for one, as CPython's does
+      ((Str8 =? name "co_consts")
+        (let ((k (List ref 2 co))) (python-tuple-new (if (null? k) (list ()) k))))
+      ((Str8 =? name "co_names")
+        (python-tuple-new (List map (fn (_ s) (python-str-of-x s)) (List ref 3 co))))
+      (#t (%py-code-no-attr name)))))
+(def %py-code-no-attr
+  (fn (_ name)
+    (Err raise (lit attribute)
+      (Str8 append "'code' object has no attribute '" (Str8 append name "'")) ())))
+(def %py-code-zeros
+  (fn (self n acc) (if (<= n 0) acc (self (- n 1) (pair 0 acc)))))
+; (START END LINE) for the def line's instruction and each statement's
+(def %py-code-lines
+  (fn (_ first-line lines)
+    (def go
+      (fn (self at ls acc)
+        (if (null? ls) (python-reverse acc)
+          (self (+ at 2) (rest ls)
+            (pair (python-tuple-new (list at (+ at 2) (first ls))) acc)))))
+    (go 0 (pair first-line lines) ())))
 
 ; What an expression statement compiled in the mode `single` does with its
 ; value: prints its repr, unless it is None.

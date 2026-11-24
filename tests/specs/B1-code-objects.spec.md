@@ -55,18 +55,40 @@ AttributeError
 5 None <module>
 ```
 
-### a code object has no bytecode
+### a function's code stands in for bytecode it does not have
 
-DIVERGENCE: CPython's code object holds the bytecode the source compiled to,
-as `co_code`, and what counts in it, `co_lines()` among them.  There is no
-bytecode here, so there are no such attributes.
+DIVERGENCE: there is no bytecode here.  A function's code answers as if there
+were one two-byte instruction for its def line and one for each statement it
+runs: `co_code` is that many zero bytes, and `co_lines()` pairs each with
+the statement's real line.  CPython's instructions vary in size, so its
+offsets differ; its lines are the same, except that a docstring's line is
+one here.
 
 ```python
-(python-run "def f():\n    pass\nfor name in ('co_code', 'co_lines', 'co_consts'):\n    print(hasattr(f.__code__, name))")
+(python-run "def f(x, y):\n    a = x + y\n    if a:\n        b = len(x.real)\n    return a * 2.5\nl = list(f.__code__.co_lines())\nprint(l)\nprint(type(f.__code__.co_code).__name__, len(f.__code__.co_code), l[0][0], l[-1][1])")
 ```
 ---
 ```output
-False
+[(0, 2, 1), (2, 4, 2), (4, 6, 3), (6, 8, 4), (8, 10, 5)]
+bytes 10 0 10
+```
+
+### co_consts, co_names and co_firstlineno are what the body names
+
+The constants are the docstring and the literals, in order and once each, or
+None when there are none; the names are the globals, builtins and attributes
+the body reads.  As in CPython 3.14.  A nested function's code is not one of
+the constants here, nor is a constant expression folded into one, and an int
+is always one, where CPython 3.14 loads some small ones without it.
+
+```python
+(python-run "def f(x, y):\n    \"\"\"doc\"\"\"\n    a = x + y\n    if a:\n        b = len(x.real)\n    return a * 2.5 + 1.0\nc = f.__code__\nprint(c.co_consts, c.co_names, c.co_firstlineno)\ng = lambda n: n + 1\nprint(g.__code__.co_consts, g.__code__.co_names)\ndef h():\n    pass\nprint(h.__code__.co_consts, h.__code__.co_names, h.__code__.co_firstlineno)\nfor name in ('co_code', 'co_consts'):\n    print(hasattr(compile('1', 'a.py', 'eval'), name))")
+```
+---
+```output
+('doc', 2.5, 1.0) ('len', 'real') 1
+(1,) ()
+(None,) () 11
 False
 False
 ```
