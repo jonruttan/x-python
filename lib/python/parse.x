@@ -1805,7 +1805,9 @@
         (list "ValueError"        (lit python-exc-ValueError))
         (list "AssertionError"    (lit %py-exc-AssertionError))
         (list "RuntimeError"      (lit %py-exc-RuntimeError))
-        (list "SyntaxError"       (lit %py-exc-SyntaxError))))
+        (list "SyntaxError"       (lit %py-exc-SyntaxError))
+        (list "ascii"             (lit %py-ascii-builtin))
+        (list "format"            (lit %py-format-builtin))))
 
 ; PYTHON'S NAMESPACE IS NOT x's, AND KEEPING THEM APART IS NOT TIDINESS.
 ;

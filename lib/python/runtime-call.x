@@ -603,6 +603,22 @@
 ; carries a NUL out (%py-str-repr writes one as \x00), so this crossing is
 ; always safe.
 (def %py-repr-builtin (fn (_ v) (python-str-of-x (python-repr-of v))))
+; ascii(o): repr(o) with every non-ASCII character escaped
+(def %py-ascii-builtin (fn (_ v) (python-str-of-x (%py-ascii-of v))))
+; format(value, format_spec=''): a class's own __format__ when it has one,
+; else what an f-string field with that spec makes
+(def %py-format-builtin
+  (fn (_ v . more)
+    (let ((spec (if (null? more) (python-str-of-x "") (first more))))
+      (if (not (python-str-is spec))
+        (Err raise (lit type)
+          (Str8 append "format() argument 2 must be str, not "
+            (python-class-name (python-type-of spec))) ())
+        (if (if (python-obj-is v)
+              (not (null? (%py-method-find (python-type-of v) "__format__")))
+              #f)
+          (%py-call (%py-getattr v "__format__") spec)
+          (python-str-of-x (%py-format-spec v (ps->x (python-str-cps spec)))))))))
 
 ; str(o) and repr(o) for an object: __str__ (falling back to __repr__) and
 ; __repr__, each answering a string; an exception instance's str is its

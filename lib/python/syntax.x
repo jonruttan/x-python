@@ -56,7 +56,7 @@
         "NotImplementedError" "ArithmeticError" "LookupError"
         "ZeroDivisionError" "IndexError" "KeyError" "AttributeError" "NameError"
         "UnboundLocalError" "TypeError" "ValueError" "AssertionError"
-        "RuntimeError" "SyntaxError"))
+        "RuntimeError" "SyntaxError" "ascii" "format"))
 
 (import x/core/doors str-byte-ref char->int str-byte-len)
 (def %py-syntax-byte (fn (_ s i) (char->int (str-byte-ref s i))))
