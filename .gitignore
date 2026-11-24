@@ -13,3 +13,7 @@ tests/conformance/
 # The boot image: `x --image -l python` (the install above) writes it beside
 # the bundle, and `x -l python` boots from it while its key still matches.
 .images/
+
+# CPython writes these beside a stdlib/ module it imports, as when checking
+# one against CPython's own; they are never part of the bundle.
+__pycache__/

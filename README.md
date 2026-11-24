@@ -243,6 +243,7 @@ rarely touch the same lines.
 | `errno` | x | `lib/python/runtime-flow.x` |
 | `gc` | x | `lib/python/runtime-flow.x` |
 | `io` | x | `lib/python/io.x` |
+| `itertools` | Python | `stdlib/itertools.py` |
 | `keyword` | Python | `stdlib/keyword.py` |
 | `math` | x | `lib/python/runtime-flow.x` |
 | `operator` | Python | `stdlib/operator.py` |
