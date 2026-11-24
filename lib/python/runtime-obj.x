@@ -1157,9 +1157,11 @@
         (%py-immutable-type! "set" obj name)
         (python-class-methods-set! obj (%py-attr-put (%py-class-methods obj) name v)))
       (if (not (python-obj-is obj))
-        (if (%py-mod-is obj)
-          (%py-mod-set! obj name v)
-          (Err raise (lit attribute) "object does not support attribute assignment" ()))
+        (match
+          ((%py-mod-is obj) (%py-mod-set! obj name v))
+          ; a function keeps what a program stores on it (runtime-str.x)
+          ((not (null? (%py-sig-of obj))) (%py-fn-set! (%py-sig-of obj) name v))
+          (#t (Err raise (lit attribute) "object does not support attribute assignment" ())))
         ; __setattr__ INTERCEPTS EVERY STORE, which is the point of it: a class
         ; that defines one decides what `self.x = v` means, and gets no default
         ; store unless it makes one itself.  __getattr__ was already a hook on

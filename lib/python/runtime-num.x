@@ -467,7 +467,10 @@
 ; optional so the builtins that register by hand pass only what they have.
 ; The eighth field, a def's or a lambda's, is the environment the definition
 ; ran in, which is where its __globals__ comes from, and the ninth a box of
-; what its __code__ is made of (runtime-str.x).
+; what its __code__ is made of (runtime-str.x).  The tenth is a def's
+; docstring, a str or None, and the eleventh a box for the dict of the
+; attributes a program sets on the function, made on the first store
+; (runtime-str.x, %py-fn-dict).
 (def python-sig!
   (fn (_ f name names nreq has-rest . kw)
     (%set-first! %py-sigs
@@ -476,7 +479,9 @@
                       (%py-nth-or kw 1 ())
                       (%py-nth-or kw 2 ())
                       (%py-nth-or kw 3 ())
-                      (if (null? (%py-nth-or kw 4 ())) () (list (%py-nth-or kw 4 ())))))
+                      (if (null? (%py-nth-or kw 4 ())) () (list (%py-nth-or kw 4 ())))
+                      (%py-nth-or kw 5 ())
+                      (pair () ())))
         (first %py-sigs)))
     f))
 ; A def or a lambda binds as a method when read from an instance; a builtin
