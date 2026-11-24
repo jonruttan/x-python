@@ -123,6 +123,7 @@
   python-mv-attr python-mv-elems python-mv-in python-mv-is python-mv-len python-mv-put!
   python-mv-setslice! python-mv-slice)
 (import python/os)
+(import python/_random)
 (import python/struct)
 (import python/sys)
 (import python/line

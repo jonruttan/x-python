@@ -110,10 +110,10 @@ would print `[1]`.
 ### attribute access on a non-object raises
 
 ```python
-(python-run "x = 1\nprint(x.bit_length())")
+(python-run "x = 1\nprint(x.nosuch())")
 ```
 ---
-    Error: attribute: 'int' object has no attribute 'bit_length'
+    Error: attribute: 'int' object has no attribute 'nosuch'
 
 ### a name is required after the dot
 
