@@ -672,10 +672,32 @@
             (python-int-join big)))))
     "from_bytes" (list "cls" "bytes" "byteorder") 2 #f () (list "signed")))
 
+; n.bit_length() and n.bit_count(): the digits of |n| in base 2, counted --
+; all of them, and the ones.  %py-fmt-base takes a bigint too (python/format.x).
+(def %py-int-bits
+  (fn (_ self)
+    (let ((n (python-boolnorm (python-native-of self))))
+      (if (= n 0) "" (rest (%py-fmt-base n 2 #f))))))
+(def %py-int-bit-length
+  (python-sig! (fn (_ self) (Str8 length (%py-int-bits self)))
+    "bit_length" (list "self") 1 #f))
+(def %py-int-bit-count
+  (python-sig!
+    (fn (_ self)
+      (let ((s (%py-int-bits self)))
+        (def go
+          (fn (self i k)
+            (if (>= i (Str8 length s)) k
+              (self (+ i 1) (if (Str8 =? (Str8 sub i 1 s) "1") (+ k 1) k)))))
+        (go 0 0)))
+    "bit_count" (list "self") 1 #f))
+
 (def %py-cls-int
   (python-class-new "int" python-cls-object
     (list (pair "%ctor" %py-int-ctor)
           (pair "to_bytes" %py-int-to-bytes)
+          (pair "bit_length" %py-int-bit-length)
+          (pair "bit_count" %py-int-bit-count)
           ; a classmethod, as in Python: int.from_bytes and (5).from_bytes
           ; both bind the class
           (pair "from_bytes" (python-desc-new (lit classmethod) %py-int-from-bytes)))

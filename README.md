@@ -248,6 +248,7 @@ rarely touch the same lines.
 | `math` | x | `lib/python/runtime-flow.x` |
 | `operator` | Python | `stdlib/operator.py` |
 | `os` | x | `lib/python/os.x` |
+| `random` | Python | `stdlib/random.py`, on `lib/python/_random.x` |
 | `struct` | x | `lib/python/struct.x` |
 | `sys` | x | `lib/python/sys.x` |
 | `traceback` | x | `lib/python/runtime-flow.x` |
