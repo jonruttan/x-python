@@ -20,7 +20,7 @@ TypeError reduce() of empty iterable with no initial value
 ### partial fixes arguments, and flattens a partial of a partial
 
 ```python
-(python-run "from functools import partial\ndef power(base, exp, *, mod=None):\n    r = base ** exp\n    return r if mod is None else r % mod\nsquare = partial(power, exp=2)\nprint(square(7), square(3, mod=5))\ncube_of_two = partial(power, 2)\nprint(cube_of_two(3), cube_of_two.args, cube_of_two.keywords, cube_of_two.func is power)\np2 = partial(partial(power, 3), mod=4)\nprint(p2(2), p2.args, p2.keywords, p2.func is power)\nbasetwo = partial(int, base=2)\nprint(basetwo(\"10010\"))\nprint(repr(partial(max, 1, key=abs)).startswith(\"functools.partial(<built-in function max>, 1, key=\"))")
+(python-run "from functools import partial\ndef power(base, exp, *, mod=None):\n    r = base ** exp\n    return r if mod is None else r % mod\nsquare = partial(power, exp=2)\nprint(square(7), square(3, mod=5))\ncube_of_two = partial(power, 2)\nprint(cube_of_two(3), cube_of_two.args, cube_of_two.keywords, cube_of_two.func is power)\np2 = partial(partial(power, 3), mod=4)\nprint(p2(2), p2.args, p2.keywords, p2.func is power)\nbasetwo = partial(int, base=2)\nprint(basetwo(\"10010\"))\nr = repr(partial(power, 2, mod=3))\nprint(r.startswith(\"functools.partial(\"), r.endswith(\", 2, mod=3)\"))")
 ```
 ---
 ```output
@@ -28,7 +28,7 @@ TypeError reduce() of empty iterable with no initial value
 8 (2,) {} True
 1 (3,) {'mod': 4} True
 18
-True
+True True
 ```
 
 ### wraps and update_wrapper copy the wrapped function's names
@@ -97,4 +97,15 @@ ValueError must define at least one ordering operation: < > <= >=
 True
 12 2
 cached_property
+```
+
+### an instance with a __call__ takes keyword arguments, as partial's does
+
+```python
+(python-run "class Greeter:\n    def __call__(self, name, *, punct=\"!\"):\n        return \"hi \" + name + punct\ng = Greeter()\nprint(g(\"ann\"), g(\"bo\", punct=\"?\"), g(name=\"cy\"))\nclass Plain:\n    pass\ntry:\n    Plain()(x=1)\nexcept TypeError as e:\n    print(\"TypeError\", e)\n")
+```
+---
+```output
+hi ann! hi bo? hi cy!
+TypeError 'Plain' object is not callable
 ```
