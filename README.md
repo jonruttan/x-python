@@ -44,7 +44,7 @@ worst first.
 The modules a program can import are listed under [The standard
 library](#the-standard-library); most of CPython's are not here yet.
 
-It is paired with x-lang v0.61.0; `bundle.xon` is the row that says so. No
+It is paired with x-lang v0.62.0; `bundle.xon` is the row that says so. No
 release has been cut.
 
 ## The conformance suite
