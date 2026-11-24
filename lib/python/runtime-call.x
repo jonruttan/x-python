@@ -227,6 +227,11 @@
             (apply (%py-bound-fn f)
               (pair (%py-bound-self f) (%py-kw-args (%py-sig-shift sig) pos kws))))))
       ((not (if (%py-fn-is f) #t (python-obj-is f))) (%py-call-refuse f))
+      ; an instance is called through its class's __call__, keywords and all:
+      ; partial(f, x=1) is an instance, and so is anything with a __call__
+      ((if (python-obj-is f) (null? (%py-sig-of f)) #f)
+        (let ((call (guard (_ ()) (%py-getattr f "__call__"))))
+          (if (null? call) (%py-call-refuse f) (%py-kwcall call pos kws))))
       (#t
         (let ((sig (%py-sig-of f)))
           (if (null? sig)

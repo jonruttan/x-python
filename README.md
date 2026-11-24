@@ -241,6 +241,7 @@ rarely touch the same lines.
 | `cmath` | x | `lib/python/cmath.x` |
 | `collections` | x | `lib/python/collections.x` |
 | `errno` | x | `lib/python/runtime-flow.x` |
+| `functools` | Python | `stdlib/functools.py` |
 | `gc` | x | `lib/python/runtime-flow.x` |
 | `io` | x | `lib/python/io.x` |
 | `itertools` | Python | `stdlib/itertools.py` |
