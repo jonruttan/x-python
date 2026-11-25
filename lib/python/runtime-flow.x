@@ -1078,7 +1078,7 @@
   (fn (_)
     (python-module-new "gc"
       (list
-        (pair "collect" (fn (_ . a) (%seq (Heap collect) 0)))
+        (pair "collect" (fn (_ . a) (%seq (python-gc-now!) 0)))
         (pair "isenabled" (fn (_) (first %py-gc-on)))
         (pair "enable" (fn (_) (%seq (%set-first! %py-gc-on #t) ())))
         (pair "disable" (fn (_) (%seq (%set-first! %py-gc-on #f) ())))))))
@@ -1136,6 +1136,7 @@
           (pair e (list ent)))))))
 (def %py-framed
   (fn (_ name file body)
+    (python-gc-tick!)
     (let ((saved (first %py-ln)))
       (let ((r (guard (e (%seq (%py-tb-note! e name file)
                            (%seq (%set-first! %py-ln saved) (error e))))
@@ -2510,6 +2511,7 @@
           (#t (pair (elems) ())))))))
 (def %py-iter-pull!
   (fn (_ src)
+    (python-gc-tick!)
     (match
       ((%py-gen-is src) (%py-gen-pull src))
       ((%py-it-is src)
@@ -2533,7 +2535,7 @@
       (%py-comp-walk (first src) f)
       (%py-comp-pull src f))))
 (def %py-comp-walk
-  (fn (self l f) (if (null? l) () (%seq (f (first l)) (self (rest l) f)))))
+  (fn (self l f) (if (null? l) () (%seq (python-gc-tick!) (%seq (f (first l)) (self (rest l) f))))))
 (def %py-comp-pull
   (fn (self src f)
     (def v (%py-iter-pull! src))

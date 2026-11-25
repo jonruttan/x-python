@@ -72,6 +72,8 @@
 (def python-run
   (fn (_ src . file)
     (def before (first %py-program))
+    ; the image keeps the counters as the writer left them
+    (python-gc-reset!)
     (%set-first! %py-program
       (%py-program-new (if (null? file) "" (%py-parent-dir (first file)))
         (pair () %py-base-env)))
