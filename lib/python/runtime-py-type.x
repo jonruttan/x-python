@@ -963,10 +963,20 @@
     "builtin_function_or_method"))
 (def %py-cls-generator
   (python-class-new "generator" python-cls-object (list (pair "%final" #t)) "generator"))
+; types.MethodType(f, obj) binds f to obj, as an attribute read does
 (def %py-cls-method
-  (python-class-new "method" python-cls-object (list (pair "%final" #t)) "method"))
+  (python-class-new "method" python-cls-object
+    (list (pair "%final" #t)
+      (pair "%ctor" (fn (_ f obj) (%py-bound-new f obj))))
+    "method"))
 (def %py-cls-NoneType
   (python-class-new "NoneType" python-cls-object (list (pair "%final" #t)) "NoneType"))
+; the classes of the two other singletons, under CPython's names
+(def %py-cls-ellipsis
+  (python-class-new "ellipsis" python-cls-object (list (pair "%final" #t)) "ellipsis"))
+(def %py-cls-NotImplementedType
+  (python-class-new "NotImplementedType" python-cls-object (list (pair "%final" #t))
+    "NotImplementedType"))
 
 ; types.SimpleNamespace: an object that is only its attributes.  A mapping
 ; given first sets them, then the keywords do; it prints them in the order they
@@ -1185,6 +1195,8 @@
       ((eq? v #t) %py-cls-bool)
       ((eq? v #f) %py-cls-bool)
       ((null? v) %py-cls-NoneType)
+      ((eq? v %py-Ellipsis) %py-cls-ellipsis)
+      ((eq? v %py-NotImplemented) %py-cls-NotImplementedType)
       ((python-barr-is v) %py-cls-bytearray)
       ((python-bytes-is v) %py-cls-bytes)
       ((python-str-is v) %py-cls-str)

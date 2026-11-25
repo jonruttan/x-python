@@ -90,6 +90,7 @@
   python-flog1p python-floordiv python-fsinh python-ftanh python-fx- python-fx< python-ge python-gt
   python-implementation-version python-in python-in-walk python-init-receiver!
   python-instantiate python-int-encode python-int-invert python-int-join python-iter-elems
+  python-kwargs-of
   py-lang python-le python-leads? python-length python-list-cat python-list-clamp python-list-elems
   python-list-new python-list? python-lt python-mdomain python-mfloat python-mod python-module-new
   python-modules-now python-mrange-error python-mul python-native-of python-num-py-type python-num?

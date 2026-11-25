@@ -509,6 +509,8 @@
       (if (null? (rest more))
         (if (%py-kwbox? (first more)) (rest (first more)) (python-dict-new ()))
         (self (rest more))))))
+; the same, for the modules outside python/core
+(def python-kwargs-of (fn (_ more) (%py-kwargs-of more)))
 
 ; The same tail without the box, which is what the positional binders read.
 (def %py-args-strip-kw
@@ -1468,6 +1470,8 @@
       ((Str8 =? name "extend")
         (fn (_ v)
           (python-barr-set! b (%pb-cat (python-bytes-list b) (%py-barr-bytes-of v)))))
+      ; a new bytearray, in a cell of its own, holding the same bytes
+      ((Str8 =? name "copy") (fn (_) (%py-barr-new (python-bytes-list b))))
       (#t (%py-b-attr (python-bytes-list b) %py-barr-new name b)))))
 
 ; The source a bytes or bytearray call gives, from its source, encoding and

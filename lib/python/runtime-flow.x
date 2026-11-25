@@ -1912,8 +1912,13 @@
                 ; `class mylist(list)` then holds a real list, and a class whose
                 ; own __init__ takes other arguments still gets an empty one to
                 ; start from.
+                ;
+                ; object.__new__ builds that value itself, so it is built
+                ; here only for an instance that came back without one; a
+                ; __new__ that passed super().__new__ a value of its own keeps
+                ; it, and an iterator argument is read once.
                 (let ((cc (%py-ctor-class cls)))
-                  (if (null? cc)
+                  (if (if (null? cc) #t (not (null? (python-obj-native o))))
                     ()
                     (python-obj-native! o (%py-native-new cc args))))
                 (let ((init (%py-method-find cls "__init__")))
