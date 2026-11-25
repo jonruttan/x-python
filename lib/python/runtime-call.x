@@ -243,7 +243,8 @@
   (fn (_ name)
     (if (if (Str8 =? name "split") #t (Str8 =? name "rsplit")) (list "sep" "maxsplit")
       (if (Str8 =? name "splitlines") (list "keepends")
-        ()))))
+        (if (Str8 =? name "expandtabs") (list "tabsize")
+          ())))))
 (def %py-none-holes
   (fn (self l)
     (if (null? l) () (pair (if (same? (first l) python-dflt) () (first l)) (self (rest l))))))

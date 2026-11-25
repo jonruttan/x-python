@@ -3374,13 +3374,21 @@
 ; missing or python-dflt slot takes the default), the rest as a tuple of what is
 ; left.  A keyword call (python/runtime.x %py-kwcall) arranges its arguments
 ; into that same positional signature, so the callee never sees a keyword.
+; The names the defaults are bound to, positional and keyword-only together.
+; 32 covers the standard library's widest signatures (TextWrapper takes 12).
 (def %py-dflt-syms
   (list (lit %py-d0) (lit %py-d1) (lit %py-d2) (lit %py-d3)
-        (lit %py-d4) (lit %py-d5) (lit %py-d6) (lit %py-d7)))
+        (lit %py-d4) (lit %py-d5) (lit %py-d6) (lit %py-d7)
+        (lit %py-d8) (lit %py-d9) (lit %py-d10) (lit %py-d11)
+        (lit %py-d12) (lit %py-d13) (lit %py-d14) (lit %py-d15)
+        (lit %py-d16) (lit %py-d17) (lit %py-d18) (lit %py-d19)
+        (lit %py-d20) (lit %py-d21) (lit %py-d22) (lit %py-d23)
+        (lit %py-d24) (lit %py-d25) (lit %py-d26) (lit %py-d27)
+        (lit %py-d28) (lit %py-d29) (lit %py-d30) (lit %py-d31)))
 (def %py-dflt-sym
   (fn (_ i)
-    (if (>= i 8)
-      (Err raise (lit syntax) "at most 8 default parameters are supported" ())
+    (if (>= i 32)
+      (Err raise (lit syntax) "at most 32 default parameters are supported" ())
       (List ref i %py-dflt-syms))))
 (def %py-dflt-lets
   (fn (self dflts i)

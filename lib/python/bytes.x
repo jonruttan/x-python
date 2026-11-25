@@ -263,6 +263,24 @@
       (if (<= w n) l
         (let ((left (Num quotient (- w n) 2)))
           (%pb-cat (%pb-fill left c) (%pb-cat l (%pb-fill (- (- w n) left) c))))))))
+; expandtabs: each tab becomes the spaces to the next multiple of size, the
+; column counted from the last newline or carriage return; a size of 0 or
+; less drops the tabs, as CPython does
+(def %pb-expandtabs
+  (fn (_ l size) (%pb-expand-go l size 0 ())))
+(def %pb-expand-go
+  (fn (self l size col acc)
+    (if (null? l)
+      (List reverse acc)
+      (let ((c (first l)))
+        (match
+          ((= c 9)
+            (let ((k (if (> size 0) (- size (% col size)) 0)))
+              (self (rest l) size (+ col k) (%pb-push-n k 32 acc))))
+          ((if (= c 10) #t (= c 13)) (self (rest l) size 0 (pair c acc)))
+          (#t (self (rest l) size (+ col 1) (pair c acc))))))))
+(def %pb-push-n
+  (fn (self k c acc) (if (<= k 0) acc (self (- k 1) c (pair c acc)))))
 (def %pb-ljust
   (fn (_ l w c)
     (let ((n (List length l))) (if (<= w n) l (%pb-cat l (%pb-fill (- w n) c))))))

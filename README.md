@@ -253,6 +253,7 @@ rarely touch the same lines.
 | `string` | Python | `stdlib/string.py` |
 | `struct` | x | `lib/python/struct.x` |
 | `sys` | x | `lib/python/sys.x` |
+| `textwrap` | Python | `stdlib/textwrap.py` |
 | `traceback` | x | `lib/python/runtime-flow.x` |
 | `types` | x | `lib/python/runtime-flow.x` |
 

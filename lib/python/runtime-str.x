@@ -547,9 +547,13 @@
         (fn (_ . a) (python-str-new (%pb-ljust l (first a) (%py-s-fill a 1)))))
       ((Str8 =? name "rjust")
         (fn (_ . a) (python-str-new (%pb-rjust l (first a) (%py-s-fill a 1)))))
+      ((Str8 =? name "expandtabs")
+        (fn (_ . a) (python-str-new (%pb-expandtabs l (%py-s-opt a 0 8)))))
       ((Str8 =? name "isspace") (fn (_ . a) (%pb-isspace l)))
       ((Str8 =? name "isalpha") (fn (_ . a) (%pb-isalpha l)))
       ((Str8 =? name "isdigit") (fn (_ . a) (%pb-isdigit l)))
+      ; the predicates are ASCII's, where a decimal and a digit are one
+      ((Str8 =? name "isdecimal") (fn (_ . a) (%pb-isdigit l)))
       ((Str8 =? name "isalnum") (fn (_ . a) (%pb-isalnum l)))
       ((Str8 =? name "isupper") (fn (_ . a) (%pb-isupper l)))
       ((Str8 =? name "islower") (fn (_ . a) (%pb-islower l)))
