@@ -664,7 +664,13 @@
             (Str8 append (python-class-name (first args))
               (Str8 append ") is not safe, use "
                 (Str8 append (python-class-name (first args)) ".__new__()")))) ()))
-      (#t (python-obj-new (first args))))))
+      ; an instance of a builtin's subclass carries the builtin's value,
+      ; built here from the arguments, as CPython's __new__ builds it
+      (#t
+        (let ((o (python-obj-new (first args))) (cc (%py-ctor-class (first args))))
+          (if (null? cc)
+            o
+            (%seq (python-obj-native! o (%py-native-new cc (rest args))) o)))))))
 
 (def python-cls-object
   ; object.__new__ allocates, and having it here is what makes a user

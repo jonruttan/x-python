@@ -240,6 +240,7 @@ rarely touch the same lines.
 | `builtins` | x | `lib/python/runtime-flow.x` |
 | `cmath` | x | `lib/python/cmath.x` |
 | `collections` | x | `lib/python/collections.x` |
+| `copy` | Python | `stdlib/copy.py` |
 | `errno` | x | `lib/python/runtime-flow.x` |
 | `functools` | Python | `stdlib/functools.py` |
 | `gc` | x | `lib/python/runtime-flow.x` |

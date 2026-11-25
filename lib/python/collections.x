@@ -26,7 +26,8 @@
 (import python/core
   ps->x python-byte-len python-char-code python-class-methods-set! python-class-name
   python-class-new python-cls-dict python-cls-tuple python-desc-new python-dict-entries
-  python-dict-new python-eq python-length python-list-cat python-list-elems python-list?
+  python-dict-new python-eq python-kwargs-of python-length python-list-cat python-list-elems
+  python-list-new python-list?
   python-module-new python-mul python-native-of python-obj-class python-obj-is python-obj-native
   python-obj-native! python-obj-new python-repr-of python-reverse python-sig! python-str python-str-cps
   python-str-is python-str-of-x python-subclass? python-sweep! python-text->x python-tuple-elems
@@ -82,6 +83,57 @@
       (self (rest names) (rest vals)
         (pair (pair (python-str-of-x (first names)) (first vals)) acc)))))
 
+; _replace(**changes): a copy of the instance, of its own class, with each
+; field a change names given the new value.  Every other change is a
+; TypeError naming them all.
+(def %py-nt-change
+  (fn (self name rows)
+    (match
+      ((null? rows) ())
+      ((python-eq (first (first rows)) (python-str-of-x name)) (first rows))
+      (#t (self name (rest rows))))))
+
+(def %py-nt-swap
+  (fn (self names vals rows acc)
+    (if (null? names)
+      (python-reverse acc)
+      (let ((hit (%py-nt-change (first names) rows)))
+        (self (rest names) (rest vals) rows
+          (pair (if (null? hit) (first vals) (rest hit)) acc))))))
+
+(def %py-nt-field?
+  (fn (self k names)
+    (match
+      ((null? names) #f)
+      ((python-eq k (python-str-of-x (first names))) #t)
+      (#t (self k (rest names))))))
+
+(def %py-nt-unknown
+  (fn (self rows names acc)
+    (match
+      ((null? rows) (python-reverse acc))
+      ((%py-nt-field? (first (first rows)) names) (self (rest rows) names acc))
+      (#t (self (rest rows) names (pair (first (first rows)) acc))))))
+
+(def %py-nt-replace
+  (fn (_ names)
+    (python-sig!
+      (fn (_ o . more)
+        (let ((rows (python-dict-entries (python-kwargs-of more))))
+          (let ((bad (%py-nt-unknown rows names ())))
+            (if (null? bad)
+              (let ((y (python-obj-new (python-obj-class o))))
+                (%seq
+                  (python-obj-native! y
+                    (python-tuple-new
+                      (%py-nt-swap names (python-tuple-elems (python-obj-native o)) rows ())))
+                  y))
+              (Err raise (lit type)
+                (Str8 append "Got unexpected field names: "
+                  (python-repr-of (python-list-new bad)))
+                ())))))
+      "_replace" (list "self") 1 #f "kwds" () #t)))
+
 ; Name(field=value, ...), which is what CPython prints; an empty one is Name().
 (def %py-nt-repr-body
   (fn (self names vals lead acc)
@@ -124,6 +176,9 @@
       (list
         (pair "%ctor" (python-sig! (%py-nt-ctor cls name n) name names n #f))
         (pair "_fields" (python-tuple-new (%py-nt-str-elems names ())))
+        ; copy.replace() calls __replace__, which is the same method
+        (pair "_replace" (%py-nt-replace names))
+        (pair "__replace__" (%py-nt-replace names))
         ; a def binds as a method and a builtin does not, so the ones that
         ; take the instance say which they are
         (pair "_asdict"
