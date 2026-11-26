@@ -24,7 +24,7 @@
 (module python/io)
 (import python/modules PyModule)
 (import python/core
-  make-instance make-type ps-codec ps-decode-as ps-encode ps-encode-as
+  make-instance make-type ps-codec ps-decode-as ps-encode ps-encode-as ps-stream-codec
   ps-write-bytes-to python-alist-find python-barr-is python-barr-set! python-boolnorm
   python-bytes-is python-bytes-list python-bytes-new python-class-name python-class-new
   python-class-qualname python-cls-object python-drop python-exc-FileExistsError
@@ -826,7 +826,7 @@
           (Err raise (lit type) "open() takes a path as a str here" ())))
       (def enc (%py-open-text encoding "utf-8"))
       ; an encoding nothing here knows is refused before the file is opened
-      (if binary? () (ps-codec enc))
+      (if binary? () (ps-stream-codec enc))
       (def both? (%py-open-has? mode "+"))
       (def reads? (if both? #t (%py-open-has? mode "r")))
       (def writes? (if both? #t (not (%py-open-has? mode "r"))))
