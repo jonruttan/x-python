@@ -115,12 +115,20 @@
       (%set-first! %py-gc-last live)
       (%set-first! %py-gc-next (int+ live (if (int< live %py-gc-step) %py-gc-step live))))))
 ; the next interval: halfway to the mark at the rate the heap grew over the
-; last one, within 16 and 1M ticks
+; last one, within 16 and 1M ticks, and never more than four times the last.
+; ONE SAMPLE IS NOT A RATE: a count just after a collect sees the heap hardly
+; grown -- the first statement after the lexer's last collect grew it by 460
+; objects -- and taking that at its word put the next count 200,000 ticks
+; off, past the end of a 1,000-line module's parse, which then never
+; collected.  Growing by at most four a count still reaches any interval in
+; a few counts.
 (def %py-gc-pace!
   (fn (_ n every)
     (let ((grew (int- n (first %py-gc-last))) (left (int- (first %py-gc-next) n)))
-      (let ((e (if (int< grew 1) (int* every 2) (int/ (int* every left) (int* grew 2)))))
-        (%set-first! %py-gc-every (if (int< e 16) 16 (if (int< 1048576 e) 1048576 e)))))))
+      (let ((e (if (int< grew 1) (int* every 2) (int/ (int* every left) (int* grew 2))))
+            (most (int* every 4)))
+        (let ((e (if (int< most e) most e)))
+          (%set-first! %py-gc-every (if (int< e 16) 16 (if (int< 1048576 e) 1048576 e))))))))
 (def %py-gc-check!
   (fn (_)
     (let ((every (first %py-gc-every)) (n (%py-heap-count)))

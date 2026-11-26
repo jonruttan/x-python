@@ -4838,22 +4838,24 @@
 ; A name mentioned but never bound is bound at the start to %py-deleted, and a
 ; read of it raises Python's NameError in the programmer's own spelling rather
 ; than x's `Unbound SYMBOL 'py-int`, a name in nobody's source.
+; A tick a name: this walks every mention in the module against every name it
+; binds, and a 1,000-line module mentions some 20,000 -- 26M objects in one
+; walk, before it ticked.  The names already found are searched where they
+; are, not copied first.
 (def %py-undefined
   (fn (self names bound acc)
     (if (null? names)
       (python-reverse acc)
       (let ((n (first names)))
+        (python-gc-tick!)
         ; no keyword test: a keyword token has a label of its own and is never a
         ; mentioned NAME (python/tokens.x, PY-KEYWORD)
         (if (if (%py-str-seen? n bound) #t
               (%py-builtin-name? n python-builtins))
           (self (rest names) bound acc)
-          (if (%py-str-seen? n (%py-names-of acc))
+          (if (%py-str-seen? n acc)
             (self (rest names) bound acc)
             (self (rest names) bound (pair n acc))))))))
-
-(def %py-names-of
-  (fn (self acc) (if (null? acc) () (pair (first acc) (self (rest acc))))))
 
 ; CONDITIONAL, and the REPL is why.  Each interactive line is its own parse,
 ; so an unconditional shim for a name this LINE does not bind would clobber a
@@ -4915,6 +4917,18 @@
     (%set-first! %py-echo-next #t)
     (python-parse src)))
 
+; A LARGE MODULE COLLECTS BEFORE IT IS READ, AND BETWEEN THE WALKS.  What ran
+; before the parse leaves its garbage behind, and the read's pieces then
+; stack on it: re.py, 1,084 lines, peaked at 2.9 GB without the first
+; collect and 1.7 GB with it.  The walks below each run over the whole token
+; tree and tick nowhere (some 10M objects between them for that module), so
+; they collect after each too.  A small source -- a REPL line, an eval --
+; skips all of it: a collect costs what the heap holds, not what the source
+; made.
+(def %py-parse-big (pair #f ()))
+(def %py-parse-gap!
+  (fn (_) (if (first %py-parse-big) (python-gc-now!) ())))
+
 (def python-parse
   (fn (_ src)
     ; PER-RUN STATE, RESET HERE.  The lexical cells are saved and restored around
@@ -4933,13 +4947,18 @@
     (if (%py-first-line-indented? src 0 (python-byte-len src))
       (Err raise (lit indent) "unexpected indent" ())
       ())
+    (%set-first! %py-parse-big (python-fx< 16384 (python-byte-len src)))
+    (%py-parse-gap!)
     (def %toks (%py-annotations (python-lex src) #f))
+    (%py-parse-gap!)
     ; Brackets first: an unclosed group makes every walk below read a layout
     ; the source never had, so the structural error goes ahead of them.
     (%py-groups-ok %toks)
+    (%py-parse-gap!)
     ; before the body is walked: a read compiled ahead of the `del` that
     ; names it still has to carry the check
     (%set-first! %py-del-names (%py-del-targets %toks ()))
+    (%py-parse-gap!)
     (%set-first! %py-scope-syms ())
     (%set-first! %py-own-names ())
     (%set-first! %py-free-names ())
@@ -4947,18 +4966,24 @@
     (%set-first! %py-fn-depth 0)
     (def %targets (%py-dedupe () (%py-syms-only (%py-assign-targets %toks ())) ()))
     (%set-first! %py-module-names %targets)
+    (%py-parse-gap!)
     (def %undef
       (%py-undefined (%py-mentioned %toks ())
                      (%py-append (%py-bound-names %toks ()) (%py-param-names %toks ()))
                      ()))
     (%set-first! %py-undef-names %undef)
+    (%py-parse-gap!)
     ; the names def and import statements bind that neither hoist above binds:
     ; a builtin's, which starts as the builtin (%py-hoist), or one some def
     ; also takes as a parameter
     (def %binds
       (%py-minus (%py-dedupe () (%py-stmt-binds %toks ()) ())
         (%py-append (%py-strs->syms %undef) %targets)))
-    (def %body (%py-check-escapes (first (%py-stmts (%py-semi->nl %toks) ()))))
+    (%py-parse-gap!)
+    (def %stmts (first (%py-stmts (%py-semi->nl %toks) ())))
+    (%py-parse-gap!)
+    (def %body (%py-check-escapes %stmts))
+    (%py-parse-gap!)
     (%py-append (%py-shims %undef ())
       (%py-append (%py-bind-hoists %binds)
         (%py-append (%py-decls %targets ()) %body)))))
