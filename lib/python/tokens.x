@@ -49,7 +49,7 @@
 
 (module python/tokens)
 (import python/core
-  make-type pb->str pb-of-str ps-enc1 python-byte-len python-reverse)
+  make-type pb->str pb-of-str ps-enc1 python-byte-len python-gc-now! python-rev-onto python-reverse)
 
 
 ; (Base make-tok) is the isolated, type-free base -- 2024's make-token-base.
@@ -79,7 +79,7 @@
 ; The platform owns the tokenizer intrinsics (lib/x/reader/intrinsics.x); these
 ; run per character, so they are the platform's own tested versions rather than
 ; a second copy of the same contract.
-(import x/core/doors tok-read-str buf-tok char->int int->char str-byte-ref)
+(import x/core/doors tok-read-str buf-tok char->int int->char str-byte-ref int+ int- int< int= int*)
 ; %buffer-len / %buffer-unread / %score-set are globals from
 ; lib/x/reader/intrinsics.x; the token accessor is not, and every module that
 ; wants it fetches it the same way (num/bigint.x, num/complex.x).
@@ -1951,17 +1951,187 @@
           (pair 10 acc)))
       (#t (self (rest l) (pair (first l) acc))))))
 
-(def python-tokenize
-  (fn (_ input)
-    (%py-jit-tick! (Str8 length input))
+; --- reading a large source in pieces ----------------------------------------
+;
+; A READ IS ONE C CALL, AND NOTHING IS FREED INSIDE IT.  A token costs some
+; 4,000 objects interpreted (1,500 compiled), almost all of it garbage, and
+; the collector may not run while the C reader holds what it has read (see
+; %py-jit-states for the segfault that taught that).  So a 1,000-line module
+; read in one call passed 4 GB before the parser's first collect.
+;
+; So a source past %py-chunk-min is read in PIECES, cut before a line that
+; starts a statement at column 0, with a collect between pieces -- x is
+; driving there, and the pieces read so far are rooted by this frame.  A
+; piece that is not the last ends in a SENTINEL: a newline and a name on a
+; line of their own.  That newline is the one the cut removed, at the same
+; offset, so the piece reads it exactly as the whole source would -- the
+; same newline, or the same closing of blocks, numbered with the same line.
+; The cut was clean when the sentinel comes back last at the top level,
+; right after that newline or the blocks it closed: a cut inside a string
+; swallows it, one inside brackets nests it in a group, and one after a
+; backslash joins it to the line before.  A cut that is not clean is moved
+; to the next candidate further on and the piece read again.  The last piece
+; is read as the whole source always was, with the space python-tokenize
+; appends.
+;
+; THE SENTINEL ALONE IS NOT ENOUGH, and the first version proved it: a cut
+; inside a docstring leaves its quotes unclosed, the reader gives the opening
+; `"""` back as `""` and a `"`, and reads the rest of the docstring as code --
+; whose last line can be the sentinel, clean.  So the cuts are found by
+; %py-chunk-scan, which keeps them out of strings, comments and brackets, and
+; the sentinel checks what that scan allowed.
+;
+; Each piece starts from the state a column-0 line has -- an empty
+; indentation stack, no open group -- and counts its lines from the newlines
+; before it.  What the pieces refused is kept across them (%py-lex-keep!).
+; A nested read (an f-string's field, read while an outer read is running)
+; is never cut; it is small, and the outer read's C frames are live.
+(def %py-chunk-min 16384)
+(def %py-chunk-sentinel "__x_py_chunk_end__")
+(def %py-chunk-tail (Str8 append "\n" (Str8 append %py-chunk-sentinel " ")))
+
+; a line a cut may come before: one that starts with a name or a decorator
+(def %py-chunk-lead?
+  (fn (_ c) (if (%py-name-start? c) #t (int= c 64))))
+
+; the byte at I, or 0 past the end -- not -1, which %py-name-start? takes for
+; a byte past 127, so the end of the source would start a statement
+(def %py-byte-at
+  (fn (_ s i n) (if (int< i n) (char->int (str-byte-ref s i)) 0)))
+
+; WHERE A CUT MAY GO, found by a scan that knows only what can span a line:
+; strings, comments and brackets.  From I, in MODE (0 code, 1 a one-line
+; string, 2 a triple-quoted string, 3 a comment) with QC its quote byte and
+; DEPTH the brackets open, the index of the first newline at or past LIM that
+; ends a line in code outside every bracket and is followed by a statement
+; line -- or -1.  A backslash skips the byte after it everywhere but a
+; comment, which is a continuation in code and an escape in a string (a raw
+; string's backslash still keeps its quote from closing it).  A one-line
+; string a newline ends is left at that newline, as the reader leaves it.
+; The sentinel still checks every cut this allows: this only keeps the cuts
+; away from where a read would not end cleanly.
+; the two bytes at J are both Q: with the one before, a triple quote
+(def %py-chunk-triple?
+  (fn (_ s j n q)
+    (if (int= (%py-byte-at s j n) q) (int= (%py-byte-at s (int+ j 1) n) q) #f)))
+
+(def %py-chunk-scan
+  (fn (self s i n lim depth mode qc)
+    (if (int< i n)
+      (let ((c (char->int (str-byte-ref s i))) (i1 (int+ i 1)))
+        (match
+          ((int= mode 3)
+            (if (int= c 10) (self s i n lim depth 0 0) (self s i1 n lim depth 3 0)))
+          ((int< 0 mode)
+            (match
+              ((int= c 92) (self s (int+ i 2) n lim depth mode qc))
+              ((int= mode 2)
+                (if (%py-chunk-triple? s i1 n qc)
+                  (self s (int+ i 3) n lim depth 0 0)
+                  (self s i1 n lim depth 2 qc)))
+              ((int= c qc) (self s i1 n lim depth 0 0))
+              ((int= c 10) (self s i n lim depth 0 0))
+              (#t (self s i1 n lim depth 1 qc))))
+          ((int= c 10)
+            (match
+              ((int< 0 depth) (self s i1 n lim depth 0 0))
+              ((int< i lim) (self s i1 n lim depth 0 0))
+              ((%py-chunk-lead? (%py-byte-at s i1 n)) i)
+              (#t (self s i1 n lim depth 0 0))))
+          ((int= c 35) (self s i1 n lim depth 3 0))
+          ((match ((int= c 34) #t) (#t (int= c 39)))
+            (if (%py-chunk-triple? s i1 n c)
+              (self s (int+ i 3) n lim depth 2 c)
+              (self s i1 n lim depth 1 c)))
+          ((int= c 92) (self s (int+ i 2) n lim depth 0 0))
+          ((%py-open? c) (self s i1 n lim (int+ depth 1) 0 0))
+          ((%py-close? c) (self s i1 n lim (if (int< 0 depth) (int- depth 1) 0) 0 0))
+          (#t (self s i1 n lim depth 0 0))))
+      -1)))
+
+; the first cut at or past LIM in a source whose line ST starts in code
+(def %py-chunk-cut
+  (fn (_ s st lim n) (%py-chunk-scan s st n lim 0 0 0)))
+
+; one read of SRC, its lines numbered after the L0 lines before it
+(def %py-lex-one
+  (fn (_ src l0)
     (%py-ind-reset!)
     (%set-first! %py-lex-error ())
     (%set-first! %py-number-end -1)
-    (let ((src (Str8 append (%py-source-lf input) " "))
+    (%set-first! %py-ln-src (list src))
+    (%set-first! %py-ln-count (pair 0 l0))
+    (tok-read-str (first %py-active-raw) src)))
+
+; WHAT A READ IN PIECES REFUSED, as a whole read reports it: an indentation
+; error anywhere, else the first refusal.  Each piece read cleanly adds its
+; own; a piece read again with a further cut adds nothing.
+(def %py-lex-ind-any (pair () ()))
+(def %py-lex-first (pair () ()))
+(def %py-lex-keep!
+  (fn (_)
+    (if (null? (first %py-ind-error)) () (%set-first! %py-lex-ind-any #t))
+    (if (null? (first %py-lex-first)) (%set-first! %py-lex-first (first %py-lex-error)) ())))
+
+; the last piece, read as the whole source always was
+(def %py-lex-last
+  (fn (_ src n st l0 acc)
+    (let ((toks (%py-lex-one (Str8 append (Str8 sub st (int- n st) src) " ") l0)))
+      (%py-lex-keep!)
+      (%set-first! %py-ind-error (first %py-lex-ind-any))
+      (%set-first! %py-lex-error (first %py-lex-first))
+      ; a source read in pieces collects once more, for the last piece's
+      ; garbage, before the parser's walks add their own to it
+      (let ((all (python-rev-onto acc toks)))
+        (if (int< 0 st) (python-gc-now!) ())
+        all))))
+
+; RTOKS, a piece's top-level tokens last first, ends in its sentinel
+(def %py-chunk-clean?
+  (fn (_ rtoks)
+    (if (null? rtoks) #f
+      (if (null? (rest rtoks)) #f
+        (let ((s (first rtoks)) (t (first (first (rest rtoks)))))
+          (if (eq? (first s) (lit tok-name))
+            (if (Str8 =? (first (rest s)) %py-chunk-sentinel)
+              (if (eq? t (lit tok-newline)) #t (eq? t (lit tok-block)))
+              #f)
+            #f))))))
+
+; the source from ST on, L0 lines before it, ACC the tokens so far last first
+(def %py-lex-from
+  (fn (self src n st l0 acc)
+    (let ((cut (if (int< (int- n st) (int* 2 %py-chunk-min)) -1
+                 (%py-chunk-cut src st (int+ st %py-chunk-min) n))))
+      (if (int< cut 0)
+        (%py-lex-last src n st l0 acc)
+        (%py-lex-piece src n st l0 acc cut)))))
+
+(def %py-lex-piece
+  (fn (self src n st l0 acc cut)
+    (let ((rtoks (python-reverse
+                   (%py-lex-one (Str8 append (Str8 sub st (int- cut st) src) %py-chunk-tail) l0))))
+      (if (%py-chunk-clean? rtoks)
+        (let ((acc (python-rev-onto (python-reverse (rest rtoks)) acc)))
+          (%py-lex-keep!)
+          (python-gc-now!)
+          (%py-lex-from src n (int+ cut 1) (%py-ln-scan src st cut l0) acc))
+        (let ((further (%py-chunk-cut src st (int+ cut %py-chunk-min) n)))
+          (python-gc-now!)
+          (if (int< further 0)
+            (%py-lex-last src n st l0 acc)
+            (self src n st l0 acc further)))))))
+
+(def python-tokenize
+  (fn (_ input)
+    (%py-jit-tick! (Str8 length input))
+    (let ((src (%py-source-lf input))
           (was-src (first %py-ln-src)) (was-count (first %py-ln-count)))
-     (%set-first! %py-ln-src (list src))
-     (%set-first! %py-ln-count (pair 0 0))
-     (let ((toks (tok-read-str (first %py-active-raw) src)))
+     (let ((toks (if (null? was-src)
+                   (%seq (%set-first! %py-lex-ind-any ())
+                     (%seq (%set-first! %py-lex-first ())
+                       (%py-lex-from src (python-byte-len src) 0 0 ())))
+                   (%py-lex-one (Str8 append src " ") 0))))
       (%set-first! %py-ln-src was-src)
       (%set-first! %py-ln-count was-count)
       ; Reading is over and x is driving again, so this is where a parked
