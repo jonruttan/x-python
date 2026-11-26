@@ -469,7 +469,7 @@
           ; sharing the pairs would make a store into one visible in the other
           (python-dict-new (%py-dict-copy (python-dict-entries m)))
           ; any other iterable is a sequence of (key, value) pairs
-          (python-dict-new (%py-pairs-of (python-iter-elems m) ())))))))
+          (python-dict-new (%py-entries-merge (%py-pairs-of (python-iter-elems m) ()) ())))))))
 ; dict(a=1) and d.update(a=1): the keywords ARE the entries
 ; dict(a=1) MAKES A str KEY.  A keyword name is the platform's string -- it
 ; came off the call syntax -- and a dict's keys are Python values, so it

@@ -246,6 +246,7 @@ rarely touch the same lines.
 | `gc` | x | `lib/python/runtime-flow.x` |
 | `io` | x | `lib/python/io.x` |
 | `itertools` | Python | `stdlib/itertools.py` |
+| `json` | Python | `stdlib/json/` |
 | `keyword` | Python | `stdlib/keyword.py` |
 | `math` | x | `lib/python/runtime-flow.x` |
 | `operator` | Python | `stdlib/operator.py` |

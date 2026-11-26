@@ -102,6 +102,9 @@
       ((python-set-is b) #f)
       ((%py-class-is a) (eq? a b))
       ((%py-class-is b) #f)
+      ; A NUMBER EQUALS NO OTHER KIND OF VALUE, and the tower's `=` isn't
+      ; asked: given a float and None it crashed the engine (2.5 == None).
+      ((if (python-num? a) (not (python-num? b)) (python-num? b)) #f)
       ; a BOOL, always: the tower's `=` answers nil for an unequal complex,
       ; and a nil in a printed comparison reads as None
       ((= (if (eq? a #t) 1 (if (eq? a #f) 0 a))
@@ -926,7 +929,27 @@
           ()
           (%seq (%py-check-hashable! (first (first es)) "a dict key") (self (rest es))))))
     (check entries)
-    (python-dict-new entries)))
+    (python-dict-new (%py-entries-merge entries ()))))
+
+; A KEY GIVEN TWICE IS ONE ENTRY, in the first one's place and with the first
+; one's key but the last one's value: {'a': 1, 'a': 2} is {'a': 2}, and
+; {1: 'x', True: 'y'} is {1: 'y'}, since True == 1.  acc is the entries so
+; far, last first.  A repeat makes a new row rather than storing into the
+; old one, which may be shared with whatever made the rows.
+(def %py-entries-merge
+  (fn (self rows acc)
+    (if (null? rows)
+      (python-reverse acc)
+      (let ((e (%py-dfind (first (first rows)) acc)))
+        (self (rest rows)
+          (if (null? e)
+            (pair (first rows) acc)
+            (%py-row-swap acc e (rest (first rows)))))))))
+(def %py-row-swap
+  (fn (self rows e v)
+    (if (same? (first rows) e)
+      (pair (pair (first e) v) (rest rows))
+      (pair (first rows) (self (rest rows) e v)))))
 
 (def %py-dfind
   (fn (self k entries)

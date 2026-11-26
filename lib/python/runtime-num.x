@@ -1251,11 +1251,16 @@
 
 ; startswith and endswith over the window from start to end, which nothing fits
 ; when the end is before the start -- the rule %py-s-affix states for str.
+; A TUPLE of bytes is any of them, as it is for str.
 (def %py-b-affix
   (fn (_ l a test)
     (let ((s (%py-b-start l a 1)) (e (%py-b-end l a 2)))
-      (let ((n (%py-b-arg (first a))))
-        (if (< e s) #f (test (%pb-sub l s (- e s)) n))))))
+      (let ((one (fn (_ x)
+                   (let ((n (%py-b-arg x)))
+                     (if (< e s) #f (test (%pb-sub l s (- e s)) n))))))
+        (if (python-tuple-is (first a))
+          (%pb-any? one (python-tuple-elems (first a)))
+          (one (first a)))))))
 
 ; A bytes a strip left whole IS the answer, as CPython has it -- `s.strip() is s`
 ; -- since nothing can tell a copy from it but its identity; a bytearray is
