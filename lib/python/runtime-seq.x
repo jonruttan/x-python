@@ -259,8 +259,7 @@
       ; after the instance arm, as in python-lt
       ((if (python-set-is a) #t (python-set-is b)) (%py-set-cmp a b "<="))
       ((if (python-str-is a) (python-str-is b) #f) (<= (%pb-cmp (python-str-cps a) (python-str-cps b)) 0))
-      ((python-lt a b) #t)
-      (#t (python-eq a b)))))
+      (#t (%py-le-rest a b)))))
 (def python-ge
   (fn (_ a b)
     (match
@@ -278,8 +277,20 @@
       ; after the instance arm, as in python-lt
       ((if (python-set-is a) #t (python-set-is b)) (%py-set-cmp a b ">="))
       ((if (python-str-is a) (python-str-is b) #f) (>= (%pb-cmp (python-str-cps a) (python-str-cps b)) 0))
-      ((python-gt a b) #t)
-      (#t (python-eq a b)))))
+      (#t (%py-ge-rest a b)))))
+; the rest of <= and >=: sequences element by element, numbers by value,
+; and anything else refused under the operator that was written
+(def %py-or-eq-rest
+  (fn (_ a b op cmp)
+    (%py-cmp-refuse a b op)
+    (match
+      ((%py-same-seq? a b) (cmp (%py-seq-cmp (%py-seq-of a) (%py-seq-of b)) 0))
+      ((%py-nums? a b)
+        (cmp (if (eq? a #t) 1 (if (eq? a #f) 0 a))
+             (if (eq? b #t) 1 (if (eq? b #f) 0 b))))
+      (#t (%py-ord-refuse op a b)))))
+(def %py-le-rest (fn (_ a b) (%py-or-eq-rest a b "<=" (fn (_ x y) (<= x y)))))
+(def %py-ge-rest (fn (_ a b) (%py-or-eq-rest a b ">=" (fn (_ x y) (>= x y)))))
 
 (python-sweep!)
 ; --- Lists ------------------------------------------------------------------
