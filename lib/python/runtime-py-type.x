@@ -1401,6 +1401,22 @@
 (def %py-cls-slice
   (python-class-new "slice" python-cls-object %py-sl-methods "slice"))
 
+(def %py-sl-bool?
+  (fn (self xs)
+    (match
+      ((null? xs) #f)
+      ((eq? (first xs) #t) #t)
+      ((eq? (first xs) #f) #t)
+      (#t (self (rest xs))))))
+(def %py-sl-bad?
+  (fn (self xs)
+    (match
+      ((null? xs) #f)
+      ((null? (first xs)) (self (rest xs)))
+      ((python-obj-is (first xs)) (self (rest xs)))
+      ((eq? (python-num-py-type (python-boolnorm (first xs))) (lit int)) (self (rest xs)))
+      (#t #t))))
+
 (def %py-slice
   (fn (_ obj start stop step)
     (let ((st (if (null? step) 1 step)))
@@ -1415,6 +1431,15 @@
         ; a deque is indexed but never sliced
         ((python-dq-is obj)
           (Err raise (lit type) "sequence index must be integer, not 'slice'" ()))
+        ; a sequence's slice bounds are ints or None; a dict's slice is a
+        ; key, and an instance checks the value it carries
+        ((if (python-dict? obj) #f
+           (if (python-obj-is obj) #f (%py-sl-bad? (list start stop step))))
+          (Err raise (lit type)
+            "slice indices must be integers or None or have an __index__ method" ()))
+        ; True and False bound a slice as 1 and 0
+        ((%py-sl-bool? (list start stop step))
+          (%py-slice obj (python-boolnorm start) (python-boolnorm stop) (python-boolnorm step)))
         ((= st 0) (Err raise (lit value) "slice step cannot be zero" ()))
         ((%py-range-is obj) (%py-range-slice obj start stop st))
         ((python-str-is obj)

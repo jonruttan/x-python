@@ -244,6 +244,7 @@ rarely touch the same lines.
 | `errno` | x | `lib/python/runtime-flow.x` |
 | `functools` | Python | `stdlib/functools.py` |
 | `gc` | x | `lib/python/runtime-flow.x` |
+| `heapq` | Python | `stdlib/heapq.py` |
 | `io` | x | `lib/python/io.x` |
 | `itertools` | Python | `stdlib/itertools.py` |
 | `json` | Python | `stdlib/json/` |
