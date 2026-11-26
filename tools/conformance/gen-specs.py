@@ -107,9 +107,19 @@ def xstr(s):
 
 def run_cpython(path, seed):
     env = dict(os.environ, PYTHONHASHSEED=str(seed))
+    env.pop("PYTHONWARNINGS", None)
+    # -W ignore: THE PROGRAM'S DIRECTORY IS sys.path[0] (it must be, for the
+    # import suite's sibling modules), so any stdlib module CPython imports
+    # lazily on the program's behalf resolves against the corpus first.
+    # Showing a warning imports `types`, and float/ has a types.py that
+    # prints: complex1_micropython's complex(1j, 2j) is deprecated in 3.14,
+    # and its expected output came out as types.py's seven lines plus the
+    # real one.  Warnings go to stderr, which the oracle never records, so
+    # ignoring them changes nothing but the import that displaying them
+    # would do.
     try:
         p = subprocess.run(
-            [sys.executable, os.path.basename(path)],
+            [sys.executable, "-W", "ignore", os.path.basename(path)],
             cwd=os.path.dirname(path), env=env,
             capture_output=True, timeout=15,
         )
