@@ -1401,6 +1401,13 @@
 (def %py-cls-slice
   (python-class-new "slice" python-cls-object %py-sl-methods "slice"))
 
+(def %py-sl-bool?
+  (fn (self xs)
+    (match
+      ((null? xs) #f)
+      ((eq? (first xs) #t) #t)
+      ((eq? (first xs) #f) #t)
+      (#t (self (rest xs))))))
 (def %py-sl-bad?
   (fn (self xs)
     (match
@@ -1431,9 +1438,7 @@
           (Err raise (lit type)
             "slice indices must be integers or None or have an __index__ method" ()))
         ; True and False bound a slice as 1 and 0
-        ((if (eq? start #t) #t (if (eq? start #f) #t
-           (if (eq? stop #t) #t (if (eq? stop #f) #t
-             (if (eq? step #t) #t (eq? step #f))))))
+        ((%py-sl-bool? (list start stop step))
           (%py-slice obj (python-boolnorm start) (python-boolnorm stop) (python-boolnorm step)))
         ((= st 0) (Err raise (lit value) "slice step cannot be zero" ()))
         ((%py-range-is obj) (%py-range-slice obj start stop st))
