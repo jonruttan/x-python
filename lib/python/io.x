@@ -24,7 +24,8 @@
 (module python/io)
 (import python/modules PyModule)
 (import python/core
-  make-instance make-type ps-codec ps-decode-as ps-encode ps-encode-as ps-stream-codec
+  make-instance make-type ps-bom-codec? ps-bom-len ps-bom8-start? ps-codec ps-decode-as ps-decode-from ps-encode
+  ps-encode-as ps-encode-rest ps-stream-bom ps-stream-plain
   ps-write-bytes-to python-alist-find python-barr-is python-barr-set! python-boolnorm
   python-bytes-is python-bytes-list python-bytes-new python-class-name python-class-new
   python-class-qualname python-cls-object python-drop python-exc-FileExistsError
@@ -51,13 +52,19 @@
 ; field holds what it was opened as, (NAME MODE ENCODING), and a sixth what
 ; reading it keeps:
 ;
-;   0 the descriptor        5 (ENCODING ERRORS NEWLINE), for text
+;   0 the descriptor        5 (ENCODING ERRORS NEWLINE CODEC), for text
 ;   1 bytes not yet decoded 6 the string each read fills
 ;   2 whether the end came  7 whether it reads
 ;   3 the position the      8 whether it writes
 ;     buffer starts at
 ;   4 whether a \r waits
 ;     for what follows it
+;
+; CODEC is a cell, (READS-AS BOM? DECODED): the codec the bytes are decoded
+; in, nil while a BOM codec has not yet seen whether its start has a BOM;
+; whether a write to a descriptor that cannot say where it is still owes the
+; BOM; and how many bytes have been decoded since reading began, which is
+; where an error's position counts from.
 ;
 ; The buffer holds what was read and not yet taken, so a file costs what is
 ; asked of it.  An in-memory stream has neither field, and its buffer starts
@@ -207,20 +214,48 @@
         (%seq (if (null? bs) (%py-io-st! v 2 #t) ())
           (if (python-io-text? v) (%py-io-decode! v bs (null? bs)) bs))))))
 
-; A utf-8 sequence a read ends inside waits for the rest of it; at the end of
-; the file what waits is decoded as it stands.
+; A FILE IS DECODED A PIECE AT A TIME, and a piece can end inside a
+; character: the bytes of it that have arrived wait for the rest -- a utf-8
+; sequence's start, an odd byte of utf-16 or the high half of a surrogate
+; pair, a part of utf-32's four.  At the end of the file what waits is
+; decoded as it stands.
+;
+; A BOM codec settles at the start what the rest is in.  utf-16 and utf-32
+; take the byte order their BOM names and drop it, and refuse a stream with
+; none, as CPython's file decoders do; utf-8-sig drops a BOM when there is one.
+(def %py-io-cell (fn (_ v) (first (rest (rest (rest (%py-io-st v 5)))))))
+(def %py-io-cell! (fn (_ v w) (%seq (%set-first! (%py-io-cell v) w) ())))
+
 (def %py-io-decode!
   (fn (_ v bs last?)
-    (let ((d (%py-io-st v 5)) (all (python-list-cat (%py-io-st v 1) bs)))
-      (let ((n (- (python-length all)
-                 (match
-                   (last? 0)
-                   ((eq? (ps-codec (first d)) (lit ascii)) 0)
-                   (#t (%py-io-tail (python-reverse all) 1))))))
+    (let ((all (python-list-cat (%py-io-st v 1) bs)) (w (first (%py-io-cell v))))
+      (if (null? w)
+        (%py-io-decode-start! v all last?)
+        (%py-io-decode-as! v all (%py-io-held w all last?) w last?)))))
+
+; All but the last K bytes, decoded in ENC; the K wait.
+(def %py-io-decode-as!
+  (fn (_ v all k enc last?)
+    (let ((n (- (python-length all) k)) (at (rest (rest (%py-io-cell v)))))
+      (let ((cps (ps-decode-from (%py-io-take all n ()) enc
+                   (first (rest (%py-io-st v 5))) (first at))))
         (%seq (%py-io-st! v 1 (python-drop all n))
-          (%py-io-newlines! v
-            (ps-decode-as (%py-io-take all n ()) (first d) (first (rest d)))
-            last?))))))
+          (%seq (%set-first! at (+ (first at) n))
+            (%py-io-newlines! v cps last?)))))))
+
+; How many bytes at the end wait, in the codec W.
+(def %py-io-held
+  (fn (_ w all last?)
+    (if last?
+      0
+      (let ((c (ps-codec w)))
+        (match
+          ((eq? c (lit ascii)) 0)
+          ((eq? c (lit utf-16-le)) (%py-io-tail16 (python-reverse all) #t))
+          ((eq? c (lit utf-16-be)) (%py-io-tail16 (python-reverse all) #f))
+          ((eq? c (lit utf-32-le)) (% (python-length all) 4))
+          ((eq? c (lit utf-32-be)) (% (python-length all) 4))
+          (#t (%py-io-tail (python-reverse all) 1)))))))
 
 ; How many bytes at the end begin a sequence the rest of has not arrived: R
 ; is the bytes backwards and K the count so far.
@@ -233,6 +268,58 @@
       ((< (first r) 192) (self (rest r) (+ k 1)))
       ((< k (match ((< (first r) 224) 2) ((< (first r) 240) 3) (#t 4))) k)
       (#t 0))))
+
+; utf-16's: an odd byte, and before it a unit that is a high surrogate, whose
+; high byte is D8 to DB.  R is the bytes backwards.
+(def %py-io-tail16
+  (fn (_ r le?)
+    (let ((odd (% (python-length r) 2)))
+      (let ((u (python-drop r odd)))
+        (if (if (null? u) #t (null? (rest u)))
+          odd
+          (let ((hi (if le? (first u) (first (rest u)))))
+            (if (if (< hi 216) #f (< hi 220)) (+ odd 2) odd)))))))
+
+; The start of a BOM codec's file: its BOM, once enough has arrived to hold
+; one, settles the codec.
+(def %py-io-decode-start!
+  (fn (_ v all last?)
+    (let ((enc (first (%py-io-st v 5))))
+      (let ((k (ps-bom-len enc)))
+        (if (if (< (python-length all) k) (not last?) #f)
+          (%seq (%py-io-st! v 1 all) ())
+          (let ((w (ps-stream-bom enc all)))
+            (match
+              ((not (null? w))
+                (%seq (%py-io-cell! v w)
+                  (%py-io-decode-as! v all (%py-io-held w all last?) enc last?)))
+              ; utf-8-sig: a file that is the start of a BOM and no more of it
+              ; reads as nothing, and one with no BOM is utf-8
+              ((= k 3)
+                (if (if last? (ps-bom8-start? all) #f)
+                  (%seq (%py-io-st! v 1 ()) ())
+                  (%seq (%py-io-cell! v "utf-8")
+                    (%py-io-decode-as! v all (%py-io-held "utf-8" all last?) "utf-8" last?))))
+              (#t (%py-io-no-bom! v all last? enc k)))))))))
+
+; utf-16 or utf-32 with no BOM: the file is read to its end, what there is
+; decodes little-endian, which is where an error in it is reported, and then
+; a stream of a whole unit or more is refused -- the order CPython's read()
+; finds them in.
+(def %py-io-no-bom!
+  (fn (_ v all last? enc k)
+   (if (not last?)
+    (%seq (%py-io-st! v 1 all) ())
+    (let ((plain (ps-stream-plain enc)))
+      (let ((held (%py-io-held plain all last?)))
+        (let ((out (%py-io-decode-as! v all held plain last?)))
+          (if (< (- (python-length all) held) k)
+            out
+            (Err raise (lit unicode-decode)
+              (if (= k 2)
+                "'utf-16' codec can't decode bytes in position 0-1: Stream does not start with BOM"
+                "'utf-32' codec can't decode bytes in position 0-3: Stream does not start with BOM")
+              ()))))))))
 
 ; \r\n and a lone \r read as \n when the newline argument is None, the
 ; default.  A \r a read ends on waits for the next, which may begin with its
@@ -311,11 +398,20 @@
 (def %py-io-restart!
   (fn (_ v p at)
     (%seq (%py-io-lseek! v p (lit set))
+     (%seq (if (python-io-text? v) (%py-io-reread! v p) ())
       (%seq (%py-io-buf! v ())
         (%seq (%py-io-st! v 1 ())
           (%seq (%py-io-st! v 2 #f)
             (%seq (%py-io-st! v 3 at)
-              (%py-io-st! v 4 #f))))))))
+              (%py-io-st! v 4 #f)))))))))
+
+; A text file read again from its first byte looks for its BOM again; from
+; anywhere else it reads as it would with none.
+(def %py-io-reread!
+  (fn (_ v p)
+    (let ((enc (first (%py-io-st v 5))))
+      (%seq (%py-io-cell! v (if (if (= p 0) (ps-bom-codec? enc) #f) () (ps-stream-plain enc)))
+        (%set-first! (rest (rest (%py-io-cell v))) 0)))))
 
 ; Reads on, keeping nothing, until the buffer reaches the position or the
 ; file ends.
@@ -400,16 +496,32 @@
             (Str8 append (python-class-name (python-type-of x)) "'")) ())))))
 
 ; The bytes text goes out as: each \n as the newline argument when that is
-; \r or \r\n, and the whole in the file's encoding.
+; \r or \r\n, and the whole in the file's encoding -- with its BOM only when
+; the write is at the file's first byte.
 (def %py-io-encoded
   (fn (_ v cps)
     (let ((d (%py-io-st v 5)))
       (let ((nl (first (rest (rest d)))))
-        (ps-encode-as
+        (%py-io-encode-for v
           (if (null? nl) cps
             (let ((to (python-str-cps nl)))
               (if (%py-io-member? 13 to) (%py-io-turn cps to ()) cps)))
           (first d) (first (rest d)))))))
+(def %py-io-encode-for
+  (fn (_ v cps enc errors)
+    (if (%py-io-bom-now? v)
+      (ps-encode-as cps enc errors)
+      (ps-encode-rest cps enc errors))))
+
+; A descriptor that cannot say where it is owes the BOM to its first write.
+(def %py-io-bom-now?
+  (fn (_ v)
+    (if (ps-bom-codec? (first (%py-io-st v 5)))
+      (let ((p (File seek (%py-io-st v 0) 0 (lit cur))) (c (%py-io-cell v)))
+        (let ((now (if (< p 0) (first (rest c)) (= p 0))))
+          (%seq (%set-first! (rest c) #f) now)))
+      #f)))
+
 (def %py-io-turn
   (fn (self cps to acc)
     (match
@@ -826,7 +938,7 @@
           (Err raise (lit type) "open() takes a path as a str here" ())))
       (def enc (%py-open-text encoding "utf-8"))
       ; an encoding nothing here knows is refused before the file is opened
-      (if binary? () (ps-stream-codec enc))
+      (if binary? () (ps-codec enc))
       (def both? (%py-open-has? mode "+"))
       (def reads? (if both? #t (%py-open-has? mode "r")))
       (def writes? (if both? #t (not (%py-open-has? mode "r"))))
@@ -837,7 +949,8 @@
         (%py-io-file-new #f (list path (%py-open-bytes-mode mode both?) ()) fd ()
           reads? writes? at)
         (%py-io-file-new #t (list path mode enc) fd
-          (list enc (%py-open-text (python-opt a 3 ()) "strict") (python-opt a 4 ()))
+          (list enc (%py-open-text (python-opt a 3 ()) "strict") (python-opt a 4 ())
+            (list (if (if (= at 0) (ps-bom-codec? enc) #f) () (ps-stream-plain enc)) #t 0))
           reads? writes? at)))
     "open" (list "file" "mode" "buffering" "encoding" "errors" "newline" "closefd" "opener")
     1 #f))

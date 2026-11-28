@@ -197,17 +197,6 @@
         (Err raise (lit lookup) (Str8 append "unknown encoding: " name) ())
         c))))
 
-; A file reads and writes in pieces, and only utf-8 and ascii are codecs a
-; piece can be decoded in without the rest: utf-16's code units and its BOM
-; would need the stream to carry them across.  io asks this one.
-(def ps-stream-codec
-  (fn (_ name)
-    (let ((c (ps-codec name)))
-      (if (if (eq? c (lit utf-8)) #t (eq? c (lit ascii)))
-        c
-        (Err raise (lit lookup)
-          (Str8 append "a file can't be read or written as " (Str8 append name " here")) ())))))
-
 ; --- the steps ---------------------------------------------------------------
 ;
 ; A step reads one code point from the front of the bytes and answers it and
@@ -387,7 +376,7 @@
 ; 'utf-16-le' codec can't decode bytes in position 0-1: illegal encoding
 (def %ps-dec-raise
   (fn (_ name all bs r)
-    (let ((at (- (pb-len all) (pb-len bs))) (k (first (rest (rest r)))))
+    (let ((at (- all (pb-len bs))) (k (first (rest (rest r)))))
       (Err raise (lit unicode-decode)
         (Str8 append "'"
           (Str8 append name
@@ -452,30 +441,33 @@
 ; utf-16 and utf-32 read their byte order from a BOM and drop it, and take
 ; little-endian when there is none; a position in a message still counts the
 ; BOM's bytes.  utf-8-sig drops one utf-8 BOM and is utf-8 after it, so there
-; a position counts from past the BOM, as CPython's does.
-(def ps-decode-as
-  (fn (_ bs name errors)
-    (let ((c (ps-codec name)))
+; a position counts from past the BOM, as CPython's does.  OFF is added to
+; every position: where in a file the bytes begin.
+(def ps-decode-from
+  (fn (_ bs name errors off)
+    (let ((c (ps-codec name)) (n (+ off (pb-len bs))))
       (match
-        ((eq? c (lit utf-8)) (%ps-dec bs bs %ps-utf8 %ps-pass8 #t "utf-8" errors))
-        ((eq? c (lit ascii)) (%ps-dec bs bs %ps-ascii %ps-pass-none #t "ascii" errors))
+        ((eq? c (lit utf-8)) (%ps-dec n bs %ps-utf8 %ps-pass8 #t "utf-8" errors))
+        ((eq? c (lit ascii)) (%ps-dec n bs %ps-ascii %ps-pass-none #t "ascii" errors))
         ((eq? c (lit utf-8-sig))
           (let ((t8 (if (%ps-starts? %ps-bom8 bs) (%pb-drop 3 bs) bs)))
-            (%ps-dec t8 t8 %ps-utf8 %ps-pass8 #t "utf-8" errors)))
-        ((eq? c (lit utf-16-le)) (%ps-dec16 bs bs #t errors))
-        ((eq? c (lit utf-16-be)) (%ps-dec16 bs bs #f errors))
+            (%ps-dec (+ off (pb-len t8)) t8 %ps-utf8 %ps-pass8 #t "utf-8" errors)))
+        ((eq? c (lit utf-16-le)) (%ps-dec16 n bs #t errors))
+        ((eq? c (lit utf-16-be)) (%ps-dec16 n bs #f errors))
         ((eq? c (lit utf-16))
           (match
-            ((%ps-starts? %ps-bom16le bs) (%ps-dec16 bs (%pb-drop 2 bs) #t errors))
-            ((%ps-starts? %ps-bom16be bs) (%ps-dec16 bs (%pb-drop 2 bs) #f errors))
-            (#t (%ps-dec16 bs bs #t errors))))
-        ((eq? c (lit utf-32-le)) (%ps-dec32 bs bs #t errors))
-        ((eq? c (lit utf-32-be)) (%ps-dec32 bs bs #f errors))
+            ((%ps-starts? %ps-bom16le bs) (%ps-dec16 n (%pb-drop 2 bs) #t errors))
+            ((%ps-starts? %ps-bom16be bs) (%ps-dec16 n (%pb-drop 2 bs) #f errors))
+            (#t (%ps-dec16 n bs #t errors))))
+        ((eq? c (lit utf-32-le)) (%ps-dec32 n bs #t errors))
+        ((eq? c (lit utf-32-be)) (%ps-dec32 n bs #f errors))
         (#t
           (match
-            ((%ps-starts? %ps-bom32le bs) (%ps-dec32 bs (%pb-drop 4 bs) #t errors))
-            ((%ps-starts? %ps-bom32be bs) (%ps-dec32 bs (%pb-drop 4 bs) #f errors))
-            (#t (%ps-dec32 bs bs #t errors))))))))
+            ((%ps-starts? %ps-bom32le bs) (%ps-dec32 n (%pb-drop 4 bs) #t errors))
+            ((%ps-starts? %ps-bom32be bs) (%ps-dec32 n (%pb-drop 4 bs) #f errors))
+            (#t (%ps-dec32 n bs #t errors))))))))
+
+(def ps-decode-as (fn (_ bs name errors) (ps-decode-from bs name errors 0)))
 
 ; --- encoding ----------------------------------------------------------------
 ;
@@ -604,21 +596,77 @@
     (%ps-enc cps %ps-not-surrogate? (%ps-put32 le?) #f #t name "surrogates not allowed" errors)))
 
 ; utf-16, utf-32 and utf-8-sig write their BOM first, even before nothing;
-; utf-16 and utf-32 are little-endian after it.
-(def ps-encode-as
-  (fn (_ cps name errors)
+; utf-16 and utf-32 are little-endian after it.  A file writes it only at its
+; start, so it asks for the rest alone: BOM? is #f, and the codec's name in a
+; message is still the one asked for.
+(def %ps-encode-in
+  (fn (_ cps name errors bom?)
     (let ((c (ps-codec name)))
       (match
         ((eq? c (lit utf-8)) (%ps-enc8 cps errors))
         ((eq? c (lit ascii))
           (%ps-enc cps %ps-ascii? %ps-put-ascii #t #f "ascii" "ordinal not in range(128)" errors))
-        ((eq? c (lit utf-8-sig)) (python-list-cat %ps-bom8 (%ps-enc8 cps errors)))
+        ((eq? c (lit utf-8-sig)) (%ps-bom-onto bom? %ps-bom8 (%ps-enc8 cps errors)))
         ((eq? c (lit utf-16-le)) (%ps-enc16 cps #t "utf-16-le" errors))
         ((eq? c (lit utf-16-be)) (%ps-enc16 cps #f "utf-16-be" errors))
-        ((eq? c (lit utf-16)) (python-list-cat %ps-bom16le (%ps-enc16 cps #t "utf-16" errors)))
+        ((eq? c (lit utf-16))
+          (%ps-bom-onto bom? %ps-bom16le (%ps-enc16 cps #t "utf-16" errors)))
         ((eq? c (lit utf-32-le)) (%ps-enc32 cps #t "utf-32-le" errors))
         ((eq? c (lit utf-32-be)) (%ps-enc32 cps #f "utf-32-be" errors))
-        (#t (python-list-cat %ps-bom32le (%ps-enc32 cps #t "utf-32" errors)))))))
+        (#t (%ps-bom-onto bom? %ps-bom32le (%ps-enc32 cps #t "utf-32" errors)))))))
+
+(def %ps-bom-onto (fn (_ bom? bom bs) (if bom? (python-list-cat bom bs) bs)))
+
+(def ps-encode-as (fn (_ cps name errors) (%ps-encode-in cps name errors #t)))
+(def ps-encode-rest (fn (_ cps name errors) (%ps-encode-in cps name errors #f)))
+
+; --- what a stream needs -----------------------------------------------------
+;
+; A file is decoded a piece at a time, so it settles once, at its start, what
+; a BOM codec reads as -- and every piece after is in that codec.  These say
+; which codecs have a BOM, what each reads as where there is none, and what a
+; BOM at the front of the bytes says.
+
+(def ps-bom-codec?
+  (fn (_ name)
+    (let ((c (ps-codec name)))
+      (if (eq? c (lit utf-16)) #t (if (eq? c (lit utf-32)) #t (eq? c (lit utf-8-sig)))))))
+
+; How many bytes a BOM codec's BOM is.
+(def ps-bom-len
+  (fn (_ name)
+    (let ((c (ps-codec name)))
+      (if (eq? c (lit utf-16)) 2 (if (eq? c (lit utf-32)) 4 3)))))
+
+(def ps-stream-plain
+  (fn (_ name)
+    (let ((c (ps-codec name)))
+      (match
+        ((eq? c (lit utf-16)) "utf-16-le")
+        ((eq? c (lit utf-32)) "utf-32-le")
+        ((eq? c (lit utf-8-sig)) "utf-8")
+        (#t name)))))
+
+; The codec the BOM at the front of BS names, or nil when there is none.
+(def ps-stream-bom
+  (fn (_ name bs)
+    (let ((c (ps-codec name)))
+      (match
+        ((eq? c (lit utf-16))
+          (match
+            ((%ps-starts? %ps-bom16le bs) "utf-16-le")
+            ((%ps-starts? %ps-bom16be bs) "utf-16-be")
+            (#t ())))
+        ((eq? c (lit utf-32))
+          (match
+            ((%ps-starts? %ps-bom32le bs) "utf-32-le")
+            ((%ps-starts? %ps-bom32be bs) "utf-32-be")
+            (#t ())))
+        ((%ps-starts? %ps-bom8 bs) "utf-8")
+        (#t ())))))
+
+; Whether BS is the start of utf-8's BOM and no more of it.
+(def ps-bom8-start? (fn (_ bs) (%ps-starts? bs %ps-bom8)))
 
 ; --- the boundary ------------------------------------------------------------
 (def %ps-of-x (fn (_ s) (%ps-decode (pb-of-str s) ())))

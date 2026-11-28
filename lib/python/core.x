@@ -74,7 +74,8 @@
   python-exc-info python-exception-now
   python-f-2p52
   make-instance make-type pb->str pb-len pb-of-str ps->x ps-codec
-  ps-decode-as ps-enc1 ps-encode ps-encode-as ps-stream-codec ps-write-bytes-to python-add
+  ps-decode-as ps-decode-from ps-enc1 ps-encode ps-encode-as ps-encode-rest ps-bom-codec? ps-bom-len ps-stream-plain
+  ps-stream-bom ps-bom8-start? ps-write-bytes-to python-add
   python-alist-find python-barr-is python-barr-set! python-boolnorm python-builtins python-byte-len
   python-bytes-hex python-bytes-is python-bytes-list python-bytes-new python-bytes-of-codes
   python-bytes-only? python-bytes-str python-char-code python-cim python-class-methods-set!
