@@ -253,6 +253,7 @@ rarely touch the same lines.
 | `operator` | Python | `stdlib/operator.py` |
 | `os` | x | `lib/python/os.x` |
 | `random` | Python | `stdlib/random.py`, on `lib/python/_random.x` |
+| `re` | Python | `stdlib/re.py`, on `lib/python/_sre.x` |
 | `string` | Python | `stdlib/string.py` |
 | `struct` | x | `lib/python/struct.x` |
 | `sys` | x | `lib/python/sys.x` |

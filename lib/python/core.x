@@ -125,6 +125,7 @@
   python-mv-setslice! python-mv-slice)
 (import python/os)
 (import python/_random)
+(import python/_sre)
 (import python/struct)
 (import python/sys)
 (import python/line
