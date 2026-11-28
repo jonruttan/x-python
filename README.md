@@ -237,6 +237,7 @@ rarely touch the same lines.
 | Module | Written in | Where |
 |---|---|---|
 | `array` | x | `lib/python/array.x` |
+| `bisect` | Python | `stdlib/bisect.py` |
 | `builtins` | x | `lib/python/runtime-flow.x` |
 | `cmath` | x | `lib/python/cmath.x` |
 | `collections` | x | `lib/python/collections.x` |
