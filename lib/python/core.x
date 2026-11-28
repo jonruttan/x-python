@@ -100,7 +100,7 @@
   python-repl-choose! python-repl-install! python-repl-line python-repl-register!
   python-repr-of python-rev-onto python-reverse python-set-elems python-set-is python-set-nth
   python-sig! python-slice-span python-str python-str-cps python-str-display python-str-is
-  python-str-new python-str-of-x python-sub python-subclass? python-sweep! python-gc-now! python-take
+  python-str-new python-str-of-x python-sub python-subclass? python-sweep! python-gc-now! python-gc-after python-take
   python-takes-at-most! python-text->x python-th-float python-tuple-elems python-tuple-is
   python-tuple-new python-tuple-of-list python-type-of python-banner python-batch python-lex
   python-parse python-parse-expr python-parse-single python-repl-print
@@ -127,6 +127,7 @@
 (import python/os)
 (import python/_random)
 (import python/_sre)
+(import python/_weakref)
 (import python/struct)
 (import python/sys)
 (import python/line

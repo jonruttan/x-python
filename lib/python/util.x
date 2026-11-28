@@ -108,6 +108,9 @@
     (%set-first! %py-gc-every %py-gc-first-every)
     (%set-first! %py-gc-next 0)
     (%set-first! %py-gc-last 0)))
+; what gc.collect() calls after it collects: a Python callable, or ().
+; _weakref sets it, to run the callbacks of the refs the collect killed.
+(def python-gc-after (pair () ()))
 (def python-gc-now!
   (fn (_)
     (heap-collect)

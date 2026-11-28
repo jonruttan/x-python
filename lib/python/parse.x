@@ -794,6 +794,9 @@
         (def dflts (first (rest sig)))
         (def rest-name (first (rest (rest sig))))
         (def rest-sym (if (null? rest-name) () (%py-name->sym rest-name)))
+        ; the **name, which a def's emission binds the same way
+        (def kw-name (List ref 3 sig))
+        (def kw-sym (if (null? kw-name) () (%py-name->sym kw-name)))
         (def kwonly (List ref 4 sig))
         (def nreq (- (python-length names) (python-length dflts)))
         ; a `:=` in the body binds the lambda's own name, as one in a def body
@@ -803,22 +806,22 @@
             (%py-param-syms sig)))
         (def inner
           (if (null? own) (first b) (list (lit let) (%py-lets own () ()) (first b))))
-        (def body ((%py-fn-prelude "<lambda>" names dflts rest-sym () kwonly nreq) inner))
+        (def body ((%py-fn-prelude "<lambda>" names dflts rest-sym kw-sym kwonly nreq) inner))
         ; what its __code__ holds takes no default, as a def's does not
         (def code-body
           (if (if (null? dflts) (null? (%py-kwo-dflts kwonly ())) #f)
             body
-            ((%py-fn-prelude "<lambda>" names () rest-sym () (%py-kwo-bare kwonly ())
+            ((%py-fn-prelude "<lambda>" names () rest-sym kw-sym (%py-kwo-bare kwonly ())
                (python-length names))
               inner)))
         (def sig-form
           (list (lit python-sig!) (list (lit fn) (pair (lit %py-fn) (lit %py-more)) body)
-            "<lambda>" (pair (lit list) names) nreq (not (null? rest-sym)) ()
+            "<lambda>" (pair (lit list) names) nreq (not (null? rest-sym)) kw-name
             (pair (lit list) (%py-kwo-names kwonly ())) #t (list (lit %py-here))
             ; what its __code__ is made of (python/runtime-str.x)
             (list (lit lit)
               (list (list (lit fn) (pair (lit %py-fn) (lit %py-more)) code-body)
-                "<lambda>" names (python-length names) (not (null? rest-sym)) ()
+                "<lambda>" names (python-length names) (not (null? rest-sym)) kw-name
                 (%py-kwo-names kwonly ()) (%py-co-close co co-line)))))
         (def all-dflts (%py-append dflts (%py-kwo-dflts kwonly ())))
         (pair (if (null? all-dflts) sig-form (list (lit let) (%py-dflt-lets all-dflts 0) sig-form))

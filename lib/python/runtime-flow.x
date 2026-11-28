@@ -1078,7 +1078,11 @@
   (fn (_)
     (python-module-new "gc"
       (list
-        (pair "collect" (fn (_ . a) (%seq (python-gc-now!) 0)))
+        (pair "collect"
+          (fn (_ . a)
+            (python-gc-now!)
+            (let ((after (first python-gc-after))) (if (null? after) () (%py-call after)))
+            0))
         (pair "isenabled" (fn (_) (first %py-gc-on)))
         (pair "enable" (fn (_) (%seq (%set-first! %py-gc-on #t) ())))
         (pair "disable" (fn (_) (%seq (%set-first! %py-gc-on #f) ())))))))
