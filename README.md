@@ -261,6 +261,7 @@ rarely touch the same lines.
 | `textwrap` | Python | `stdlib/textwrap.py` |
 | `traceback` | x | `lib/python/runtime-flow.x` |
 | `types` | x | `lib/python/runtime-flow.x` |
+| `weakref` | Python | `stdlib/weakref.py`, on `lib/python/_weakref.x` |
 
 ### Not planned yet: the network
 
