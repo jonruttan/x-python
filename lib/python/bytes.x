@@ -114,9 +114,12 @@
   (fn (self l b) (if (null? l) b (self (rest l) (pair (first l) b)))))
 (def %pb-cat (fn (_ a b) (%pb-onto (List reverse a) b)))
 
+; EACH COPY GOES ON THE FRONT.  Every copy is the same list, so the order is
+; the same either way -- and on the front a copy costs L, where on the end it
+; cost everything made so far: 'a' * 8000 was 32 million pairs.
 (def %pb-repeat
   (fn (self l n acc)
-    (if (<= n 0) acc (self l (- n 1) (%pb-cat acc l)))))
+    (if (<= n 0) acc (self l (- n 1) (%pb-cat l acc)))))
 
 (def %pb-eq?
   (fn (self a b)
@@ -362,11 +365,14 @@
           (self (rest l) keep (pair (first l) cur) acc))))))
 (def %pb-splitlines (fn (_ l keep) (%pb-splitlines-go l keep () ())))
 
+; The result is built backwards, each piece and separator pushed onto it, and
+; turned round once at the end: one pass, where appending to it copied it
+; again for every piece.
 (def %pb-join-go
-  (fn (self sep ps acc first?)
-    (if (null? ps) acc
+  (fn (self sep ps racc first?)
+    (if (null? ps) (List reverse racc)
       (self sep (rest ps)
-        (if first? (first ps) (%pb-cat acc (%pb-cat sep (first ps))))
+        (%pb-onto (first ps) (if first? racc (%pb-onto sep racc)))
         #f))))
 (def %pb-join (fn (_ sep ps) (%pb-join-go sep ps () #t)))
 

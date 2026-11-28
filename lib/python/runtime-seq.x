@@ -998,8 +998,10 @@
 (def %py-dvals (fn (self entries) (if (null? entries) () (pair (rest (first entries)) (self (rest entries))))))
 
 ; --- The list method surface -------------------------------------------------
+; Each copy on the front, as %pb-repeat does and for its reason: on the end
+; every copy copied all the copies before it.
 (def python-els-repeat
-  (fn (self l k acc) (if (<= k 0) acc (self l (- k 1) (python-list-cat acc l)))))
+  (fn (self l k acc) (if (<= k 0) acc (self l (- k 1) (python-list-cat l acc)))))
 (def python-els-drop-at
   (fn (self l i) (if (null? l) () (if (= i 0) (rest l) (pair (first l) (self (rest l) (- i 1)))))))
 (def python-els-insert-at
